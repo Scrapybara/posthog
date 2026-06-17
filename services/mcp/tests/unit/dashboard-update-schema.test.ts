@@ -37,10 +37,33 @@ describe('dashboard-update schema', () => {
             use_template: '',
             use_dashboard: null,
             delete_insights: false,
-            tiles: [{ id: 1, widget: { widget_type: 'live_activity', config: { limit: 10 } } }],
+            tiles: [{ id: 1, widget: { id: '00000000-0000-4000-8000-000000000002', name: 'Renamed widget' } }],
         })
 
         expect(result.success).toBe(true)
+    })
+
+    it('accepts metadata-only widget PATCHes without widget_type', () => {
+        const result = tool.schema.safeParse({
+            id: 1,
+            tiles: [
+                {
+                    id: 2,
+                    widget: {
+                        id: '00000000-0000-4000-8000-000000000002',
+                        name: 'Renamed widget',
+                        description: 'Updated description',
+                    },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(true)
+        expect(result.data.tiles?.[0]?.widget).toEqual({
+            id: '00000000-0000-4000-8000-000000000002',
+            name: 'Renamed widget',
+            description: 'Updated description',
+        })
     })
 
     it('preserves live activity config fields when widget_type is provided', () => {

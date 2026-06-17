@@ -75,6 +75,31 @@ class _AddDashboardWidgetTileFieldsOpenApiSerializer(serializers.Serializer):
     )
 
 
+class _DashboardPatchExistingWidgetOpenApiSerializer(serializers.Serializer):
+    id = serializers.UUIDField(
+        help_text="Existing widget row ID when updating a widget tile via dashboard PATCH.",
+    )
+    config = serializers.JSONField(
+        required=False,
+        help_text=(
+            "Widget-specific configuration patch for the existing widget row. "
+            "Include widget_type for a typed config schema; omit it for metadata-only updates."
+        ),
+    )
+    name = serializers.CharField(
+        max_length=400,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Optional custom display name for the widget tile.",
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Optional markdown description shown when show_description is enabled.",
+    )
+
+
 def _build_openapi_serializers() -> tuple[
     dict[str, type[serializers.Serializer]],
     dict[str, type[serializers.Serializer]],
@@ -184,8 +209,11 @@ AddDashboardWidgetRequestOpenApi = PolymorphicProxySerializer(
 
 DashboardPatchWidgetRequestOpenApi = PolymorphicProxySerializer(
     component_name="DashboardPatchWidgetRequest",
-    serializers=cast("dict[str, Any]", _WIDGET_PATCH_REQUEST_SERIALIZERS),
-    resource_type_field_name="widget_type",
+    serializers=[
+        *cast("list[Any]", list(_WIDGET_PATCH_REQUEST_SERIALIZERS.values())),
+        _DashboardPatchExistingWidgetOpenApiSerializer,
+    ],
+    resource_type_field_name=None,
     required=False,
     help_text="Nested widget row updates.",
 )

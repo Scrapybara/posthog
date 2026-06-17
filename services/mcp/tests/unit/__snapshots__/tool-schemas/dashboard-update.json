@@ -250,6 +250,7 @@
                                         "description": "Optional custom display name for the widget tile."
                                     },
                                     "widget_type": {
+                                        "description": "* `activity_events_list` - activity_events_list",
                                         "enum": ["activity_events_list"],
                                         "type": "string"
                                     }
@@ -478,6 +479,7 @@
                                         "description": "Optional custom display name for the widget tile."
                                     },
                                     "widget_type": {
+                                        "description": "* `error_tracking_list` - error_tracking_list",
                                         "enum": ["error_tracking_list"],
                                         "type": "string"
                                     }
@@ -539,6 +541,7 @@
                                         "description": "Optional custom display name for the widget tile."
                                     },
                                     "widget_type": {
+                                        "description": "* `live_activity` - live_activity",
                                         "enum": ["live_activity"],
                                         "type": "string"
                                     }
@@ -744,11 +747,41 @@
                                         "description": "Optional custom display name for the widget tile."
                                     },
                                     "widget_type": {
+                                        "description": "* `session_replay_list` - session_replay_list",
                                         "enum": ["session_replay_list"],
                                         "type": "string"
                                     }
                                 },
                                 "required": ["widget_type"],
+                                "type": "object"
+                            },
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates."
+                                    },
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    }
+                                },
+                                "required": ["id"],
                                 "type": "object"
                             }
                         ],

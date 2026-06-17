@@ -1738,17 +1738,20 @@ export namespace Schemas {
       required_product_access?: string | null;
     }
 
-    export type ActivityEventsListWidgetPatchRequestOpenApiWidgetType = typeof ActivityEventsListWidgetPatchRequestOpenApiWidgetType[keyof typeof ActivityEventsListWidgetPatchRequestOpenApiWidgetType];
+    /**
+     * * `activity_events_list` - activity_events_list
+     */
+    export type ActivityEventsListWidgetTypeEnum = typeof ActivityEventsListWidgetTypeEnum[keyof typeof ActivityEventsListWidgetTypeEnum];
 
 
-    export const ActivityEventsListWidgetPatchRequestOpenApiWidgetType = {
+    export const ActivityEventsListWidgetTypeEnum = {
       ActivityEventsList: 'activity_events_list',
     } as const;
 
     export interface ActivityEventsListWidgetPatchRequestOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id?: string;
-      widget_type: ActivityEventsListWidgetPatchRequestOpenApiWidgetType;
+      widget_type: ActivityEventsListWidgetTypeEnum;
       /** Configuration patch for the recent events widget. */
       config?: ActivityEventsListWidgetConfig;
       /**
@@ -1760,16 +1763,6 @@ export namespace Schemas {
       /** Optional markdown description shown when show_description is enabled. */
       description?: string;
     }
-
-    /**
-     * * `activity_events_list` - activity_events_list
-     */
-    export type ActivityEventsListWidgetTypeEnum = typeof ActivityEventsListWidgetTypeEnum[keyof typeof ActivityEventsListWidgetTypeEnum];
-
-
-    export const ActivityEventsListWidgetTypeEnum = {
-      ActivityEventsList: 'activity_events_list',
-    } as const;
 
     export interface ActivityLog {
       readonly id: string;
@@ -13801,17 +13794,20 @@ export namespace Schemas {
       properties?: (EventPropertyFilter | PersonPropertyFilter | ElementPropertyFilter | EventMetadataPropertyFilter | SessionPropertyFilter | CohortPropertyFilter | RecordingPropertyFilter | LogEntryPropertyFilter | GroupPropertyFilter | FeaturePropertyFilter | FlagPropertyFilter | HogQLPropertyFilter | EmptyPropertyFilter | DataWarehousePropertyFilter | DataWarehousePersonPropertyFilter | ErrorTrackingIssueFilter | LogPropertyFilter | SpanPropertyFilter | RevenueAnalyticsPropertyFilter | WorkflowVariablePropertyFilter)[] | null;
     }
 
-    export type ErrorTrackingListWidgetPatchRequestOpenApiWidgetType = typeof ErrorTrackingListWidgetPatchRequestOpenApiWidgetType[keyof typeof ErrorTrackingListWidgetPatchRequestOpenApiWidgetType];
+    /**
+     * * `error_tracking_list` - error_tracking_list
+     */
+    export type ErrorTrackingListWidgetTypeEnum = typeof ErrorTrackingListWidgetTypeEnum[keyof typeof ErrorTrackingListWidgetTypeEnum];
 
 
-    export const ErrorTrackingListWidgetPatchRequestOpenApiWidgetType = {
+    export const ErrorTrackingListWidgetTypeEnum = {
       ErrorTrackingList: 'error_tracking_list',
     } as const;
 
     export interface ErrorTrackingListWidgetPatchRequestOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id?: string;
-      widget_type: ErrorTrackingListWidgetPatchRequestOpenApiWidgetType;
+      widget_type: ErrorTrackingListWidgetTypeEnum;
       /** Configuration patch for the top issues widget. */
       config?: ErrorTrackingListWidgetConfig;
       /**
@@ -13824,17 +13820,20 @@ export namespace Schemas {
       description?: string;
     }
 
-    export type LiveActivityWidgetPatchRequestOpenApiWidgetType = typeof LiveActivityWidgetPatchRequestOpenApiWidgetType[keyof typeof LiveActivityWidgetPatchRequestOpenApiWidgetType];
+    /**
+     * * `live_activity` - live_activity
+     */
+    export type LiveActivityWidgetTypeEnum = typeof LiveActivityWidgetTypeEnum[keyof typeof LiveActivityWidgetTypeEnum];
 
 
-    export const LiveActivityWidgetPatchRequestOpenApiWidgetType = {
+    export const LiveActivityWidgetTypeEnum = {
       LiveActivity: 'live_activity',
     } as const;
 
     export interface LiveActivityWidgetPatchRequestOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id?: string;
-      widget_type: LiveActivityWidgetPatchRequestOpenApiWidgetType;
+      widget_type: LiveActivityWidgetTypeEnum;
       /** Configuration patch for the live activity widget. */
       config?: LiveActivityWidgetConfig;
       /**
@@ -13847,17 +13846,20 @@ export namespace Schemas {
       description?: string;
     }
 
-    export type SessionReplayListWidgetPatchRequestOpenApiWidgetType = typeof SessionReplayListWidgetPatchRequestOpenApiWidgetType[keyof typeof SessionReplayListWidgetPatchRequestOpenApiWidgetType];
+    /**
+     * * `session_replay_list` - session_replay_list
+     */
+    export type SessionReplayListWidgetTypeEnum = typeof SessionReplayListWidgetTypeEnum[keyof typeof SessionReplayListWidgetTypeEnum];
 
 
-    export const SessionReplayListWidgetPatchRequestOpenApiWidgetType = {
+    export const SessionReplayListWidgetTypeEnum = {
       SessionReplayList: 'session_replay_list',
     } as const;
 
     export interface SessionReplayListWidgetPatchRequestOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id?: string;
-      widget_type: SessionReplayListWidgetPatchRequestOpenApiWidgetType;
+      widget_type: SessionReplayListWidgetTypeEnum;
       /** Configuration patch for the recent recordings widget. */
       config?: SessionReplayListWidgetConfig;
       /**
@@ -13870,7 +13872,22 @@ export namespace Schemas {
       description?: string;
     }
 
-    export type DashboardPatchWidgetRequest = ActivityEventsListWidgetPatchRequestOpenApi | ErrorTrackingListWidgetPatchRequestOpenApi | LiveActivityWidgetPatchRequestOpenApi | SessionReplayListWidgetPatchRequestOpenApi;
+    export interface _DashboardPatchExistingWidgetOpenApi {
+      /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+      id: string;
+      /** Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates. */
+      config?: unknown;
+      /**
+         * Optional custom display name for the widget tile.
+         * @maxLength 400
+         * @nullable
+         */
+      name?: string | null;
+      /** Optional markdown description shown when show_description is enabled. */
+      description?: string;
+    }
+
+    export type DashboardPatchWidgetRequest = ActivityEventsListWidgetPatchRequestOpenApi | ErrorTrackingListWidgetPatchRequestOpenApi | LiveActivityWidgetPatchRequestOpenApi | SessionReplayListWidgetPatchRequestOpenApi | _DashboardPatchExistingWidgetOpenApi;
 
     export interface DashboardPatchTileOpenApi {
       /** Nested widget row updates. */
@@ -18708,16 +18725,6 @@ export namespace Schemas {
       /** @nullable */
       required_product_access?: string | null;
     }
-
-    /**
-     * * `error_tracking_list` - error_tracking_list
-     */
-    export type ErrorTrackingListWidgetTypeEnum = typeof ErrorTrackingListWidgetTypeEnum[keyof typeof ErrorTrackingListWidgetTypeEnum];
-
-
-    export const ErrorTrackingListWidgetTypeEnum = {
-      ErrorTrackingList: 'error_tracking_list',
-    } as const;
 
     /**
      * Recommendation payload, shape depends on type.
@@ -25842,16 +25849,6 @@ export namespace Schemas {
       /** @nullable */
       required_product_access?: string | null;
     }
-
-    /**
-     * * `live_activity` - live_activity
-     */
-    export type LiveActivityWidgetTypeEnum = typeof LiveActivityWidgetTypeEnum[keyof typeof LiveActivityWidgetTypeEnum];
-
-
-    export const LiveActivityWidgetTypeEnum = {
-      LiveActivity: 'live_activity',
-    } as const;
 
     export interface LiveDebuggerBreakpoint {
       readonly id: string;
@@ -43690,16 +43687,6 @@ export namespace Schemas {
       /** @nullable */
       required_product_access?: string | null;
     }
-
-    /**
-     * * `session_replay_list` - session_replay_list
-     */
-    export type SessionReplayListWidgetTypeEnum = typeof SessionReplayListWidgetTypeEnum[keyof typeof SessionReplayListWidgetTypeEnum];
-
-
-    export const SessionReplayListWidgetTypeEnum = {
-      SessionReplayList: 'session_replay_list',
-    } as const;
 
     export interface SessionSummaries {
       /**

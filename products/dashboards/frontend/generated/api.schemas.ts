@@ -364,10 +364,13 @@ export interface DashboardCollaboratorApi {
     user_uuid: string
 }
 
-export type ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType =
-    (typeof ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType]
+/**
+ * * `activity_events_list` - activity_events_list
+ */
+export type ActivityEventsListWidgetTypeEnumApi =
+    (typeof ActivityEventsListWidgetTypeEnumApi)[keyof typeof ActivityEventsListWidgetTypeEnumApi]
 
-export const ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType = {
+export const ActivityEventsListWidgetTypeEnumApi = {
     ActivityEventsList: 'activity_events_list',
 } as const
 
@@ -456,7 +459,7 @@ export interface ActivityEventsListWidgetConfigApi {
 export interface ActivityEventsListWidgetPatchRequestOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id?: string
-    widget_type: ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType
+    widget_type: ActivityEventsListWidgetTypeEnumApi
     /** Configuration patch for the recent events widget. */
     config?: ActivityEventsListWidgetConfigApi
     /**
@@ -469,10 +472,13 @@ export interface ActivityEventsListWidgetPatchRequestOpenApiApi {
     description?: string
 }
 
-export type ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType =
-    (typeof ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType]
+/**
+ * * `error_tracking_list` - error_tracking_list
+ */
+export type ErrorTrackingListWidgetTypeEnumApi =
+    (typeof ErrorTrackingListWidgetTypeEnumApi)[keyof typeof ErrorTrackingListWidgetTypeEnumApi]
 
-export const ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType = {
+export const ErrorTrackingListWidgetTypeEnumApi = {
     ErrorTrackingList: 'error_tracking_list',
 } as const
 
@@ -553,7 +559,7 @@ export interface ErrorTrackingListWidgetConfigApi {
 export interface ErrorTrackingListWidgetPatchRequestOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id?: string
-    widget_type: ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType
+    widget_type: ErrorTrackingListWidgetTypeEnumApi
     /** Configuration patch for the top issues widget. */
     config?: ErrorTrackingListWidgetConfigApi
     /**
@@ -566,10 +572,13 @@ export interface ErrorTrackingListWidgetPatchRequestOpenApiApi {
     description?: string
 }
 
-export type LiveActivityWidgetPatchRequestOpenApiApiWidgetType =
-    (typeof LiveActivityWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof LiveActivityWidgetPatchRequestOpenApiApiWidgetType]
+/**
+ * * `live_activity` - live_activity
+ */
+export type LiveActivityWidgetTypeEnumApi =
+    (typeof LiveActivityWidgetTypeEnumApi)[keyof typeof LiveActivityWidgetTypeEnumApi]
 
-export const LiveActivityWidgetPatchRequestOpenApiApiWidgetType = {
+export const LiveActivityWidgetTypeEnumApi = {
     LiveActivity: 'live_activity',
 } as const
 
@@ -593,7 +602,7 @@ export interface LiveActivityWidgetConfigApi {
 export interface LiveActivityWidgetPatchRequestOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id?: string
-    widget_type: LiveActivityWidgetPatchRequestOpenApiApiWidgetType
+    widget_type: LiveActivityWidgetTypeEnumApi
     /** Configuration patch for the live activity widget. */
     config?: LiveActivityWidgetConfigApi
     /**
@@ -606,10 +615,13 @@ export interface LiveActivityWidgetPatchRequestOpenApiApi {
     description?: string
 }
 
-export type SessionReplayListWidgetPatchRequestOpenApiApiWidgetType =
-    (typeof SessionReplayListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof SessionReplayListWidgetPatchRequestOpenApiApiWidgetType]
+/**
+ * * `session_replay_list` - session_replay_list
+ */
+export type SessionReplayListWidgetTypeEnumApi =
+    (typeof SessionReplayListWidgetTypeEnumApi)[keyof typeof SessionReplayListWidgetTypeEnumApi]
 
-export const SessionReplayListWidgetPatchRequestOpenApiApiWidgetType = {
+export const SessionReplayListWidgetTypeEnumApi = {
     SessionReplayList: 'session_replay_list',
 } as const
 
@@ -662,9 +674,24 @@ export interface SessionReplayListWidgetConfigApi {
 export interface SessionReplayListWidgetPatchRequestOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id?: string
-    widget_type: SessionReplayListWidgetPatchRequestOpenApiApiWidgetType
+    widget_type: SessionReplayListWidgetTypeEnumApi
     /** Configuration patch for the recent recordings widget. */
     config?: SessionReplayListWidgetConfigApi
+    /**
+     * Optional custom display name for the widget tile.
+     * @maxLength 400
+     * @nullable
+     */
+    name?: string | null
+    /** Optional markdown description shown when show_description is enabled. */
+    description?: string
+}
+
+export interface _DashboardPatchExistingWidgetOpenApiApi {
+    /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+    id: string
+    /** Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates. */
+    config?: unknown
     /**
      * Optional custom display name for the widget tile.
      * @maxLength 400
@@ -680,6 +707,7 @@ export type DashboardPatchWidgetRequestApi =
     | ErrorTrackingListWidgetPatchRequestOpenApiApi
     | LiveActivityWidgetPatchRequestOpenApiApi
     | SessionReplayListWidgetPatchRequestOpenApiApi
+    | _DashboardPatchExistingWidgetOpenApiApi
 
 export interface DashboardPatchTileOpenApiApi {
     /** Nested widget row updates. */
@@ -8291,46 +8319,6 @@ export interface PatchedDataColorThemeApi {
     readonly created_at?: string | null
     readonly created_by?: UserBasicApi
 }
-
-/**
- * * `activity_events_list` - activity_events_list
- */
-export type ActivityEventsListWidgetTypeEnumApi =
-    (typeof ActivityEventsListWidgetTypeEnumApi)[keyof typeof ActivityEventsListWidgetTypeEnumApi]
-
-export const ActivityEventsListWidgetTypeEnumApi = {
-    ActivityEventsList: 'activity_events_list',
-} as const
-
-/**
- * * `error_tracking_list` - error_tracking_list
- */
-export type ErrorTrackingListWidgetTypeEnumApi =
-    (typeof ErrorTrackingListWidgetTypeEnumApi)[keyof typeof ErrorTrackingListWidgetTypeEnumApi]
-
-export const ErrorTrackingListWidgetTypeEnumApi = {
-    ErrorTrackingList: 'error_tracking_list',
-} as const
-
-/**
- * * `live_activity` - live_activity
- */
-export type LiveActivityWidgetTypeEnumApi =
-    (typeof LiveActivityWidgetTypeEnumApi)[keyof typeof LiveActivityWidgetTypeEnumApi]
-
-export const LiveActivityWidgetTypeEnumApi = {
-    LiveActivity: 'live_activity',
-} as const
-
-/**
- * * `session_replay_list` - session_replay_list
- */
-export type SessionReplayListWidgetTypeEnumApi =
-    (typeof SessionReplayListWidgetTypeEnumApi)[keyof typeof SessionReplayListWidgetTypeEnumApi]
-
-export const SessionReplayListWidgetTypeEnumApi = {
-    SessionReplayList: 'session_replay_list',
-} as const
 
 export type DashboardTemplatesListParams = {
     /**

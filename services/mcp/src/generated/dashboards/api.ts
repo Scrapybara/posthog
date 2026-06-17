@@ -143,6 +143,8 @@ export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderByDe
 export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderDirectionDefault = `DESC`
 export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourNameMax = 400
 
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFiveNameMax = 400
+
 export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
     .object({
         name: zod.string().max(dashboardsPartialUpdateBodyNameMax).nullish(),
@@ -168,7 +170,9 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                     .describe(
                                         'Existing widget row ID when updating a widget tile via dashboard PATCH.'
                                     ),
-                                widget_type: zod.enum(['activity_events_list']),
+                                widget_type: zod
+                                    .enum(['activity_events_list'])
+                                    .describe('* `activity_events_list` - activity_events_list'),
                                 config: zod
                                     .object({
                                         dateRange: zod
@@ -273,7 +277,9 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                     .describe(
                                         'Existing widget row ID when updating a widget tile via dashboard PATCH.'
                                     ),
-                                widget_type: zod.enum(['error_tracking_list']),
+                                widget_type: zod
+                                    .enum(['error_tracking_list'])
+                                    .describe('* `error_tracking_list` - error_tracking_list'),
                                 config: zod
                                     .object({
                                         dateRange: zod
@@ -415,7 +421,7 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                     .describe(
                                         'Existing widget row ID when updating a widget tile via dashboard PATCH.'
                                     ),
-                                widget_type: zod.enum(['live_activity']),
+                                widget_type: zod.enum(['live_activity']).describe('* `live_activity` - live_activity'),
                                 config: zod
                                     .object({
                                         limit: zod
@@ -466,7 +472,9 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                     .describe(
                                         'Existing widget row ID when updating a widget tile via dashboard PATCH.'
                                     ),
-                                widget_type: zod.enum(['session_replay_list']),
+                                widget_type: zod
+                                    .enum(['session_replay_list'])
+                                    .describe('* `session_replay_list` - session_replay_list'),
                                 config: zod
                                     .object({
                                         dateRange: zod
@@ -582,6 +590,28 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                 name: zod
                                     .string()
                                     .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFourNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                            zod.object({
+                                id: zod
+                                    .string()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                config: zod
+                                    .unknown()
+                                    .optional()
+                                    .describe(
+                                        'Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates.'
+                                    ),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFiveNameMax)
                                     .nullish()
                                     .describe('Optional custom display name for the widget tile.'),
                                 description: zod

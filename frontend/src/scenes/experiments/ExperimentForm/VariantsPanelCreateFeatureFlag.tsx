@@ -94,6 +94,7 @@ export const VariantsPanelCreateFeatureFlag = ({
 }: VariantsPanelCreateFeatureFlagProps): JSX.Element => {
     const { currentTeam } = useValues(teamLogic)
     const [isCustomSplit, setIsCustomSplit] = useState(false)
+    const [baselineVariantEditIndex, setBaselineVariantEditIndex] = useState<number | null>(null)
 
     const variants = experiment.parameters?.feature_flag_variants || [
         { key: 'control', rollout_percentage: 50 },
@@ -137,10 +138,21 @@ export const VariantsPanelCreateFeatureFlag = ({
         const newVariants = [...variants]
         const previousKey = newVariants[index]?.key
         newVariants[index] = { ...newVariants[index], ...updates }
-        updateVariants(
-            newVariants,
-            previousKey && previousKey === baselineVariantKey && updates.key ? updates.key : baselineVariantKey
-        )
+        const updatesVariantKey = Object.prototype.hasOwnProperty.call(updates, 'key')
+        const isEditingBaselineVariant = previousKey === baselineVariantKey || baselineVariantEditIndex === index
+
+        if (updatesVariantKey && isEditingBaselineVariant) {
+            if (updates.key) {
+                setBaselineVariantEditIndex(null)
+                updateVariants(newVariants, updates.key)
+            } else {
+                setBaselineVariantEditIndex(index)
+                updateVariants(newVariants, baselineVariantKey)
+            }
+            return
+        }
+
+        updateVariants(newVariants, baselineVariantKey)
     }
 
     const updateVariants = (
@@ -177,13 +189,22 @@ export const VariantsPanelCreateFeatureFlag = ({
             return
         }
         const newVariants = distributeVariantsEvenly(variants.filter((_, i) => i !== index))
+        const removedBaselineVariant = variants[index].key === baselineVariantKey || baselineVariantEditIndex === index
+
+        if (removedBaselineVariant) {
+            setBaselineVariantEditIndex(null)
+        } else if (baselineVariantEditIndex !== null && index < baselineVariantEditIndex) {
+            setBaselineVariantEditIndex(baselineVariantEditIndex - 1)
+        }
+
         updateVariants(
             newVariants,
-            variants[index].key === baselineVariantKey ? resolveBaselineVariantKey(newVariants) : baselineVariantKey
+            removedBaselineVariant ? resolveBaselineVariantKey(newVariants) : baselineVariantKey
         )
     }
 
     const updateBaselineVariant = (baseline_variant_key: string): void => {
+        setBaselineVariantEditIndex(null)
         onChange({
             stats_config: {
                 ...experiment.stats_config,

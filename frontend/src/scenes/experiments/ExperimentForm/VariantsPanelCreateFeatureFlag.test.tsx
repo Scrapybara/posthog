@@ -2,6 +2,7 @@ import '@testing-library/jest-dom'
 
 import { type RenderResult, cleanup, render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 
 import { MAX_EXPERIMENT_VARIANTS } from 'lib/constants'
 
@@ -314,6 +315,44 @@ describe('VariantsPanelCreateFeatureFlag', () => {
 
             const lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0]
             expect(lastCall.stats_config).toEqual(expect.objectContaining({ baseline_variant_key: 'test' }))
+        })
+
+        it('keeps the baseline attached when clearing and retyping its variant key', async () => {
+            const ControlledPanel = (): JSX.Element => {
+                const [experiment, setExperiment] = useState<Experiment>({
+                    ...defaultExperiment,
+                    stats_config: { baseline_variant_key: 'control' },
+                })
+
+                return (
+                    <VariantsPanelCreateFeatureFlag
+                        experiment={experiment}
+                        onChange={(updates) => {
+                            mockOnChange(updates)
+                            setExperiment((current) => ({
+                                ...current,
+                                ...updates,
+                                parameters: updates.parameters
+                                    ? { ...current.parameters, ...updates.parameters }
+                                    : current.parameters,
+                                stats_config: updates.stats_config
+                                    ? { ...current.stats_config, ...updates.stats_config }
+                                    : current.stats_config,
+                            }))
+                        }}
+                    />
+                )
+            }
+
+            render(<ControlledPanel />)
+
+            const variantInputs = screen.getAllByPlaceholderText(/example-variant/)
+            await userEvent.clear(variantInputs[0])
+            await userEvent.type(variantInputs[0], 'baseline')
+
+            const lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0]
+            expect(lastCall.parameters.feature_flag_variants[0].key).toBe('baseline')
+            expect(lastCall.stats_config).toEqual(expect.objectContaining({ baseline_variant_key: 'baseline' }))
         })
     })
 

@@ -26,7 +26,7 @@ from posthog.constants import ExperimentNoResultsErrorKeys
 from posthog.hogql_queries.insights.funnels.funnels_query_runner import FunnelsQueryRunner
 from posthog.hogql_queries.query_runner import QueryRunner
 
-from products.experiments.backend.hogql_queries import CONTROL_VARIANT_KEY
+from products.experiments.backend.baseline import resolve_baseline_variant_key
 from products.experiments.backend.hogql_queries.funnels_statistics_v2 import (
     are_results_significant_v2,
     calculate_credible_intervals_v2,
@@ -48,7 +48,16 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
         self.experiment = Experiment.objects.get(id=self.query.experiment_id, team=self.team)
         self.feature_flag = self.experiment.feature_flag
         self.feature_flag_key = self.feature_flag.key_without_tombstone()
-        self.variants = [variant["key"] for variant in self.feature_flag.variants]
+        excluded_variants = (self.experiment.parameters or {}).get("excluded_variants") or []
+        configured_variant_keys = [variant["key"] for variant in self.feature_flag.variants]
+        self.baseline_variant_key = resolve_baseline_variant_key(
+            configured_variant_keys,
+            self.experiment.stats_config,
+            excluded_variants=excluded_variants,
+        )
+        self.variants = [
+            variant_key for variant_key in configured_variant_keys if variant_key not in set(excluded_variants)
+        ]
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
 
@@ -158,7 +167,7 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
 
             breakdown_value = cast(list[str], first_step["breakdown_value"])[0]
 
-            if breakdown_value == CONTROL_VARIANT_KEY:
+            if breakdown_value == self.baseline_variant_key:
                 control_variant = ExperimentVariantFunnelsBaseStats(
                     key=breakdown_value,
                     success_count=int(success),
@@ -172,7 +181,7 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
                 )
 
         if control_variant is None:
-            raise ValueError("Control variant not found in count results")
+            raise ValueError(f"Baseline variant '{self.baseline_variant_key}' not found in count results")
 
         return control_variant, test_variants
 
@@ -193,15 +202,15 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
                 if event_dict.get("order") == 0:
                     eventsWithOrderZero.append(event_dict)
 
-        # Check if "control" is present
+        # Check if the baseline is present
         for event in eventsWithOrderZero:
             event_variant = event.get("breakdown_value", [None])[0]
-            if event_variant == "control":
+            if event_variant == self.baseline_variant_key:
                 errors[ExperimentNoResultsErrorKeys.NO_CONTROL_VARIANT] = False
                 break
 
         # Check if at least one of the test variants is present
-        test_variants = [variant for variant in self.variants if variant != "control"]
+        test_variants = [variant for variant in self.variants if variant != self.baseline_variant_key]
         for event in eventsWithOrderZero:
             event_variant = event.get("breakdown_value", [None])[0]
             if event_variant in test_variants:

@@ -22,6 +22,7 @@ from rest_framework.exceptions import ValidationError
 from posthog.models.scoping import team_scope
 from posthog.models.user import User
 
+from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
 from products.experiments.backend.models.experiment import (
@@ -221,6 +222,10 @@ def _recalc_fingerprints_for_run(experiment: Experiment, recalc: ExperimentMetri
     ExperimentMetricResult" — the snapshot lives in the fingerprint, not in a stored column.
     """
     stats_method = get_experiment_stats_method(experiment)
+    try:
+        baseline_variant_key = resolve_experiment_baseline_variant_key(experiment)
+    except ValidationError:
+        return {}
     fingerprints: dict[str, str] = {}
     for metric_uuid in recalc.metric_uuids or []:
         metric_dict = find_metric_dict(experiment, metric_uuid)
@@ -232,6 +237,8 @@ def _recalc_fingerprints_for_run(experiment: Experiment, recalc: ExperimentMetri
             stats_method,
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=baseline_variant_key,
         )
         fingerprints[metric_uuid] = compute_recalc_fingerprint(config_fp, str(recalc.id))
     return fingerprints

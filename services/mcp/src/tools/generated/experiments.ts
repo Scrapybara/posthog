@@ -94,6 +94,7 @@ const experimentCopyToProject = (): ToolBase<typeof ExperimentCopyToProjectSchem
             'end_date',
             'created_at',
             'parameters',
+            'stats_config',
             'metrics',
             'metrics_secondary',
             'conclusion',
@@ -125,7 +126,10 @@ const ExperimentCreateSchema = ExperimentsCreateBody.omit({
     update_feature_flag_params: true,
 }).extend({
     parameters: ExperimentsCreateBody.shape['parameters'].describe(
-        'Variant split and rollout scope. If the user mentions a specific percentage, load the configuring-experiment-rollout skill and clarify before setting these values. Set rollout_percentage (0-100) to control the overall fraction of users entering the experiment. Set feature_flag_variants with split_percent on each variant to customize the variant split. Default: 50/50 control/test, 100% rollout. HARD REQUIREMENT — when you provide feature_flag_variants, exactly one variant\'s `key` must be the literal string `control` (lowercase, no variations). It is the baseline used for analysis and the experiment runtime treats it specially. If the user describes variants as "A/B", "old/new", "original/redesign", or any other natural-language pair, map the baseline to `key: "control"` — not "A", "Control", "old", "original", or "baseline". Other variants can use any key (`test`, `variant_a`, etc.).'
+        'Variant split and rollout scope. If the user mentions a specific percentage, load the configuring-experiment-rollout skill and clarify before setting these values. Set rollout_percentage (0-100) to control the overall fraction of users entering the experiment. Set feature_flag_variants with split_percent on each variant to customize the variant split. Default: 50/50 control/test, 100% rollout. Variant keys are preserved as provided and are not renamed. To choose a baseline variant, set stats_config.baseline_variant_key to one of the provided variant keys. If omitted, analysis uses `control` when present, otherwise the first configured variant.'
+    ),
+    stats_config: ExperimentsCreateBody.shape['stats_config'].describe(
+        'Statistical settings. Set baseline_variant_key to the variant key all other variants should be compared against. The key must exist in feature_flag_variants and must not be excluded from analysis.'
     ),
 })
 
@@ -177,6 +181,7 @@ const experimentCreate = (): ToolBase<typeof ExperimentCreateSchema, WithPostHog
                 'end_date',
                 'created_at',
                 'parameters',
+                'stats_config',
                 'metrics',
                 'metrics_secondary',
                 'conclusion',
@@ -372,6 +377,7 @@ const experimentLaunch = (): ToolBase<typeof ExperimentLaunchSchema, WithPostHog
                 'end_date',
                 'created_at',
                 'parameters',
+                'stats_config',
                 'metrics',
                 'metrics_secondary',
                 'conclusion',
@@ -428,6 +434,8 @@ const experimentList = (): ToolBase<typeof ExperimentListSchema, WithPostHogUrl<
                         'status',
                         'created_at',
                         'updated_at',
+                        'parameters',
+                        'stats_config',
                     ])
                 ),
             } as typeof result
@@ -805,6 +813,7 @@ const experimentUpdate = (): ToolBase<typeof ExperimentUpdateSchema, WithPostHog
                 'end_date',
                 'created_at',
                 'parameters',
+                'stats_config',
                 'metrics',
                 'metrics_secondary',
                 'conclusion',

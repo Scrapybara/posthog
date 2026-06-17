@@ -47,11 +47,11 @@ There are two separate controls that determine who sees what. Both are set via `
 How users **inside** the experiment are distributed across variants.
 
 - Array of `{key, name, split_percent}` — percentages must sum to 100
-- First variant must have key `"control"` — this is the baseline
+- The baseline is the variant selected in `stats_config.baseline_variant_key`; if omitted, experiments use `"control"` when present, otherwise the first configured variant
 - Minimum 2 variants, maximum 20
 - Default: control 50% / test 50%
 
-If the user says "A/B/C test", map the baseline to `"control"` and create additional variants for the others.
+If the user says "A/B/C test", default to a `"control"` baseline for new flags unless they name a different existing baseline variant.
 
 ### 2. Overall rollout (`parameters.rollout_percentage`)
 

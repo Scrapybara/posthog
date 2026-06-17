@@ -3766,7 +3766,7 @@ export interface ExperimentApiMetric {
 }
 
 export interface ExperimentVariant {
-    /** Variant key. Exactly one variant in feature_flag_variants must use key 'control' (lowercase, exactly) — that is the baseline used for analysis and the special key the experiment runtime expects. Other variants use keys like 'test', 'variant_a', 'variant_b'. Map natural-language names ('original', 'A', 'baseline') to 'control'. */
+    /** Variant key. Keys are preserved as provided and are not renamed. The experiment baseline is selected with stats_config.baseline_variant_key; when unset, experiments default to 'control' if present, otherwise the first configured variant. */
     key: string
     /** Human-readable variant name. */
     name?: string
@@ -3777,7 +3777,7 @@ export interface ExperimentVariant {
 }
 
 export interface ExperimentParameters {
-    /** Experiment variants. If specified, must include a variant with key 'control' (lowercase). Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20. */
+    /** Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20. */
     feature_flag_variants?: ExperimentVariant[]
     /** Minimum detectable effect as a percentage. Lower values need more users but catch smaller changes. Suggest 20–30% for most experiments. */
     minimum_detectable_effect?: number

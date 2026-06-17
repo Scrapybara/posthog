@@ -13166,7 +13166,7 @@ export namespace Schemas {
       /** The name of the LLM prompt to experiment on. Must already exist for this team. */
       prompt_name: string;
       /**
-         * Ordered list of prompt version numbers to assign to experiment variants. The first entry is the control variant. Must contain between 2 and 10 distinct versions.
+         * Ordered list of prompt version numbers to assign to experiment variants. The first entry becomes the conventional control baseline variant. Must contain between 2 and 10 distinct versions.
          * @minItems 2
          * @maxItems 10
          * @items.minimum 1
@@ -19654,6 +19654,26 @@ export namespace Schemas {
       ExitOnlyAtEnd: 'exit_only_at_end',
     } as const;
 
+    /**
+     * Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.
+     * @nullable
+     */
+    export type ExperimentStatsConfig = {
+      /** Statistical engine used for experiment analysis. */
+      method?: 'bayesian' | 'frequentist';
+      /** Variant key all other variants are compared against. The key must exist in feature_flag_variants and must not be excluded from analysis. */
+      baseline_variant_key?: string;
+      /** Stats configuration version. */
+      version?: number;
+      /** Bayesian engine options. */
+      bayesian?: { [key: string]: unknown };
+      /** Frequentist engine options. */
+      frequentist?: { [key: string]: unknown };
+      /** CUPED variance-reduction options. */
+      cuped?: { [key: string]: unknown };
+      [key: string]: unknown;
+     } | null;
+
     export interface ExperimentHoldout {
       readonly id: number;
       /** @maxLength 400 */
@@ -19670,7 +19690,7 @@ export namespace Schemas {
     }
 
     export interface ExperimentVariant {
-      /** Variant key. Exactly one variant in feature_flag_variants must use key 'control' (lowercase, exactly) — that is the baseline used for analysis and the special key the experiment runtime expects. Other variants use keys like 'test', 'variant_a', 'variant_b'. Map natural-language names ('original', 'A', 'baseline') to 'control'. */
+      /** Variant key. Keys are preserved as provided and are not renamed. The experiment baseline is selected with stats_config.baseline_variant_key; when unset, experiments default to 'control' if present, otherwise the first configured variant. */
       key: string;
       /** Human-readable variant name. */
       name?: string | null;
@@ -19682,7 +19702,7 @@ export namespace Schemas {
     export interface ExperimentParameters {
       /** Variant keys to exclude from metric result calculations. Excluded variants are still served to users but omitted from statistical analysis. */
       excluded_variants?: string[] | null;
-      /** Experiment variants. If specified, must include a variant with key 'control' (lowercase). Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20. */
+      /** Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20. */
       feature_flag_variants?: ExperimentVariant[] | null;
       /** Minimum detectable effect as a percentage. Lower values need more users but catch smaller changes. Suggest 20–30% for most experiments. */
       minimum_detectable_effect?: number | null;
@@ -19918,7 +19938,11 @@ export namespace Schemas {
       metrics?: _ExperimentApiMetricsList | null;
       /** Secondary metrics for additional measurements. Same format as primary metrics. */
       metrics_secondary?: _ExperimentApiMetricsList | null;
-      stats_config?: unknown;
+      /**
+         * Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.
+         * @nullable
+         */
+      stats_config?: ExperimentStatsConfig;
       scheduling_config?: unknown;
       /** Suppresses the validation that rejects metrics referencing events not yet ingested by this project. REQUIRES explicit user confirmation before being set to true — never flip this silently to retry a failed call. The default validation catches typo'd event names and missing instrumentation. Set this to true only when the user has confirmed the event is intentional (e.g. they are about to instrument it). */
       allow_unknown_events?: boolean;
@@ -33912,6 +33936,26 @@ export namespace Schemas {
     }
 
     /**
+     * Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.
+     * @nullable
+     */
+    export type PatchedExperimentStatsConfig = {
+      /** Statistical engine used for experiment analysis. */
+      method?: 'bayesian' | 'frequentist';
+      /** Variant key all other variants are compared against. The key must exist in feature_flag_variants and must not be excluded from analysis. */
+      baseline_variant_key?: string;
+      /** Stats configuration version. */
+      version?: number;
+      /** Bayesian engine options. */
+      bayesian?: { [key: string]: unknown };
+      /** Frequentist engine options. */
+      frequentist?: { [key: string]: unknown };
+      /** CUPED variance-reduction options. */
+      cuped?: { [key: string]: unknown };
+      [key: string]: unknown;
+     } | null;
+
+    /**
      * Mixin for serializers to add user access control fields
      */
     export interface PatchedExperiment {
@@ -33972,7 +34016,11 @@ export namespace Schemas {
       metrics?: _ExperimentApiMetricsList | null;
       /** Secondary metrics for additional measurements. Same format as primary metrics. */
       metrics_secondary?: _ExperimentApiMetricsList | null;
-      stats_config?: unknown;
+      /**
+         * Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.
+         * @nullable
+         */
+      stats_config?: PatchedExperimentStatsConfig;
       scheduling_config?: unknown;
       /** Suppresses the validation that rejects metrics referencing events not yet ingested by this project. REQUIRES explicit user confirmation before being set to true — never flip this silently to retry a failed call. The default validation catches typo'd event names and missing instrumentation. Set this to true only when the user has confirmed the event is intentional (e.g. they are about to instrument it). */
       allow_unknown_events?: boolean;

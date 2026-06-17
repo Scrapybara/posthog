@@ -39,7 +39,8 @@ from products.analytics_platform.backend.lazy_computation.lazy_computation_execu
     LazyComputationTable,
     ensure_precomputed,
 )
-from products.experiments.backend.hogql_queries import CONTROL_VARIANT_KEY, MULTIPLE_VARIANT_KEY
+from products.experiments.backend.baseline import resolve_baseline_variant_key
+from products.experiments.backend.hogql_queries import MULTIPLE_VARIANT_KEY
 from products.experiments.backend.hogql_queries.base_query_utils import get_experiment_date_range
 from products.experiments.backend.hogql_queries.cuped_config import get_cuped_config
 from products.experiments.backend.hogql_queries.error_handling import experiment_error_handler
@@ -147,13 +148,16 @@ class ExperimentQueryRunner(QueryRunner):
         # the experiment, so they don't belong in the metric scorecard.
         # self.experiment.holdout is still readable for code paths that need it
         # (e.g. the Distribution table on the Variants tab).
-        excluded_variants = set((self.experiment.parameters or {}).get("excluded_variants") or [])
+        excluded_variants = (self.experiment.parameters or {}).get("excluded_variants") or []
+        configured_variant_keys = [variant["key"] for variant in self.feature_flag.variants]
+        self.baseline_variant_key = resolve_baseline_variant_key(
+            configured_variant_keys,
+            self.experiment.stats_config,
+            excluded_variants=excluded_variants,
+        )
         self.variants = [
-            variant["key"] for variant in self.feature_flag.variants if variant["key"] not in excluded_variants
+            variant_key for variant_key in configured_variant_keys if variant_key not in set(excluded_variants)
         ]
-
-        stats_config = self.experiment.stats_config or {}
-        self.baseline_variant_key = stats_config.get("baseline_variant_key", CONTROL_VARIANT_KEY)
 
         self.date_range = get_experiment_date_range(self.experiment, self.team, self.override_end_date)
         self.date_range_query = QueryDateRange(
@@ -549,11 +553,11 @@ class ExperimentQueryRunner(QueryRunner):
         breakdown_variants = [v for bv, v in variant_results if bv == breakdown_tuple]
 
         # Ensure all expected variants are present in this breakdown group
-        # Some breakdown groups may not have data for all variants (e.g., no control users with specific browser)
+        # Some breakdown groups may not have data for all variants (e.g., no baseline users with specific browser)
         variants_present = {v.key for v in breakdown_variants}
         for expected_variant in self.variants:
             if expected_variant not in variants_present:
-                # Add missing variant with zero stats to avoid "No control variant found" error
+                # Add missing variant with zero stats to avoid "baseline not found" errors
                 breakdown_variants.append(
                     ExperimentStatsBase(
                         key=expected_variant,

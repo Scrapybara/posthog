@@ -350,13 +350,10 @@ export function getViewRecordingFiltersLegacy(
 
 export function featureFlagEligibleForExperiment(featureFlag: FeatureFlagType): true {
     if (featureFlag.filters.multivariate?.variants?.length && featureFlag.filters.multivariate.variants.length > 1) {
-        if (featureFlag.filters.multivariate.variants[0].key !== 'control') {
-            throw new Error('Feature flag must have control as the first variant.')
-        }
         return true
     }
 
-    throw new Error('Feature flag must use multiple variants with control as the first variant.')
+    throw new Error('Feature flag must use multiple variants.')
 }
 
 /**

@@ -196,4 +196,48 @@ describe('experimentActivityDescriber', () => {
             expect(textOf(result)).toContain(expected)
         })
     })
+
+    describe('baseline variant activity', () => {
+        it.each([
+            {
+                name: 'baseline variant changed',
+                before: { baseline_variant_key: 'control' },
+                after: { baseline_variant_key: 'variant-b' },
+                expected: 'changed the baseline variant to variant-b',
+            },
+            {
+                name: 'baseline variant cleared',
+                before: { baseline_variant_key: 'variant-b' },
+                after: {},
+                expected: 'cleared the baseline variant',
+            },
+            {
+                name: 'other stats config changed',
+                before: { method: 'bayesian', baseline_variant_key: 'control' },
+                after: { method: 'frequentist', baseline_variant_key: 'control' },
+                expected: 'updated statistics settings',
+            },
+        ])('$name', ({ before, after, expected }) => {
+            const result = experimentActivityDescriber(
+                baseLogItem({
+                    activity: 'updated',
+                    detail: {
+                        name: 'Checkout funnel',
+                        changes: [
+                            {
+                                type: ActivityScope.EXPERIMENT,
+                                action: 'changed',
+                                field: 'stats_config',
+                                before,
+                                after,
+                            },
+                        ],
+                        merge: null,
+                        trigger: null,
+                    },
+                })
+            )
+            expect(textOf(result)).toContain(expected)
+        })
+    })
 })

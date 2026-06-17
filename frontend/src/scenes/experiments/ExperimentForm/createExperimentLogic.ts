@@ -114,6 +114,7 @@ export const createExperimentLogic = kea<createExperimentLogicType>([
                 feature_flag_variants?: MultivariateFlagVariant[]
                 ensure_experience_continuity?: boolean
             }
+            stats_config?: Experiment['stats_config']
         }) => ({ config }),
         saveExperiment: true,
         saveExperimentStarted: true,
@@ -143,6 +144,9 @@ export const createExperimentLogic = kea<createExperimentLogicType>([
                     ...state,
                     ...(config.feature_flag_key !== undefined && {
                         feature_flag_key: config.feature_flag_key,
+                    }),
+                    ...(config.stats_config !== undefined && {
+                        stats_config: config.stats_config,
                     }),
                     parameters: {
                         ...state.parameters,

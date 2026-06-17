@@ -89,9 +89,8 @@ tools:
             the copy SHARES that existing flag (its variants are reused) rather than creating a new one. A shared flag
             means lifecycle operations on either experiment (shipping a variant, pausing) affect both. To avoid this,
             pass a feature_flag_key that does not already exist in the target project. If an existing target flag is
-            reused, it must have at least 2 variants including one with key "control", otherwise the call returns 400
-            ("Feature flag must have at least 2 variants (control and at least one test variant)" or "Feature flag must
-            have a variant with key 'control'").
+            reused, it must have at least 2 variants and any explicit stats_config.baseline_variant_key must match one
+            of those variants, otherwise the call returns 400.
 
 
             Returns 400 if the source experiment uses legacy metrics ("Copying is not supported for experiments using
@@ -119,6 +118,7 @@ tools:
                 - end_date
                 - created_at
                 - parameters
+                - stats_config
                 - metrics
                 - metrics_secondary
                 - conclusion
@@ -154,8 +154,8 @@ tools:
 
             Creates a new experiment in draft status (ignore the "type" param, since no-code/toolbar experiments must be
             created in the PostHog UI). Requires name and feature_flag_key. Feature flag is auto-created — do not create
-            one separately. Defaults: 50/50 control/test, 100% rollout, Bayesian stats. Launch the experiment with the
-            launch tool when ready.
+            one separately. Defaults: 50/50 control/test, 100% rollout, Bayesian stats, and the `control` variant as
+            baseline. Launch the experiment with the launch tool when ready.
         include_params:
             - name
             - description
@@ -172,15 +172,13 @@ tools:
                     configuring-experiment-rollout skill and clarify before setting these values. Set rollout_percentage
                     (0-100) to control the overall fraction of users entering the experiment. Set feature_flag_variants
                     with split_percent on each variant to customize the variant split. Default: 50/50 control/test, 100%
-                    rollout.
-
-
-                    HARD REQUIREMENT — when you provide feature_flag_variants, exactly one variant's `key` must be the
-                    literal string `control` (lowercase, no variations). It is the baseline used for analysis and the
-                    experiment runtime treats it specially. If the user describes variants as "A/B", "old/new",
-                    "original/redesign", or any other natural-language pair, map the baseline to `key: "control"` — not
-                    "A", "Control", "old", "original", or "baseline". Other variants can use any key (`test`,
-                    `variant_a`, etc.).
+                    rollout. Variant keys are preserved as provided and are not renamed. To choose a baseline variant,
+                    set stats_config.baseline_variant_key to one of the provided variant keys. If omitted, analysis uses
+                    `control` when present, otherwise the first configured variant.
+            stats_config:
+                description: >
+                    Statistical settings. Set baseline_variant_key to the variant key all other variants should be
+                    compared against. The key must exist in feature_flag_variants and must not be excluded from analysis.
         ui_app: experiment
         response:
             include:
@@ -195,6 +193,7 @@ tools:
                 - end_date
                 - created_at
                 - parameters
+                - stats_config
                 - metrics
                 - metrics_secondary
                 - conclusion
@@ -342,8 +341,8 @@ tools:
             user's reference first. Load the managing-experiment-lifecycle skill for preconditions and side effects.
 
 
-            Launch a draft experiment. Validates the feature flag has at least 2 multivariate variants with "control" as
-            the first variant. Activates the feature flag (sets active=true), sets start_date to the current server
+            Launch a draft experiment. Validates the feature flag has at least 2 multivariate variants and the configured
+            baseline variant is valid. Activates the feature flag (sets active=true), sets start_date to the current server
             time, recomputes metric fingerprints, and transitions status from draft to running.
 
 
@@ -369,6 +368,7 @@ tools:
                 - end_date
                 - created_at
                 - parameters
+                - stats_config
                 - metrics
                 - metrics_secondary
                 - conclusion
@@ -423,6 +423,8 @@ tools:
                 - status
                 - created_at
                 - updated_at
+                - parameters
+                - stats_config
     experiment-pause:
         operation: experiments_pause_create
         enabled: true
@@ -835,6 +837,7 @@ tools:
                 - end_date
                 - created_at
                 - parameters
+                - stats_config
                 - metrics
                 - metrics_secondary
                 - conclusion

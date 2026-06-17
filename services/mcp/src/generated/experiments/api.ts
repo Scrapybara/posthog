@@ -266,7 +266,7 @@ export const ExperimentsCreateBody = /* @__PURE__ */ zod
                                     key: zod
                                         .string()
                                         .describe(
-                                            "Variant key. Exactly one variant in feature_flag_variants must use key 'control' (lowercase, exactly) — that is the baseline used for analysis and the special key the experiment runtime expects. Other variants use keys like 'test', 'variant_a', 'variant_b'. Map natural-language names ('original', 'A', 'baseline') to 'control'."
+                                            "Variant key. Keys are preserved as provided and are not renamed. The experiment baseline is selected with stats_config.baseline_variant_key; when unset, experiments default to 'control' if present, otherwise the first configured variant."
                                         ),
                                     name: zod
                                         .union([zod.string(), zod.null()])
@@ -285,7 +285,7 @@ export const ExperimentsCreateBody = /* @__PURE__ */ zod
                         ])
                         .optional()
                         .describe(
-                            "Experiment variants. If specified, must include a variant with key 'control' (lowercase). Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20."
+                            'Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20.'
                         ),
                     minimum_detectable_effect: zod
                         .union([zod.number(), zod.null()])
@@ -2462,7 +2462,27 @@ export const ExperimentsCreateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
+        stats_config: zod
+            .object({
+                method: zod
+                    .enum(['bayesian', 'frequentist'])
+                    .optional()
+                    .describe('Statistical engine used for experiment analysis.'),
+                baseline_variant_key: zod
+                    .string()
+                    .optional()
+                    .describe(
+                        'Variant key all other variants are compared against. The key must exist in feature_flag_variants and must not be excluded from analysis.'
+                    ),
+                version: zod.number().optional().describe('Stats configuration version.'),
+                bayesian: zod.record(zod.string(), zod.unknown()).optional().describe('Bayesian engine options.'),
+                frequentist: zod.record(zod.string(), zod.unknown()).optional().describe('Frequentist engine options.'),
+                cuped: zod.record(zod.string(), zod.unknown()).optional().describe('CUPED variance-reduction options.'),
+            })
+            .nullish()
+            .describe(
+                'Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.'
+            ),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()
@@ -2622,7 +2642,7 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
                                     key: zod
                                         .string()
                                         .describe(
-                                            "Variant key. Exactly one variant in feature_flag_variants must use key 'control' (lowercase, exactly) — that is the baseline used for analysis and the special key the experiment runtime expects. Other variants use keys like 'test', 'variant_a', 'variant_b'. Map natural-language names ('original', 'A', 'baseline') to 'control'."
+                                            "Variant key. Keys are preserved as provided and are not renamed. The experiment baseline is selected with stats_config.baseline_variant_key; when unset, experiments default to 'control' if present, otherwise the first configured variant."
                                         ),
                                     name: zod
                                         .union([zod.string(), zod.null()])
@@ -2641,7 +2661,7 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
                         ])
                         .optional()
                         .describe(
-                            "Experiment variants. If specified, must include a variant with key 'control' (lowercase). Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20."
+                            'Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20.'
                         ),
                     minimum_detectable_effect: zod
                         .union([zod.number(), zod.null()])
@@ -4823,7 +4843,27 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
+        stats_config: zod
+            .object({
+                method: zod
+                    .enum(['bayesian', 'frequentist'])
+                    .optional()
+                    .describe('Statistical engine used for experiment analysis.'),
+                baseline_variant_key: zod
+                    .string()
+                    .optional()
+                    .describe(
+                        'Variant key all other variants are compared against. The key must exist in feature_flag_variants and must not be excluded from analysis.'
+                    ),
+                version: zod.number().optional().describe('Stats configuration version.'),
+                bayesian: zod.record(zod.string(), zod.unknown()).optional().describe('Bayesian engine options.'),
+                frequentist: zod.record(zod.string(), zod.unknown()).optional().describe('Frequentist engine options.'),
+                cuped: zod.record(zod.string(), zod.unknown()).optional().describe('CUPED variance-reduction options.'),
+            })
+            .nullish()
+            .describe(
+                'Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.'
+            ),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()
@@ -5024,7 +5064,7 @@ export const ExperimentsDuplicateCreateBody = /* @__PURE__ */ zod
                                     key: zod
                                         .string()
                                         .describe(
-                                            "Variant key. Exactly one variant in feature_flag_variants must use key 'control' (lowercase, exactly) — that is the baseline used for analysis and the special key the experiment runtime expects. Other variants use keys like 'test', 'variant_a', 'variant_b'. Map natural-language names ('original', 'A', 'baseline') to 'control'."
+                                            "Variant key. Keys are preserved as provided and are not renamed. The experiment baseline is selected with stats_config.baseline_variant_key; when unset, experiments default to 'control' if present, otherwise the first configured variant."
                                         ),
                                     name: zod
                                         .union([zod.string(), zod.null()])
@@ -5043,7 +5083,7 @@ export const ExperimentsDuplicateCreateBody = /* @__PURE__ */ zod
                         ])
                         .optional()
                         .describe(
-                            "Experiment variants. If specified, must include a variant with key 'control' (lowercase). Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20."
+                            'Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20.'
                         ),
                     minimum_detectable_effect: zod
                         .union([zod.number(), zod.null()])
@@ -7228,7 +7268,27 @@ export const ExperimentsDuplicateCreateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
+        stats_config: zod
+            .object({
+                method: zod
+                    .enum(['bayesian', 'frequentist'])
+                    .optional()
+                    .describe('Statistical engine used for experiment analysis.'),
+                baseline_variant_key: zod
+                    .string()
+                    .optional()
+                    .describe(
+                        'Variant key all other variants are compared against. The key must exist in feature_flag_variants and must not be excluded from analysis.'
+                    ),
+                version: zod.number().optional().describe('Stats configuration version.'),
+                bayesian: zod.record(zod.string(), zod.unknown()).optional().describe('Bayesian engine options.'),
+                frequentist: zod.record(zod.string(), zod.unknown()).optional().describe('Frequentist engine options.'),
+                cuped: zod.record(zod.string(), zod.unknown()).optional().describe('CUPED variance-reduction options.'),
+            })
+            .nullish()
+            .describe(
+                'Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) and `baseline_variant_key`, the variant key all other variants are compared against. When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first configured variant. The baseline variant must exist and cannot be excluded from analysis.'
+            ),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()
@@ -7319,7 +7379,7 @@ export const ExperimentsEndCreateBody = /* @__PURE__ */ zod.object({
  * Validates the experiment is in draft state, activates its linked feature flag,
  * sets start_date to the current server time, and transitions the experiment to running.
  * Returns 400 if the experiment has already been launched or if the feature flag
- * configuration is invalid (e.g. missing "control" variant or fewer than 2 variants).
+ * configuration is invalid (e.g. fewer than 2 variants or an invalid baseline variant).
  */
 export const ExperimentsLaunchCreateParams = /* @__PURE__ */ zod.object({
     id: zod.number().describe('A unique integer value identifying this experiment.'),

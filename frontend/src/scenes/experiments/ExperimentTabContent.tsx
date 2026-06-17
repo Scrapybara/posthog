@@ -25,9 +25,7 @@ export const ExperimentTabContent = ({
     )
 
     const isValidMultivariateFlag =
-        featureFlag.filters.multivariate &&
-        featureFlag.filters.multivariate.variants.length > 1 &&
-        featureFlag.filters.multivariate.variants.some((variant) => variant.key === 'control')
+        featureFlag.filters.multivariate && featureFlag.filters.multivariate.variants.length > 1
 
     if (!isValidMultivariateFlag) {
         return (
@@ -35,7 +33,7 @@ export const ExperimentTabContent = ({
                 <LemonBanner type="warning">
                     <div className="flex flex-col gap-3">
                         <div>
-                            Experiments require a multivariate flag with multiple variants and a control variant.&nbsp;
+                            Experiments require a multivariate flag with multiple variants.&nbsp;
                             <Link to="https://posthog.com/docs/experiments/creating-an-experiment">
                                 Learn more in the docs
                             </Link>

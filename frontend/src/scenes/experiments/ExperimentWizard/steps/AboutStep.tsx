@@ -10,6 +10,7 @@ import { slugifyFeatureFlagKey } from 'scenes/feature-flags/featureFlagLogic'
 
 import type { FeatureFlagType } from '~/types'
 
+import { resolveBaselineVariantKey } from '../../baseline'
 import { SelectExistingFeatureFlagModal } from '../../ExperimentForm/SelectExistingFeatureFlagModal'
 import { selectExistingFeatureFlagModalLogic } from '../../ExperimentForm/selectExistingFeatureFlagModalLogic'
 import { VariantsPanelLinkFeatureFlag } from '../../ExperimentForm/VariantsPanelLinkFeatureFlag'
@@ -48,11 +49,16 @@ export function AboutStep(): JSX.Element {
         (isDeparted && !experiment.feature_flag_key?.trim() ? 'Feature flag key is required' : undefined)
 
     const linkExistingFlag = (flag: FeatureFlagType): void => {
+        const variants = flag.filters?.multivariate?.variants || []
         setLinkedFeatureFlag(flag)
         clearFeatureFlagKeyValidation()
         setFeatureFlagConfig({
             feature_flag_key: flag.key,
-            feature_flag_variants: flag.filters?.multivariate?.variants || [],
+            feature_flag_variants: variants,
+            stats_config: {
+                ...experiment.stats_config,
+                baseline_variant_key: resolveBaselineVariantKey(variants),
+            },
         })
     }
 
@@ -95,6 +101,18 @@ export function AboutStep(): JSX.Element {
                 <VariantsPanelLinkFeatureFlag
                     linkedFeatureFlag={linkedFeatureFlag}
                     setShowFeatureFlagSelector={openSelectExistingFeatureFlagModal}
+                    baselineVariantKey={resolveBaselineVariantKey(
+                        linkedFeatureFlag.filters?.multivariate?.variants || [],
+                        experiment
+                    )}
+                    onBaselineVariantChange={(baseline_variant_key) => {
+                        setFeatureFlagConfig({
+                            stats_config: {
+                                ...experiment.stats_config,
+                                baseline_variant_key,
+                            },
+                        })
+                    }}
                     onRemove={() => {
                         setLinkedFeatureFlag(null)
                         setExperimentValue('feature_flag_key', '')

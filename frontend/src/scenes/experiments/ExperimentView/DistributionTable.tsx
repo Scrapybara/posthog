@@ -18,6 +18,7 @@ import { AuthorizedUrlList } from '~/lib/components/AuthorizedUrlList/Authorized
 import { AuthorizedUrlListType } from '~/lib/components/AuthorizedUrlList/authorizedUrlListLogic'
 import { useFeatureFlag } from '~/lib/hooks/useFeatureFlag'
 import { IconOpenInApp } from '~/lib/lemon-ui/icons'
+import { resolveBaselineVariantKey } from '~/scenes/experiments/baseline'
 import {
     useVariantDistributionValidation,
     VariantDistributionEditor,
@@ -113,12 +114,8 @@ export function DistributionTable(): JSX.Element {
 
     const excludedVariantsEnabled = useFeatureFlag('EXPERIMENTS_EXCLUDED_VARIANTS')
 
-    /**
-     * This is future-proofing to match the experiment query runner backend, that uses
-     * the baseline variant key to determine the baseline variant.
-     */
-    const baselineKey = experiment.stats_config?.baseline_variant_key || 'control'
     const variants = experiment.feature_flag?.filters.multivariate?.variants || []
+    const baselineKey = resolveBaselineVariantKey(variants, experiment)
 
     /**
      * We use this check to disable the toggle if there's only one test variant left.

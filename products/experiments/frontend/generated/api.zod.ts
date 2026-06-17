@@ -318,7 +318,7 @@ export const ExperimentsCreateFromPromptCreateBody = /* @__PURE__ */ zod.object(
         .min(experimentsCreateFromPromptCreateBodyVersionsMin)
         .max(experimentsCreateFromPromptCreateBodyVersionsMax)
         .describe(
-            'Ordered list of prompt version numbers to assign to experiment variants. The first entry is the control variant. Must contain between 2 and 10 distinct versions.'
+            'Ordered list of prompt version numbers to assign to experiment variants. The first entry becomes the conventional control baseline variant. Must contain between 2 and 10 distinct versions.'
         ),
     templates: zod
         .array(

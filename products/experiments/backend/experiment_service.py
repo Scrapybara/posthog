@@ -30,6 +30,7 @@ from posthog.utils import str_to_bool
 
 from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
+from products.experiments.backend.baseline import resolve_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.funnel_validation import FunnelDWValidator
 from products.experiments.backend.metric_utils import collect_metric_events_and_action_ids, resolve_action_events
@@ -111,7 +112,7 @@ class ExperimentService:
         """
         if not parameters:
             return
-        variants = parameters.get("feature_flag_variants", [])
+        variants = parameters.get("feature_flag_variants") or []
         for i, variant in enumerate(variants):
             if not isinstance(variant, dict):
                 raise ValidationError(f"Feature flag variant at index {i} must be an object")
@@ -138,13 +139,15 @@ class ExperimentService:
                 )
 
     @staticmethod
-    def validate_experiment_parameters(parameters: dict | None) -> None:
+    def validate_experiment_parameters(parameters: dict | None, stats_config: dict | None = None) -> None:
         """Validate experiment parameters accepted by the API layer.
 
-        Includes shape validation plus count/control checks.
+        Includes shape validation plus variant count, excluded variant checks,
+        and baseline consistency when stats_config is available.
         Called from the serializer where the full parameter set is available.
         """
         if not parameters:
+            ExperimentService.validate_stats_config(stats_config)
             return
 
         ExperimentService.validate_variant_shapes(parameters)
@@ -156,58 +159,46 @@ class ExperimentService:
             raise ValidationError("Feature flag variants must be less than 21")
         if len(variants) > 0:
             if len(variants) < 2:
-                raise ValidationError(
-                    "Feature flag must have at least 2 variants (control and at least one test variant)"
-                )
-            keys = [variant["key"] for variant in variants]
-            if "control" not in keys:
-                # Surface the keys we did receive so LLM callers can self-correct without a
-                # second roundtrip. Capitalized 'Control' is auto-normalized in
-                # ExperimentParametersField.to_internal_value, so anything reaching this
-                # branch genuinely lacks a baseline variant.
-                raise ValidationError(
-                    "Feature flag variants must contain a variant with key 'control' "
-                    f"(lowercase, exactly). Got keys: {keys}. Rename the baseline variant's "
-                    "'key' to 'control'."
-                )
+                raise ValidationError("Feature flag must have at least 2 variants")
 
+        variant_keys = [v["key"] for v in variants]
+        if stats_config is None:
+            stats_config = parameters.get("stats_config")
         excluded_variants = parameters.get("excluded_variants")
-        if excluded_variants is None:
-            return
 
-        if not isinstance(excluded_variants, list) or not all(isinstance(v, str) for v in excluded_variants):
-            raise ValidationError("excluded_variants must be a list of strings")
+        if excluded_variants is not None:
+            if not isinstance(excluded_variants, list) or not all(isinstance(v, str) for v in excluded_variants):
+                raise ValidationError("excluded_variants must be a list of strings")
 
-        if not excluded_variants:
-            return
+            if excluded_variants and not variants:
+                # `parameters` is replaced wholesale on update (see update_experiment:
+                # `update_data.get("parameters", experiment.parameters)`), not merged — so a
+                # PATCH that sets `excluded_variants` must also resend `feature_flag_variants`,
+                # otherwise the stored object would have no variants at all. Surface that
+                # explicitly rather than letting every key fall through to "unknown variants".
+                raise ValidationError(
+                    "excluded_variants requires feature_flag_variants in the same request — "
+                    "parameters are replaced as a whole on update, so send the full parameters object"
+                )
 
-        # `parameters` is replaced wholesale on update (see update_experiment:
-        # `update_data.get("parameters", experiment.parameters)`), not merged — so a
-        # PATCH that sets `excluded_variants` must also resend `feature_flag_variants`,
-        # otherwise the stored object would have no variants at all. Surface that
-        # explicitly rather than letting every key fall through to "unknown variants".
-        if not variants:
-            raise ValidationError(
-                "excluded_variants requires feature_flag_variants in the same request — "
-                "parameters are replaced as a whole on update, so send the full parameters object"
-            )
+            holdout_excluded = {k for k in excluded_variants if k.startswith("holdout-")}
+            if holdout_excluded:
+                raise ValidationError(f"cannot exclude holdout pseudo-variants: {sorted(holdout_excluded)}")
 
-        variant_keys = {v["key"] for v in variants}
-        baseline_key = (parameters.get("stats_config") or {}).get("baseline_variant_key", "control")
+            unknown = set(excluded_variants) - set(variant_keys)
+            if unknown:
+                raise ValidationError(f"unknown variants for this experiment: {sorted(unknown)}")
 
-        holdout_excluded = {k for k in excluded_variants if k.startswith("holdout-")}
-        if holdout_excluded:
-            raise ValidationError(f"cannot exclude holdout pseudo-variants: {sorted(holdout_excluded)}")
+        ExperimentService.validate_stats_config(
+            stats_config,
+            variant_keys if variant_keys else None,
+            excluded_variants=excluded_variants,
+        )
 
-        if baseline_key in excluded_variants:
-            raise ValidationError(f"baseline variant cannot be excluded ('{baseline_key}')")
-
-        unknown = set(excluded_variants) - variant_keys
-        if unknown:
-            raise ValidationError(f"unknown variants for this experiment: {sorted(unknown)}")
-
-        if not variant_keys - set(excluded_variants) - {baseline_key}:
-            raise ValidationError("at least one test variant must remain in analysis")
+        if variant_keys:
+            baseline_key = resolve_baseline_variant_key(variant_keys, stats_config, excluded_variants=excluded_variants)
+            if not set(variant_keys) - set(excluded_variants or []) - {baseline_key}:
+                raise ValidationError("at least one test variant must remain in analysis")
 
     RUNNING_TIME_CALCULATION_KEYS = (
         "minimum_detectable_effect",
@@ -470,27 +461,35 @@ class ExperimentService:
     }
 
     @classmethod
-    def validate_stats_config(cls, stats_config: dict | None, variant_keys: list[str] | None = None) -> None:
+    def validate_stats_config(
+        cls,
+        stats_config: dict | None,
+        variant_keys: list[str] | None = None,
+        *,
+        excluded_variants: list[str] | None = None,
+    ) -> None:
         """Validate stats_config shape, method value, and baseline variant key.
 
         When ``variant_keys`` is provided, a ``baseline_variant_key`` set in
-        ``stats_config`` must be one of them. When ``variant_keys`` is None/empty,
-        baseline validation is skipped (the caller couldn't supply the keys).
-        Absence of ``baseline_variant_key`` is always valid (defaults to control downstream).
+        ``stats_config`` must be one of them and must not be excluded. When
+        ``variant_keys`` is None/empty, baseline validation is skipped (the caller
+        couldn't supply the keys). Absence of ``baseline_variant_key`` is valid
+        and resolves to control if present, otherwise the first configured variant.
         """
-        if not stats_config:
-            return
-        method = stats_config.get("method")
+        if stats_config is not None and not isinstance(stats_config, dict):
+            raise ValidationError("stats_config must be an object")
+        method = (stats_config or {}).get("method")
         if method is not None and method not in cls.VALID_STATS_METHODS:
             raise ValidationError(
                 f"Invalid stats method: '{method}'. Must be one of: {', '.join(sorted(cls.VALID_STATS_METHODS))}"
             )
-        baseline_variant_key = stats_config.get("baseline_variant_key")
-        if baseline_variant_key is not None and variant_keys and baseline_variant_key not in variant_keys:
-            raise ValidationError(
-                f"Invalid baseline_variant_key: '{baseline_variant_key}'. "
-                f"Must be one of: {', '.join(sorted(variant_keys))}"
-            )
+        baseline_variant_key = (stats_config or {}).get("baseline_variant_key")
+        if baseline_variant_key is not None and not isinstance(baseline_variant_key, str):
+            raise ValidationError("baseline_variant_key must be a string")
+        if baseline_variant_key == "":
+            raise ValidationError("baseline_variant_key cannot be empty")
+        if variant_keys:
+            resolve_baseline_variant_key(variant_keys, stats_config, excluded_variants=excluded_variants)
 
     @staticmethod
     def _variant_keys(variants: list | None) -> list[str]:
@@ -729,8 +728,7 @@ class ExperimentService:
         seen_metric_uuids: set[str] = self._collect_saved_metric_uuids(saved_metrics_ids)
         metrics = self._assign_uuids_to_metrics(metrics, seen=seen_metric_uuids)
         metrics_secondary = self._assign_uuids_to_metrics(metrics_secondary, seen=seen_metric_uuids)
-        self.validate_variant_shapes(parameters)
-        self.validate_variant_percentages(parameters)
+        self.validate_experiment_parameters(parameters, stats_config)
         self.validate_running_time_calculation(running_time_calculation)
         # Dual-write during the parameters deprecation window: running_time_calculation is
         # canonical, but the legacy calculator keys in `parameters` stay in sync for old readers.
@@ -763,10 +761,19 @@ class ExperimentService:
         # raw parameters payload may omit. This runs inside the @transaction.atomic
         # create, so a raise rolls back the just-created flag.
         used_variant_keys = self._variant_keys(used_variants)
-        self.validate_stats_config(stats_config, used_variant_keys)
+        self.validate_stats_config(
+            stats_config,
+            used_variant_keys,
+            excluded_variants=(parameters or {}).get("excluded_variants"),
+        )
 
         team_config = self._get_team_experiments_config()
         stats_config = self._apply_stats_config_defaults(stats_config, team_config)
+        baseline_variant_key = resolve_baseline_variant_key(
+            used_variant_keys,
+            stats_config,
+            excluded_variants=(parameters or {}).get("excluded_variants"),
+        )
         exposure_criteria = self._apply_exposure_criteria_defaults(exposure_criteria)
 
         if only_count_matured_users is None:
@@ -782,6 +789,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
+                    baseline_variant_key=baseline_variant_key,
                 )
         if metrics_secondary is not None:
             for metric in metrics_secondary:
@@ -792,6 +800,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
+                    baseline_variant_key=baseline_variant_key,
                 )
 
         self.validate_no_duplicate_metric_uuids(metrics, metrics_secondary)
@@ -983,10 +992,7 @@ class ExperimentService:
         variants = feature_flag.filters.get("multivariate", {}).get("variants", [])
 
         if len(variants) < 2:
-            raise ValidationError("Feature flag must have at least 2 variants (control and at least one test variant)")
-
-        if "control" not in [variant["key"] for variant in variants]:
-            raise ValidationError("Feature flag must have a variant with key 'control'")
+            raise ValidationError("Feature flag must have at least 2 variants")
 
     def _assert_flag_not_deleted_for_launch(self, feature_flag: FeatureFlag) -> None:
         """A deleted flag distributes no traffic, so an experiment can never go live on it."""
@@ -1082,6 +1088,7 @@ class ExperimentService:
         exposure_criteria: dict | None,
         only_count_matured_users: bool = False,
         excluded_variants: list[str] | None = None,
+        baseline_variant_key: str | None = None,
     ) -> list[dict]:
         """Recompute fingerprints for a list of metrics. Returns a new list with updated fingerprints."""
         stats_method = "bayesian" if stats_config is None else stats_config.get("method", "bayesian")
@@ -1095,6 +1102,7 @@ class ExperimentService:
                 exposure_criteria,
                 only_count_matured_users=only_count_matured_users,
                 excluded_variants=excluded_variants,
+                baseline_variant_key=baseline_variant_key,
             )
             updated.append(metric_copy)
         return updated
@@ -1261,6 +1269,17 @@ class ExperimentService:
         feature_flag = experiment.feature_flag
         self._assert_flag_not_deleted_for_launch(feature_flag)
         self._validate_existing_flag(feature_flag)
+        variant_keys = self._variant_keys(feature_flag.variants)
+        self.validate_stats_config(
+            experiment.stats_config,
+            variant_keys,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
+        baseline_variant_key = resolve_baseline_variant_key(
+            variant_keys,
+            experiment.stats_config,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
 
         # Set start_date
         experiment.start_date = timezone.now()
@@ -1277,7 +1296,9 @@ class ExperimentService:
                         experiment.start_date,
                         experiment.stats_config,
                         experiment.exposure_criteria,
+                        only_count_matured_users=experiment.only_count_matured_users,
                         excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+                        baseline_variant_key=baseline_variant_key,
                     ),
                 )
 
@@ -1976,7 +1997,12 @@ class ExperimentService:
         if "stats_config" in update_data or update_variants is not None:
             variant_keys = self._resolved_variant_keys(experiment, update_data)
             effective_stats_config = update_data.get("stats_config", experiment.stats_config)
-            self.validate_stats_config(effective_stats_config, variant_keys)
+            effective_parameters = update_data.get("parameters", experiment.parameters)
+            self.validate_stats_config(
+                effective_stats_config,
+                variant_keys,
+                excluded_variants=(effective_parameters or {}).get("excluded_variants"),
+            )
 
         # Defense-in-depth: only validate the inline metric lists this update
         # is actually touching. Dedup-on-input has already made these lists
@@ -1992,6 +2018,12 @@ class ExperimentService:
         only_count_matured_users = update_data.get("only_count_matured_users", experiment.only_count_matured_users)
         new_parameters = update_data.get("parameters", experiment.parameters)
         excluded_variants = (new_parameters or {}).get("excluded_variants")
+        variant_keys = self._resolved_variant_keys(experiment, update_data)
+        baseline_variant_key = (
+            resolve_baseline_variant_key(variant_keys, stats_config, excluded_variants=excluded_variants)
+            if variant_keys
+            else None
+        )
 
         for metric_field in ["metrics", "metrics_secondary"]:
             metrics = update_data.get(metric_field, getattr(experiment, metric_field, None))
@@ -2003,6 +2035,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
+                    baseline_variant_key=baseline_variant_key,
                 )
 
         # --- metric ordering sync + validation -----------------------------
@@ -2054,10 +2087,15 @@ class ExperimentService:
 
         # Launching a draft via PATCH (start_date) is an alternate launch path, so it must
         # run the same flag guards as the dedicated launch_experiment action: flag not
-        # deleted, and a valid control/variant configuration.
+        # deleted, at least two variants, and a valid baseline variant.
         if experiment.is_draft and update_data.get("start_date") is not None:
             self._assert_flag_not_deleted_for_launch(feature_flag)
             self._validate_existing_flag(feature_flag)
+            self.validate_stats_config(
+                update_data.get("stats_config", experiment.stats_config),
+                self._variant_keys(feature_flag.variants),
+                excluded_variants=(update_data.get("parameters", experiment.parameters) or {}).get("excluded_variants"),
+            )
 
         # Check for legacy metrics first
         if experiment_has_legacy_metrics(experiment):
@@ -2174,7 +2212,7 @@ class ExperimentService:
             if existing_flag and existing_flag.variants:
                 parameters["feature_flag_variants"] = deepcopy(existing_flag.variants)
 
-        self.validate_experiment_parameters(parameters)
+        self.validate_experiment_parameters(parameters, source_experiment.stats_config)
         self.validate_experiment_exposure_criteria(source_experiment.exposure_criteria)
         self.validate_experiment_metrics(source_experiment.metrics)
         self.validate_experiment_metrics(source_experiment.metrics_secondary)
@@ -2591,7 +2629,6 @@ class ExperimentService:
             where=[
                 """
                 jsonb_array_length(filters->'multivariate'->'variants') >= 2
-                AND filters->'multivariate'->'variants'->0->>'key' = 'control'
                 """
             ]
         )

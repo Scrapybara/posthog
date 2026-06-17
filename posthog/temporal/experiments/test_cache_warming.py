@@ -16,6 +16,7 @@ from posthog.temporal.experiments.activities import (
     _calculate_experiment_saved_metric_sync,
 )
 
+from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.test.experiment_query_runner.base import ExperimentQueryRunnerBaseTest
@@ -89,6 +90,8 @@ class TestTemporalRecalcWarmsResponseCache(ExperimentQueryRunnerBaseTest):
             get_experiment_stats_method(experiment),
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=resolve_experiment_baseline_variant_key(experiment),
         )
         with patch("posthog.temporal.experiments.activities.close_old_connections"):
             activity_result = _calculate_experiment_regular_metric_sync.func(  # type: ignore[attr-defined]
@@ -164,6 +167,8 @@ class TestTemporalRecalcWarmsResponseCache(ExperimentQueryRunnerBaseTest):
             get_experiment_stats_method(experiment),
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=resolve_experiment_baseline_variant_key(experiment),
         )
 
         # Build the metric the way /query sees it for saved metrics:

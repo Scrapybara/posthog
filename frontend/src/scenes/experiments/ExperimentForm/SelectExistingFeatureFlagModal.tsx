@@ -43,7 +43,7 @@ export const SelectExistingFeatureFlagModal = ({
             <div className="deprecated-space-y-2">
                 <div className="text-muted mb-2 max-w-xl">
                     Select an existing multivariate feature flag to use with this experiment. The feature flag must use
-                    multiple variants with <code>'control'</code> as the first.
+                    at least two variants. You can choose which variant is the baseline before saving.
                 </div>
                 {filtersSection}
                 <LemonTable

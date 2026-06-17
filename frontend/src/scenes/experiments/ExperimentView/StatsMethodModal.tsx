@@ -20,7 +20,7 @@ import {
 } from './sequential'
 
 export function StatsMethodModal(): JSX.Element {
-    const { experiment, statsMethod } = useValues(experimentLogic)
+    const { experiment, statsMethod, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings, setExperiment, restoreUnmodifiedExperiment } = useActions(experimentLogic)
     const { closeStatsEngineModal } = useActions(modalsLogic)
     const { isStatsEngineModalOpen } = useValues(modalsLogic)
@@ -126,9 +126,14 @@ export function StatsMethodModal(): JSX.Element {
                     <LemonButton
                         type="primary"
                         onClick={() => {
+                            if (experimentUpdateLoading) {
+                                return
+                            }
                             updateExperimentSettings({ stats_config: experiment.stats_config })
                             closeStatsEngineModal()
                         }}
+                        loading={experimentUpdateLoading}
+                        disabledReason={experimentUpdateLoading ? 'Saving statistics configuration' : undefined}
                     >
                         Save
                     </LemonButton>

@@ -10,7 +10,7 @@ import { modalsLogic } from '../modalsLogic'
 import { CupedSelection, getCupedSelection, resolveCupedLookbackDays } from './cuped'
 
 export function CupedModal(): JSX.Element {
-    const { experiment } = useValues(experimentLogic)
+    const { experiment, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings, setExperiment, restoreUnmodifiedExperiment } = useActions(experimentLogic)
     const { experimentsConfig } = useValues(experimentsConfigLogic)
     const { closeCupedModal } = useActions(modalsLogic)
@@ -61,6 +61,9 @@ export function CupedModal(): JSX.Element {
     }
 
     const onSave = (): void => {
+        if (experimentUpdateLoading) {
+            return
+        }
         updateExperimentSettings({ stats_config: experiment.stats_config })
         closeCupedModal()
     }
@@ -76,7 +79,12 @@ export function CupedModal(): JSX.Element {
                     <LemonButton type="secondary" onClick={onClose}>
                         Cancel
                     </LemonButton>
-                    <LemonButton type="primary" onClick={onSave}>
+                    <LemonButton
+                        type="primary"
+                        onClick={onSave}
+                        loading={experimentUpdateLoading}
+                        disabledReason={experimentUpdateLoading ? 'Saving CUPED configuration' : undefined}
+                    >
                         Save
                     </LemonButton>
                 </div>

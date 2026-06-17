@@ -28,7 +28,7 @@ export function AndroidSnippet({ flagKey, variant }: SnippetProps): JSX.Element 
                 {`if (PostHog.getFeatureFlag("${flagKey}") == "${variant}") {
     // do something
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -43,7 +43,7 @@ export function IOSSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
                 {`if (PostHogSDK.shared.getFeatureFlag("${flagKey}") as? String == "${variant}") {
     // do something
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -60,7 +60,7 @@ export function NodeJSSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
 if (experimentFlagValue === '${variant}' ) {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -76,7 +76,7 @@ export function JSSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
                 {`if (posthog.getFeatureFlag('${flagKey}') === '${variant}') {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -134,7 +134,7 @@ export function RNSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
                 {`if (posthog.getFeatureFlag('${flagKey}') === '${variant}') {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -149,7 +149,7 @@ export function PHPSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
                 {`if (PostHog::getFeatureFlag('${flagKey}', 'user distinct id') == '${variant}') {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -167,12 +167,12 @@ export function GolangSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
     DistinctId: "distinct-id",
 })
 if err != nil {
-    // Handle error (e.g. capture error and fallback to default behaviour)
+    // Handle error (e.g. capture error and fallback to default behavior)
 }
 if experimentFlagValue == '${variant}' {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }`}
             </CodeSnippet>
@@ -192,7 +192,7 @@ export function FlutterSnippet({ flagKey, variant }: SnippetProps): JSX.Element 
                 {`if (${clientSuffix}${flagFunction}('${flagKey}')${variantSuffix}) {
   // Do something differently for this user
 } else {
-  // It's a good idea to let control variant always be the default behaviour,
+  // It's a good idea to let the baseline/default variant be the default behavior,
   // so if something goes wrong with flag evaluation, you don't break your app.
 }
             `}
@@ -211,7 +211,7 @@ export function RubySnippet({ flagKey, variant }: SnippetProps): JSX.Element {
 if experimentFlagValue == '${variant}'
     # Do something differently for this user
 else
-    # It's a good idea to let control variant always be the default behaviour,
+    # It's a good idea to let the baseline/default variant be the default behavior,
     # so if something goes wrong with flag evaluation, you don't break your app.
 end
 `}
@@ -230,7 +230,7 @@ export function PythonSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
 if experiment_flag_value == '${variant}':
     # Do something differently for this user
 else:
-    # It's a good idea to let control variant always be the default behaviour,
+    # It's a good idea to let the baseline/default variant be the default behavior,
     # so if something goes wrong with flag evaluation, you don't break your app.
 `}
             </CodeSnippet>
@@ -247,7 +247,7 @@ export function JavaSnippet({ flagKey, variant }: SnippetProps): JSX.Element {
 if ("${variant}".equals(flagValue)) {
     // Do something differently for this user
 } else {
-    // It's a good idea to let control variant always be the default behaviour,
+    // It's a good idea to let the baseline/default variant be the default behavior,
     // so if something goes wrong with flag evaluation, you don't break your app.
 }
 `}

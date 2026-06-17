@@ -1,11 +1,11 @@
 ---
 name: analyzing-experiment-session-replays
-description: 'Analyze session replay patterns across experiment variants to understand user behavior differences. Use when the user wants to see how users interact with different experiment variants, identify usability issues, compare behavior patterns between control and test groups, or get qualitative insights to complement quantitative experiment results.'
+description: 'Analyze session replay patterns across experiment variants to understand user behavior differences. Use when the user wants to see how users interact with different experiment variants, identify usability issues, compare behavior patterns between baseline and test groups, or get qualitative insights to complement quantitative experiment results.'
 ---
 
 # Analyzing experiment session replays
 
-This skill guides you through analyzing session recordings for experiment variants to understand behavioral differences between control and test groups.
+This skill guides you through analyzing session recordings for experiment variants to understand behavioral differences between baseline and test groups.
 
 ## When to use this skill
 
@@ -13,7 +13,7 @@ Use this skill when:
 
 - The user asks to analyze session replays for an experiment
 - The user wants to understand how users behave differently across experiment variants
-- The user asks to compare user behavior between control and test variants
+- The user asks to compare user behavior between baseline and test variants
 - The user wants qualitative insights to complement experiment metrics
 - The user asks questions like "How are users behaving in my experiment?" or "Show me session replays for variant X"
 
@@ -110,7 +110,7 @@ Use the `query-session-recordings-list` tool with the filters constructed in ste
 
 Call the tool once per variant to get recordings for each group:
 
-- Variant "control" → recordings for control group
+- Baseline variant (often `"control"`) → recordings for the baseline group
 - Variant "test" → recordings for test variant
 - Additional variants if the experiment has more than 2
 

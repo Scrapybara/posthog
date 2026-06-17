@@ -4,17 +4,22 @@ import { IconX } from '@posthog/icons'
 
 import { IconOpenInNew } from 'lib/lemon-ui/icons'
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
+import { LemonSelect } from 'lib/lemon-ui/LemonSelect'
 import { LemonTag } from 'lib/lemon-ui/LemonTag'
 import { Link } from 'lib/lemon-ui/Link'
 import { urls } from 'scenes/urls'
 
 import type { FeatureFlagType } from '~/types'
 
+import { resolveBaselineVariantKey } from '../baseline'
+
 interface VariantsPanelLinkFeatureFlagProps {
     linkedFeatureFlag: FeatureFlagType | null
     setShowFeatureFlagSelector: () => void
     disabled?: boolean
     onRemove?: () => void
+    baselineVariantKey?: string
+    onBaselineVariantChange?: (baselineVariantKey: string) => void
 }
 
 const getTargetingSummary = (flag: FeatureFlagType): string[] => {
@@ -73,6 +78,8 @@ export const VariantsPanelLinkFeatureFlag = ({
     setShowFeatureFlagSelector,
     disabled = false,
     onRemove,
+    baselineVariantKey,
+    onBaselineVariantChange,
 }: VariantsPanelLinkFeatureFlagProps): JSX.Element => {
     if (!linkedFeatureFlag) {
         if (disabled) {
@@ -99,6 +106,7 @@ export const VariantsPanelLinkFeatureFlag = ({
     }
 
     const variants = linkedFeatureFlag.filters?.multivariate?.variants || []
+    const resolvedBaselineVariantKey = baselineVariantKey ?? resolveBaselineVariantKey(variants)
 
     return (
         <div>
@@ -153,10 +161,25 @@ export const VariantsPanelLinkFeatureFlag = ({
                         <div className="text-xs uppercase tracking-wide font-semibold text-muted">Variants</div>
                         <div className="flex flex-wrap gap-1.5">
                             {variants.map(({ key }) => (
-                                <LemonTag key={key} type={key === 'control' ? 'primary' : 'default'}>
+                                <LemonTag key={key} type={key === resolvedBaselineVariantKey ? 'primary' : 'default'}>
                                     {key}
                                 </LemonTag>
                             ))}
+                        </div>
+                        <div className="mt-3 max-w-64">
+                            <div className="text-xs uppercase tracking-wide font-semibold text-muted mb-1">
+                                Baseline variant
+                            </div>
+                            <LemonSelect
+                                value={resolvedBaselineVariantKey}
+                                options={variants.map(({ key }) => ({ value: key, label: key }))}
+                                onChange={onBaselineVariantChange}
+                                disabledReason={
+                                    disabled || !onBaselineVariantChange
+                                        ? 'You cannot change the baseline variant when editing an experiment.'
+                                        : undefined
+                                }
+                            />
                         </div>
                     </div>
 

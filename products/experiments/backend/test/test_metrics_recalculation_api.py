@@ -6,6 +6,7 @@ from unittest import mock
 from parameterized import parameterized
 from rest_framework import status
 
+from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
 from products.experiments.backend.models.experiment import (
@@ -143,6 +144,8 @@ class TestMetricsRecalculationAPI(APIBaseTest):
             get_experiment_stats_method(exp),
             exp.exposure_criteria,
             only_count_matured_users=exp.only_count_matured_users,
+            excluded_variants=(exp.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=resolve_experiment_baseline_variant_key(exp),
         )
         recalc_fp = compute_recalc_fingerprint(config_fp, str(recalc.id))
         ExperimentMetricResult.objects.create(

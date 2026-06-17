@@ -36,11 +36,11 @@ function getBaselineLabel(metricType: ManualCalculatorMetricType): string {
 function getBaselineHelp(metricType: ManualCalculatorMetricType): string {
     switch (metricType) {
         case 'funnel':
-            return 'Expected conversion rate for the control group (0-100%)'
+            return 'Expected conversion rate for the baseline group (0-100%)'
         case 'mean_count':
-            return 'Average number of events per user in the control group'
+            return 'Average number of events per user in the baseline group'
         case 'mean_sum_or_avg':
-            return 'Average property value per user in the control group'
+            return 'Average property value per user in the baseline group'
     }
 }
 

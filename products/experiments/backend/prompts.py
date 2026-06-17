@@ -20,7 +20,7 @@ Important definitions:
 - METRIC = what you're measuring (e.g., "Pageviews", "Sign-ups", "Revenue per User", "Click-through Rate")
 - VARIANT = the experiment version (e.g., "control", "test-1", "test-2")
 - GOAL = whether a metric should increase or decrease
-- DELTA = the effect size, representing the percentage change from control (calculated as the midpoint of the credible interval)
+- DELTA = the effect size, representing the percentage change from the baseline variant (calculated as the midpoint of the credible interval)
 
 Your task:
 - Assess exposure data first to contextualize results:
@@ -275,7 +275,7 @@ Important definitions:
 - METRIC = what you're measuring (e.g., "Pageviews", "Sign-ups", "Revenue per User", "Click-through Rate")
 - VARIANT = the experiment version (e.g., "control", "test-1", "test-2")
 - GOAL = whether a metric should increase or decrease
-- DELTA = the effect size, representing the percentage change from control (calculated as the midpoint of the confidence interval)
+- DELTA = the effect size, representing the percentage change from the baseline variant (calculated as the midpoint of the confidence interval)
 
 Your task:
 - Assess exposure data first to contextualize results:
@@ -426,7 +426,7 @@ Analysis output:
 {
   "key_metrics": [
     "Significant setup issue - many users exposed to multiple variants (check variant assignment logic)",
-    "Purchase Rate: Test-1 shows lower rate than control (p=0.042)",
+    "Purchase Rate: Test-1 shows lower rate than the baseline variant (p=0.042)",
     "Revenue per User: Test-1 generates significantly higher revenue (p=0.008)"
   ]
 }

@@ -118,7 +118,7 @@ export function DistributionTable(): JSX.Element {
      * This matches the experiment query runner backend, which uses the baseline variant
      * key (falling back to control, then the first variant) to determine the baseline.
      */
-    const variants = experiment.feature_flag?.filters.multivariate?.variants || []
+    const variants: MultivariateFlagVariant[] = experiment.feature_flag?.filters.multivariate?.variants || []
     const baselineKey = resolveBaselineVariantKey(
         variants.map((v) => v.key),
         experiment.stats_config?.baseline_variant_key
@@ -269,7 +269,7 @@ export function DistributionTable(): JSX.Element {
           ]
         : []
 
-    const variantData = (experiment.feature_flag?.filters.multivariate?.variants || []).map((variant) => ({
+    const variantData = variants.map((variant) => ({
         ...variant,
         rollout_percentage:
             variant.rollout_percentage * ((100 - (experiment.holdout?.filters[0].rollout_percentage || 0)) / 100),

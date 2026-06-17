@@ -7,7 +7,7 @@ import { LinkedHogFunctions } from 'scenes/hog-functions/list/LinkedHogFunctions
 import { experimentsConfigLogic } from 'scenes/settings/environment/experimentsConfigLogic'
 import { urls } from 'scenes/urls'
 
-import { ExperimentStatsMethod, PropertyFilterType, PropertyOperator } from '~/types'
+import { ExperimentStatsMethod, MultivariateFlagVariant, PropertyFilterType, PropertyOperator } from '~/types'
 
 import { DEFAULT_LOOKBACK_DAYS } from '../constants'
 import { experimentLogic } from '../experimentLogic'
@@ -51,7 +51,8 @@ export function SettingsTab(): JSX.Element {
     // Only show alerts section for saved experiments, as the alert relies on experiment.id for filtering
     const shouldShowSignificanceAlerts = typeof experiment.id === 'number'
 
-    const variantKeys = variants.map((v) => v.key)
+    const experimentVariants = variants as MultivariateFlagVariant[]
+    const variantKeys = experimentVariants.map((v) => v.key)
     const configuredBaselineKey = experiment.stats_config?.baseline_variant_key
     const effectiveBaselineKey = resolveBaselineVariantKey(variantKeys, configuredBaselineKey)
     // The stored baseline can point at a variant that was since removed from the flag.
@@ -98,7 +99,7 @@ export function SettingsTab(): JSX.Element {
                 <h2 className="font-semibold text-lg">Baseline variant</h2>
                 <LemonSelect
                     value={effectiveBaselineKey}
-                    options={variants.map((v) => ({
+                    options={experimentVariants.map((v) => ({
                         value: v.key,
                         label: v.key,
                     }))}

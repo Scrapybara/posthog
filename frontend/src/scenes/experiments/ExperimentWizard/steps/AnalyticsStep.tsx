@@ -4,6 +4,8 @@ import { LemonSelect } from '@posthog/lemon-ui'
 
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
 
+import { MultivariateFlagVariant } from '~/types'
+
 import { ExposureCriteriaPanel } from '../../ExperimentForm/ExposureCriteriaPanel'
 import { MetricsPanel } from '../../ExperimentForm/MetricsPanel'
 import { resolveBaselineVariantKey } from '../../utils'
@@ -13,7 +15,7 @@ export function AnalyticsStep(): JSX.Element {
     const { experiment, sharedMetrics } = useValues(experimentWizardLogic)
     const { setExperiment, setExposureCriteria, setSharedMetrics } = useActions(experimentWizardLogic)
 
-    const baselineVariants = experiment.parameters?.feature_flag_variants ?? []
+    const baselineVariants = (experiment.parameters?.feature_flag_variants ?? []) as MultivariateFlagVariant[]
     const baselineVariantKeys = baselineVariants.map((v) => v.key)
     const effectiveBaselineKey = resolveBaselineVariantKey(
         baselineVariantKeys,

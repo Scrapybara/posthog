@@ -1,13 +1,27 @@
 import json
+from datetime import timedelta
 from typing import Any, Optional, Union, cast
 
 from posthog.test.base import APIBaseTest, BaseTest
 from unittest.mock import ANY, patch
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
+
 from parameterized import parameterized
 from rest_framework import status
 
-from posthog.models import ActivityLog, EventDefinition, EventProperty, Organization, PropertyDefinition, Team
+from posthog.models import (
+    ActivityLog,
+    EventDefinition,
+    EventProperty,
+    Organization,
+    PersonalAPIKey,
+    PropertyDefinition,
+    Team,
+)
+from posthog.models.utils import generate_random_token_personal, hash_key_value
 from posthog.taxonomy.property_definition_api import PropertyDefinitionQuerySerializer, PropertyDefinitionViewSet
 
 
@@ -754,6 +768,158 @@ class TestPropertyDefinitionAPI(APIBaseTest):
         assert len(event_property_queries) == 1, (
             f"expected a single posthog_eventproperty query, got {len(event_property_queries)}: "
             f"{[q['sql'] for q in event_property_queries]}"
+        )
+
+    def test_property_definition_events_lists_events_using_property(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="checkout_id")
+        newer_event = EventDefinition.objects.create(
+            team=self.team,
+            name="checkout completed",
+            last_seen_at=timezone.now(),
+        )
+        older_event = EventDefinition.objects.create(
+            team=self.team,
+            name="checkout started",
+            last_seen_at=timezone.now() - timedelta(days=7),
+        )
+        EventDefinition.objects.create(team=self.team, name="unrelated event")
+        EventProperty.objects.create(team=self.team, event=newer_event.name, property=property_definition.name)
+        EventProperty.objects.create(team=self.team, event=older_event.name, property=property_definition.name)
+        EventProperty.objects.create(team=self.team, event="unrelated event", property="other_property")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["count"] == 2
+        assert data["source"] == "event_property_metadata"
+        assert [event["name"] for event in data["results"]] == [newer_event.name, older_event.name]
+        assert data["results"][0]["id"] == str(newer_event.id)
+        assert data["results"][0]["last_seen_at"] is not None
+
+    def test_property_definition_events_are_team_scoped(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="scoped_plan")
+        own_event = EventDefinition.objects.create(team=self.team, name="plan changed", last_seen_at=timezone.now())
+        EventProperty.objects.create(team=self.team, event=own_event.name, property=property_definition.name)
+
+        other_org = Organization.objects.create(name="Separate Org")
+        other_team = Team.objects.create(organization=other_org, name="Other Project")
+        EventDefinition.objects.create(team=other_team, name="plan leaked", last_seen_at=timezone.now())
+        EventProperty.objects.create(team=other_team, event="plan leaked", property=property_definition.name)
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert [event["name"] for event in response.json()["results"]] == [own_event.name]
+
+    def test_property_definition_events_paginate(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="page")
+
+        for index in range(3):
+            event = EventDefinition.objects.create(
+                team=self.team,
+                name=f"event {index}",
+                last_seen_at=timezone.now() - timedelta(days=index),
+            )
+            EventProperty.objects.create(team=self.team, event=event.name, property=property_definition.name)
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/?limit=2"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["count"] == 3
+        assert len(data["results"]) == 2
+        assert data["next"] is not None
+        assert data["previous"] is None
+
+        response = self.client.get(data["next"])
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert len(data["results"]) == 1
+        assert data["next"] is None
+        assert data["previous"] is not None
+
+    def test_property_definition_events_omits_deleted_definitions_but_keeps_stale_definitions(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="legacy_property")
+        stale_event = EventDefinition.objects.create(
+            team=self.team,
+            name="stale event",
+            last_seen_at=timezone.now() - timedelta(days=365),
+        )
+        deleted_event = EventDefinition.objects.create(team=self.team, name="deleted event")
+        EventProperty.objects.create(team=self.team, event=stale_event.name, property=property_definition.name)
+        EventProperty.objects.create(team=self.team, event=deleted_event.name, property=property_definition.name)
+        EventProperty.objects.create(
+            team=self.team, event="missing event definition", property=property_definition.name
+        )
+        deleted_event.delete()
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["count"] == 1
+        assert [event["name"] for event in data["results"]] == [stale_event.name]
+        assert "deleted event definitions are omitted" in data["freshness"]
+
+    def test_property_definition_events_empty_for_property_without_event_metadata(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="unused_property")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["count"] == 0
+        assert data["results"] == []
+        assert "No results means no current event definition is known to use this property" in data["freshness"]
+
+    def test_property_definition_events_requires_property_definition_read_scope(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="scoped_property")
+        token = generate_random_token_personal()
+        PersonalAPIKey.objects.create(
+            label="Event definition only",
+            user=self.user,
+            secure_value=hash_key_value(token),
+            scopes=["event_definition:read"],
+        )
+
+        self.client.logout()
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/",
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_property_definition_events_uses_bounded_metadata_queries(self) -> None:
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="bounded_property")
+        for index in range(10):
+            event = EventDefinition.objects.create(team=self.team, name=f"bounded event {index}")
+            EventProperty.objects.create(team=self.team, event=event.name, property=property_definition.name)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(
+                f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/?limit=5"
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 10
+
+        event_property_queries = [query for query in ctx.captured_queries if "posthog_eventproperty" in query["sql"]]
+        assert len(event_property_queries) <= 2, (
+            f"expected pagination to use bounded event-property metadata queries, got {len(event_property_queries)}: "
+            f"{[query['sql'] for query in event_property_queries]}"
         )
 
     def test_property_definition_project_id_coalesce(self):

@@ -15,11 +15,18 @@ import { TZLabel } from 'lib/components/TZLabel'
 import { UserActivityIndicator } from 'lib/components/UserActivityIndicator/UserActivityIndicator'
 import ViewRecordingsPlaylistButton from 'lib/components/ViewRecordingButton/ViewRecordingsPlaylistButton'
 import { FEATURE_FLAGS } from 'lib/constants'
+import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { LemonDialog } from 'lib/lemon-ui/LemonDialog'
+import { LemonTable, LemonTableColumns } from 'lib/lemon-ui/LemonTable'
+import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
 import { SpinnerOverlay } from 'lib/lemon-ui/Spinner/Spinner'
 import { getPrimaryPropertyForEvent } from 'lib/utils/primaryEventProperty'
-import { DefinitionLogicProps, definitionLogic } from 'scenes/data-management/definition/definitionLogic'
+import {
+    DefinitionLogicProps,
+    PROPERTY_DEFINITION_EVENTS_LIMIT,
+    definitionLogic,
+} from 'scenes/data-management/definition/definitionLogic'
 import { EventDefinitionExperiments } from 'scenes/data-management/events/EventDefinitionExperiments'
 import { EventDefinitionInsights } from 'scenes/data-management/events/EventDefinitionInsights'
 import { EventDefinitionProperties } from 'scenes/data-management/events/EventDefinitionProperties'
@@ -28,6 +35,7 @@ import { LinkedHogFunctions } from 'scenes/hog-functions/list/LinkedHogFunctions
 import { SceneExport } from 'scenes/sceneTypes'
 import { urls } from 'scenes/urls'
 
+import type { PropertyDefinitionEventUsageApi } from '~/generated/core/api.schemas'
 import { SceneContent } from '~/layout/scenes/components/SceneContent'
 import { SceneDivider } from '~/layout/scenes/components/SceneDivider'
 import { SceneSection } from '~/layout/scenes/components/SceneSection'
@@ -124,9 +132,23 @@ function PrimaryPropertyDetail({ definition }: { definition: EventDefinition }):
 
 export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
     const logic = definitionLogic(props)
-    const { definition, definitionLoading, definitionMissing, singular, isEvent, isProperty, metrics, metricsLoading } =
-        useValues(logic)
-    const { deleteDefinition } = useActions(logic)
+    const {
+        definition,
+        definitionLoading,
+        definitionMissing,
+        singular,
+        isEvent,
+        isProperty,
+        metrics,
+        metricsLoading,
+        propertyEvents,
+        propertyEventsLoading,
+        propertyEventsLoadFailed,
+        propertyEventsOffset,
+        propertyEventsNextOffset,
+        propertyEventsPreviousOffset,
+    } = useValues(logic)
+    const { deleteDefinition, loadPropertyEvents } = useActions(logic)
 
     const memoizedQuery = useMemo(() => {
         const columnsToUse =
@@ -167,6 +189,23 @@ export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
         definition.name,
         isEvent ? TaxonomicFilterGroupType.Events : TaxonomicFilterGroupType.EventProperties
     )
+
+    const propertyEventColumns: LemonTableColumns<PropertyDefinitionEventUsageApi> = [
+        {
+            title: 'Event',
+            key: 'event',
+            render: function Render(_, eventDefinition) {
+                return <LemonTableLink to={urls.eventDefinition(eventDefinition.id)} title={eventDefinition.name} />
+            },
+        },
+        {
+            title: 'Event last seen',
+            key: 'last_seen_at',
+            render: function Render(_, eventDefinition) {
+                return eventDefinition.last_seen_at ? <TZLabel time={eventDefinition.last_seen_at} /> : '—'
+            },
+        },
+    ]
 
     return (
         <SceneContent>
@@ -393,6 +432,69 @@ export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
             </div>
 
             <SceneDivider />
+
+            {isProperty && definition.id !== 'new' && (
+                <>
+                    <SceneSection
+                        title="Events using this property"
+                        description={
+                            propertyEvents
+                                ? `${propertyEvents.count.toLocaleString()} current event ${
+                                      propertyEvents.count === 1 ? 'definition includes' : 'definitions include'
+                                  } this property in ingestion metadata.`
+                                : 'Event-property metadata is updated asynchronously from ingestion.'
+                        }
+                    >
+                        {propertyEventsLoadFailed ? (
+                            <LemonBanner type="error">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span>Failed to load events that use this property.</span>
+                                    <LemonButton
+                                        size="small"
+                                        type="secondary"
+                                        loading={propertyEventsLoading}
+                                        onClick={() => loadPropertyEvents(definition.id, propertyEventsOffset)}
+                                    >
+                                        Retry
+                                    </LemonButton>
+                                </div>
+                            </LemonBanner>
+                        ) : (
+                            <>
+                                <LemonBanner type="info" className="mb-2">
+                                    {propertyEvents?.freshness ??
+                                        'Updated asynchronously from ingestion metadata. Rows mean this property has been seen on the event at least once; deleted event definitions are omitted.'}
+                                </LemonBanner>
+                                <LemonTable
+                                    id={`property-events-definition-table-${definition.id}`}
+                                    data-attr="property-events-definition-table"
+                                    columns={propertyEventColumns}
+                                    dataSource={propertyEvents?.results ?? []}
+                                    emptyState="No current event definitions are known to use this property"
+                                    nouns={['event definition', 'event definitions']}
+                                    pagination={{
+                                        controlled: true,
+                                        pageSize: PROPERTY_DEFINITION_EVENTS_LIMIT,
+                                        currentPage:
+                                            Math.floor(propertyEventsOffset / PROPERTY_DEFINITION_EVENTS_LIMIT) + 1,
+                                        entryCount: propertyEvents?.count ?? 0,
+                                        onForward:
+                                            propertyEventsNextOffset !== null
+                                                ? () => loadPropertyEvents(definition.id, propertyEventsNextOffset)
+                                                : undefined,
+                                        onBackward:
+                                            propertyEventsPreviousOffset !== null
+                                                ? () => loadPropertyEvents(definition.id, propertyEventsPreviousOffset)
+                                                : undefined,
+                                    }}
+                                    loading={propertyEventsLoading}
+                                />
+                            </>
+                        )}
+                    </SceneSection>
+                    <SceneDivider />
+                </>
+            )}
 
             {isEvent && definition.id !== 'new' && (
                 <>

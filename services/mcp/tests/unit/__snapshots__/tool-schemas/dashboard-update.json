@@ -758,7 +758,10 @@
                             {
                                 "properties": {
                                     "config": {
-                                        "description": "Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates."
+                                        "description": "Omit for metadata-only updates. Include widget_type to use a typed config schema.",
+                                        "maximum": 0,
+                                        "minimum": 1,
+                                        "type": "number"
                                     },
                                     "description": {
                                         "description": "Optional markdown description shown when show_description is enabled.",
@@ -779,6 +782,12 @@
                                             }
                                         ],
                                         "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "Omit for metadata-only updates. Include a supported widget_type when patching config.",
+                                        "maximum": 0,
+                                        "minimum": 1,
+                                        "type": "number"
                                     }
                                 },
                                 "required": ["id"],

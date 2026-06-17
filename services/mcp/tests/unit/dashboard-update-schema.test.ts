@@ -88,6 +88,59 @@ describe('dashboard-update schema', () => {
         })
     })
 
+    it('rejects widget config PATCHes without widget_type', () => {
+        const result = tool.schema.safeParse({
+            id: 1,
+            tiles: [
+                {
+                    id: 2,
+                    widget: {
+                        id: '00000000-0000-4000-8000-000000000002',
+                        config: { limit: 10 },
+                    },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(false)
+    })
+
+    it('rejects unknown widget types before the metadata-only fallback', () => {
+        const result = tool.schema.safeParse({
+            id: 1,
+            tiles: [
+                {
+                    id: 2,
+                    widget: {
+                        id: '00000000-0000-4000-8000-000000000002',
+                        widget_type: 'unknown_widget',
+                        config: { limit: 10 },
+                    },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(false)
+    })
+
+    it('rejects invalid live activity config before the metadata-only fallback', () => {
+        const result = tool.schema.safeParse({
+            id: 1,
+            tiles: [
+                {
+                    id: 2,
+                    widget: {
+                        id: '00000000-0000-4000-8000-000000000002',
+                        widget_type: 'live_activity',
+                        config: { limit: 11, refreshIntervalSeconds: 30 },
+                    },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(false)
+    })
+
     it('preserves live activity config fields for batch-add widgets', () => {
         const result = batchAddTool.schema.safeParse({
             id: 1,

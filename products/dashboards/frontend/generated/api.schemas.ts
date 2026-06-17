@@ -690,8 +690,18 @@ export interface SessionReplayListWidgetPatchRequestOpenApiApi {
 export interface _DashboardPatchExistingWidgetOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id: string
-    /** Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates. */
-    config?: unknown
+    /**
+     * Omit for metadata-only updates. Include a supported widget_type when patching config.
+     * @minimum 1
+     * @maximum 0
+     */
+    widget_type?: number
+    /**
+     * Omit for metadata-only updates. Include widget_type to use a typed config schema.
+     * @minimum 1
+     * @maximum 0
+     */
+    config?: number
     /**
      * Optional custom display name for the widget tile.
      * @maxLength 400

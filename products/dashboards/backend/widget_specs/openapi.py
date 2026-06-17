@@ -75,16 +75,22 @@ class _AddDashboardWidgetTileFieldsOpenApiSerializer(serializers.Serializer):
     )
 
 
+@extend_schema_field({"type": "number", "minimum": 1, "maximum": 0})
+class _OmittedOnlyOpenApiField(serializers.Field):
+    pass
+
+
 class _DashboardPatchExistingWidgetOpenApiSerializer(serializers.Serializer):
     id = serializers.UUIDField(
         help_text="Existing widget row ID when updating a widget tile via dashboard PATCH.",
     )
-    config = serializers.JSONField(
+    widget_type = _OmittedOnlyOpenApiField(
         required=False,
-        help_text=(
-            "Widget-specific configuration patch for the existing widget row. "
-            "Include widget_type for a typed config schema; omit it for metadata-only updates."
-        ),
+        help_text="Omit for metadata-only updates. Include a supported widget_type when patching config.",
+    )
+    config = _OmittedOnlyOpenApiField(
+        required=False,
+        help_text="Omit for metadata-only updates. Include widget_type to use a typed config schema.",
     )
     name = serializers.CharField(
         max_length=400,

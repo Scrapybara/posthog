@@ -143,6 +143,10 @@ export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderByDe
 export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderDirectionDefault = `DESC`
 export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourNameMax = 400
 
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFiveWidgetTypeMax = 0
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFiveConfigMax = 0
+
 export const dashboardsPartialUpdateBodyTilesItemWidgetOneFiveNameMax = 400
 
 export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
@@ -603,11 +607,21 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                     .describe(
                                         'Existing widget row ID when updating a widget tile via dashboard PATCH.'
                                     ),
-                                config: zod
-                                    .unknown()
+                                widget_type: zod
+                                    .number()
+                                    .min(1)
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFiveWidgetTypeMax)
                                     .optional()
                                     .describe(
-                                        'Widget-specific configuration patch for the existing widget row. Include widget_type for a typed config schema; omit it for metadata-only updates.'
+                                        'Omit for metadata-only updates. Include a supported widget_type when patching config.'
+                                    ),
+                                config: zod
+                                    .number()
+                                    .min(1)
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFiveConfigMax)
+                                    .optional()
+                                    .describe(
+                                        'Omit for metadata-only updates. Include widget_type to use a typed config schema.'
                                     ),
                                 name: zod
                                     .string()

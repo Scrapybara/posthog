@@ -14,6 +14,7 @@ from parameterized import parameterized
 
 from posthog.schema import AccountsQuery, AccountsQueryResponse
 
+from posthog.hogql import ast
 from posthog.hogql.errors import ExposedHogQLError
 
 from posthog.api.tagged_item import set_tags_on_object
@@ -152,6 +153,18 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
 
             self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
             score_accounts.assert_called_once_with({str(account.id): "org-a"})
+
+    def test_health_score_alias_collision_keeps_user_expression_separate(self):
+        runner = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "properties.foo AS health_score", ACCOUNT_HEALTH_SCORE_COLUMN]),
+            team=self.team,
+            user=self.user,
+        )
+
+        self.assertEqual(
+            runner.columns,
+            ["name", "properties.foo AS health_score", ACCOUNT_HEALTH_SCORE_COLUMN],
+        )
 
     def test_health_score_column_serializes_no_data_for_missing_external_id(self):
         TeamCustomerAnalyticsConfig.objects.update_or_create(
@@ -486,6 +499,21 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         self.assertEqual(response.results[0][health_idx]["status"], "no_data")
         self.assertIn("no longer available", response.results[0][health_idx]["noDataReason"])
 
+    def test_health_score_soft_deleted_action_source_returns_no_data(self):
+        action = Action.objects.create(team=self.team, name="Deleted docs action", deleted=True)
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "ActionsNode", "id": action.id, "name": action.name},
+            },
+        )
+        create_account(team_id=self.team.id, name="A", external_id="org-a")
+        runner, response = self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        self.assertEqual(response.results[0][health_idx]["status"], "no_data")
+        self.assertIn("no longer available", response.results[0][health_idx]["noDataReason"])
+
     def test_health_score_valid_action_source_uses_resolved_action_cache(self):
         action = Action.objects.create(team=self.team, name="Viewed docs")
         TeamCustomerAnalyticsConfig.objects.update_or_create(
@@ -563,6 +591,47 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         self.assertEqual(
             [call.kwargs["query_type"] for call in execute.call_args_list],
             ["AccountsHealthBaselineQuery", "AccountsHealthMetricsQuery", "AccountsHealthMetricsQuery"],
+        )
+
+    def test_health_score_action_baseline_cache_tracks_action_updates(self):
+        cache.clear()
+        action = Action.objects.create(team=self.team, name="Viewed docs")
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "ActionsNode", "id": action.id, "name": action.name},
+            },
+        )
+        with freeze_time("2026-06-01T12:00:00Z"):
+            with (
+                patch(
+                    "products.customer_analytics.backend.hogql_queries.account_health_score.hog_function_filters_to_expr",
+                    return_value=ast.Constant(value=True),
+                ),
+                patch(
+                    "products.customer_analytics.backend.hogql_queries.account_health_score.execute_hogql_query",
+                    side_effect=[
+                        SimpleNamespace(results=[[10, 5]]),
+                        SimpleNamespace(results=[["org-a", 4, 2, 2, 3, timezone.now()]]),
+                        SimpleNamespace(results=[[20, 10]]),
+                        SimpleNamespace(results=[["org-a", 5, 4, 3, 4, timezone.now()]]),
+                    ],
+                ) as execute,
+            ):
+                calculator = AccountHealthScoreCalculator(team=self.team, user=self.user)
+                calculator.score_accounts({"account-a": "org-a"})
+                Action.objects.filter(id=action.id).update(updated_at=timezone.now() + timedelta(minutes=1))
+                calculator.score_accounts({"account-a": "org-a"})
+
+        self.assertEqual(
+            [call.kwargs["query_type"] for call in execute.call_args_list],
+            [
+                "AccountsHealthBaselineQuery",
+                "AccountsHealthMetricsQuery",
+                "AccountsHealthBaselineQuery",
+                "AccountsHealthMetricsQuery",
+            ],
         )
 
     def _link_notebooks(self, account, count: int) -> None:

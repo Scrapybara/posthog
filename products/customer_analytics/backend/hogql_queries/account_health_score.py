@@ -261,12 +261,23 @@ def _activity_event_label(activity_event: dict[str, Any]) -> str:
 
 
 def _baseline_cache_key(
-    *, team_id: int, group_type_index: int, activity_event: dict[str, Any], date_to: datetime, lookback_days: int
+    *,
+    team_id: int,
+    group_type_index: int,
+    activity_event: dict[str, Any],
+    actions: dict[int, Action],
+    date_to: datetime,
+    lookback_days: int,
 ) -> str:
     if timezone.is_naive(date_to):
         date_to = timezone.make_aware(date_to, ZoneInfo("UTC"))
+    cache_payload: dict[str, Any] = {"activity_event": activity_event}
+    if actions:
+        cache_payload["actions"] = [
+            {"id": action_id, "updated_at": actions[action_id].updated_at} for action_id in sorted(actions)
+        ]
     event_hash = hashlib.sha256(
-        json.dumps(activity_event, sort_keys=True, default=str, separators=(",", ":")).encode()
+        json.dumps(cache_payload, sort_keys=True, default=str, separators=(",", ":")).encode()
     ).hexdigest()[:16]
     bucket = date_to.astimezone(ZoneInfo("UTC")).strftime("%Y%m%d%H")
     return f"customer_analytics:account_health_baseline:v1:{team_id}:{group_type_index}:{lookback_days}:{bucket}:{event_hash}"
@@ -348,6 +359,7 @@ class AccountHealthScoreCalculator:
                 team_id=self.team.id,
                 group_type_index=group_type_index,
                 activity_event=activity_event,
+                actions=actions,
                 date_to=date_to,
                 lookback_days=ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS,
             ),
@@ -397,7 +409,7 @@ class AccountHealthScoreCalculator:
         except (KeyError, TypeError, ValueError):
             return None
         try:
-            action = Action.objects.get(id=action_id, team__project_id=self.team.project_id)
+            action = Action.objects.get(id=action_id, team__project_id=self.team.project_id, deleted=False)
         except ObjectDoesNotExist:
             return None
         return {action_id: action}
@@ -424,7 +436,7 @@ class AccountHealthScoreCalculator:
                 p90_active_users=_read_float(cached.get("p90_active_users")),
             )
 
-        group_expr = f"toString($group_{group_type_index})"
+        group_expr = f"toString(e.$group_{group_type_index})"
         query = parse_select(
             f"""
             SELECT
@@ -434,10 +446,10 @@ class AccountHealthScoreCalculator:
                 SELECT
                     {group_expr} AS group_key,
                     count() AS current_count,
-                    uniq(person_id) AS active_users
-                FROM events
-                WHERE timestamp >= {{date_from}}
-                  AND timestamp < {{date_to}}
+                    uniq(e.person_id) AS active_users
+                FROM events AS e
+                WHERE e.timestamp >= {{date_from}}
+                  AND e.timestamp < {{date_to}}
                   AND notEmpty({group_expr})
                   AND {{activity_filter}}
                 GROUP BY group_key
@@ -482,21 +494,21 @@ class AccountHealthScoreCalculator:
         date_to: datetime,
         activity_filter: ast.Expr,
     ) -> dict[str, AccountActivityMetrics]:
-        group_expr = f"toString($group_{group_type_index})"
-        current_condition = "timestamp >= {date_from} AND timestamp < {date_to}"
-        previous_condition = "timestamp >= {previous_date_from} AND timestamp < {date_from}"
+        group_expr = f"toString(e.$group_{group_type_index})"
+        current_condition = "e.timestamp >= {date_from} AND e.timestamp < {date_to}"
+        previous_condition = "e.timestamp >= {previous_date_from} AND e.timestamp < {date_from}"
         query = parse_select(
             f"""
             SELECT
                 {group_expr} AS group_key,
                 countIf({current_condition}) AS current_count,
                 countIf({previous_condition}) AS previous_count,
-                uniqIf(person_id, {current_condition}) AS active_users,
-                countDistinctIf(toDate(timestamp), {current_condition}) AS active_days,
-                max(timestamp) AS last_activity_at
-            FROM events
-            WHERE timestamp >= {{previous_date_from}}
-              AND timestamp < {{date_to}}
+                uniqIf(e.person_id, {current_condition}) AS active_users,
+                countDistinctIf(toDate(e.timestamp), {current_condition}) AS active_days,
+                max(e.timestamp) AS last_activity_at
+            FROM events AS e
+            WHERE e.timestamp >= {{previous_date_from}}
+              AND e.timestamp < {{date_to}}
               AND notEmpty({group_expr})
               AND {group_expr} IN {{group_keys}}
               AND {{activity_filter}}

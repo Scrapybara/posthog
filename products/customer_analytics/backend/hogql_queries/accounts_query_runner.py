@@ -98,6 +98,8 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             )
         expr = parse_expr(raw)
         column_name = expr.alias if isinstance(expr, ast.Alias) else raw
+        if column_name == ACCOUNT_HEALTH_SCORE_COLUMN:
+            column_name = raw
         return column_name, expr
 
     def _name_tuple_expr(self) -> ast.Expr:

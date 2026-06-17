@@ -294,6 +294,22 @@ describe('accountsLogic', () => {
             expect(logic.values.queryColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, 'csm'])
         })
 
+        it('does not collide with user expressions aliased as health_score', () => {
+            const config = accountsColumnConfigLogic.findMounted()
+            const userExpression = 'properties.plan AS health_score'
+            config?.actions.setSelectColumns([ACCOUNTS_NAME_COLUMN, userExpression])
+
+            const source = logic.values.hogqlQuery.source as AccountsQuery
+            expect(config?.values.visibleColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, userExpression])
+            expect(source.select).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, userExpression])
+            expect(logic.values.hogqlQuery.hiddenColumns).toEqual([ACCOUNTS_HEALTH_SCORE_COLUMN])
+            expect(logic.values.queryColumnNames).toEqual([
+                ACCOUNTS_NAME_COLUMN,
+                ACCOUNTS_HEALTH_SCORE_COLUMN,
+                userExpression,
+            ])
+        })
+
         it('does not hide health score when it is selected', () => {
             const source = logic.values.hogqlQuery.source as AccountsQuery
             expect(source.select).toEqual(ACCOUNTS_HOGQL_DEFAULT_SELECT)

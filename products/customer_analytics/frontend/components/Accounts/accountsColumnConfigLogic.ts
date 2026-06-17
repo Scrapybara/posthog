@@ -51,7 +51,12 @@ export function ensureAccountQueryColumns(columns: string[]): string[] {
 }
 
 export function accountColumnDisplayNames(columns: string[]): string[] {
-    return columns.map((column) => extractDisplayLabel(column))
+    return columns.map((column) => {
+        const displayName = extractDisplayLabel(column)
+        return column !== ACCOUNTS_HEALTH_SCORE_COLUMN && displayName === ACCOUNTS_HEALTH_SCORE_COLUMN
+            ? column
+            : displayName
+    })
 }
 
 export function diffColumnConfiguration(

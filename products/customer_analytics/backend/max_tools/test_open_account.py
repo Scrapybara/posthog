@@ -20,7 +20,7 @@ class TestOpenAccountTool(BaseTest):
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
-    async def test_resolves_by_external_id_defaulting_to_usage_tab(self):
+    async def test_resolves_by_external_id_defaulting_to_health_tab(self):
         account = await sync_to_async(Account.objects.unscoped().create)(
             team=self.team, name="Acme Corp", external_id="acme-123"
         )
@@ -30,7 +30,7 @@ class TestOpenAccountTool(BaseTest):
         assert "Acme Corp" in content
         assert artifact["account_id"] == str(account.id)
         assert artifact["external_id"] == "acme-123"
-        assert artifact["tab"] == "usage"
+        assert artifact["tab"] == "health"
 
     @pytest.mark.django_db
     @pytest.mark.asyncio

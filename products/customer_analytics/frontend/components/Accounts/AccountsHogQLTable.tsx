@@ -15,10 +15,15 @@ import { DataTableNode } from '~/queries/schema/schema-general'
 import { QueryContext, QueryContextColumn, QueryContextColumnComponent } from '~/queries/types'
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY } from '../../constants'
+import { AccountHealthScoreBadge, parseAccountHealthScore } from './AccountHealthScore'
 import { AccountNotebooksExpansion } from './AccountNotebooksExpansion'
-import { ACCOUNTS_NAME_COLUMN, accountsColumnConfigLogic } from './accountsColumnConfigLogic'
+import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
+    ACCOUNTS_NAME_COLUMN,
+    accountsColumnConfigLogic,
+} from './accountsColumnConfigLogic'
 import { accountsExpansionLogic } from './accountsExpansionLogic'
-import { AccountRoleKey, accountsLogic } from './accountsLogic'
+import { AccountRoleKey, accountsLogic, isAccountsColumnSortable } from './accountsLogic'
 
 type AccountAssignment = { id: number; email: string } | null
 
@@ -33,6 +38,7 @@ const ROLE_LABELS: Record<AccountRoleKey, string> = {
 
 const COLUMN_WIDTHS = {
     name: '240px',
+    health_score: '160px',
     tag_names: '280px',
     notebook_count: '80px',
     csm: '220px',
@@ -109,6 +115,10 @@ function NotebookCountCell({ record }: { record: unknown }): JSX.Element {
     const getCell = useGetCell()
     const count = Number(getCell(record, 'notebook_count')) || 0
     return count > 0 ? <span>{count}</span> : <span className="text-muted">—</span>
+}
+
+function HealthScoreCell({ value }: { value: unknown }): JSX.Element {
+    return <AccountHealthScoreBadge score={parseAccountHealthScore(value)} />
 }
 
 function RoleAssignmentCell({ record, role }: { record: unknown; role: AccountRoleKey }): JSX.Element {
@@ -189,6 +199,7 @@ type KnownColumnTemplate = {
     label?: string
     width?: string
     render?: QueryContextColumnComponent
+    sortable?: boolean
 }
 
 const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
@@ -196,6 +207,12 @@ const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
         label: 'Account',
         width: COLUMN_WIDTHS.name,
         render: ({ record }) => <NameCell record={record} />,
+    },
+    health_score: {
+        label: 'Health',
+        width: COLUMN_WIDTHS.health_score,
+        render: ({ value }) => <HealthScoreCell value={value} />,
+        sortable: false,
     },
     tag_names: {
         label: 'Tags',
@@ -231,8 +248,14 @@ function useContextColumns(): Record<string, QueryContextColumn> {
         for (const key of visibleColumnNames) {
             const template = KNOWN_COLUMN_TEMPLATES[key]
             const label = template?.label ?? key
+            const sortable = template?.sortable ?? isAccountsColumnSortable(key)
             columns[key] = {
-                renderTitle: () => <SortableColumnHeader column={key} label={label} />,
+                renderTitle: () =>
+                    sortable ? (
+                        <SortableColumnHeader column={key} label={label} />
+                    ) : (
+                        <span data-attr={`accounts-hogql-column-${key}`}>{label}</span>
+                    ),
                 width: template?.width,
                 render: template?.render,
             }
@@ -267,8 +290,15 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
             },
             expandedRowRender: ({ result }) => {
                 const cell = getNameCell(result, visibleColumnNames)
+                const healthScore = parseAccountHealthScore(
+                    getCellAt(result, visibleColumnNames, ACCOUNTS_HEALTH_SCORE_COLUMN)
+                )
                 return cell ? (
-                    <AccountNotebooksExpansion accountId={cell.id} externalId={cell.external_id ?? ''} />
+                    <AccountNotebooksExpansion
+                        accountId={cell.id}
+                        externalId={cell.external_id ?? ''}
+                        healthScore={healthScore}
+                    />
                 ) : null
             },
         }),
@@ -288,6 +318,11 @@ const SKELETON_COLUMNS: LemonTableColumns<{ key: number }> = [
                 <LemonSkeleton className="h-3 w-24" />
             </div>
         ),
+    },
+    {
+        title: 'Health',
+        width: COLUMN_WIDTHS.health_score,
+        render: () => <LemonSkeleton className="h-6 w-24 rounded" />,
     },
     {
         title: 'Tags',

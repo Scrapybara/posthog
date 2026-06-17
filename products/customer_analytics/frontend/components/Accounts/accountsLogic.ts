@@ -20,6 +20,7 @@ import type {
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY, CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS } from '../../constants'
 import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
     accountsColumnConfigLogic,
@@ -86,6 +87,11 @@ export type AccountSortOrder = { column: AccountSortableColumn; direction: Accou
 // Columns that are HogQL `Tuple(id, email)` — sort by the `email` element so the
 // order matches what the user sees on screen rather than the opaque user id.
 const TUPLE_SORT_COLUMNS = new Set<string>(['csm', 'account_executive', 'account_owner'])
+const NON_SORTABLE_COLUMNS = new Set<string>([ACCOUNTS_HEALTH_SCORE_COLUMN])
+
+export function isAccountsColumnSortable(column: string): boolean {
+    return !NON_SORTABLE_COLUMNS.has(column)
+}
 
 // Resolve the HogQL expression to use in ORDER BY for a sortable column.
 // HogQL ORDER BY resolves SELECT aliases by name, so the visible column name
@@ -429,6 +435,9 @@ export const accountsLogic = kea<accountsLogicType>([
             }
         },
         toggleSort: ({ column }) => {
+            if (!isAccountsColumnSortable(column)) {
+                return
+            }
             const current = values.sortOrder
             let next: AccountSortOrder
             if (!current || current.column !== column) {

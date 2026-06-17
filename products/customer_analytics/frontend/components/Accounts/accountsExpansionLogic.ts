@@ -4,9 +4,9 @@ import posthog from 'posthog-js'
 import type { accountsExpansionLogicType } from './accountsExpansionLogicType'
 import { AccountsEvents } from './constants'
 
-export type AccountExpansionTab = 'notes' | 'users' | 'usage' | 'spend'
+export type AccountExpansionTab = 'health' | 'notes' | 'users' | 'usage' | 'spend'
 
-export const DEFAULT_ACCOUNT_TAB: AccountExpansionTab = 'notes'
+export const DEFAULT_ACCOUNT_TAB: AccountExpansionTab = 'health'
 
 export const accountsExpansionLogic = kea<accountsExpansionLogicType>([
     path(['scenes', 'customerAnalytics', 'accounts', 'accountsExpansionLogic']),

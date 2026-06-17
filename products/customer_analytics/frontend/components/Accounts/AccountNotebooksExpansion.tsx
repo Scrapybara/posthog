@@ -20,6 +20,8 @@ import { urls } from 'scenes/urls'
 import type { AccountNotebookApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import { AccountBillingExpansion } from './AccountBillingExpansion'
+import { AccountHealthScoreExplanation } from './AccountHealthScore'
+import type { AccountHealthScore } from './AccountHealthScore'
 import { accountLinksLogic } from './accountLinksLogic'
 import { accountNotebooksLogic } from './accountNotebooksLogic'
 import { AccountRelatedUsersExpansion } from './AccountRelatedUsersExpansion'
@@ -89,9 +91,11 @@ function UsefulLinks({ accountId }: { accountId: string }): JSX.Element {
 export function AccountNotebooksExpansion({
     accountId,
     externalId,
+    healthScore,
 }: {
     accountId: string
     externalId: string
+    healthScore: AccountHealthScore | null
 }): JSX.Element {
     const logic = accountNotebooksLogic({ accountId })
     const { notebooks, notebooksLoading } = useValues(logic)
@@ -168,6 +172,11 @@ export function AccountNotebooksExpansion({
                         onChange={(tab) => setActiveTab(accountId, tab)}
                         size="small"
                         tabs={[
+                            {
+                                key: 'health',
+                                label: 'Health',
+                                content: <AccountHealthScoreExplanation score={healthScore} />,
+                            },
                             {
                                 key: 'notes',
                                 label: 'Notes',

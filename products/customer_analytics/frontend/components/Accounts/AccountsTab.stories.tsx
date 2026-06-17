@@ -8,6 +8,8 @@ import { urls } from 'scenes/urls'
 
 import { mswDecorator } from '~/mocks/browser'
 
+import type { AccountHealthScore } from './AccountHealthScore'
+
 const QUERY_ENDPOINT = '/api/environments/:team_id/query/:kind/'
 const ACCOUNT_RETRIEVE_ENDPOINT = 'api/projects/:team_id/accounts/:account_id/'
 const ACCOUNT_NOTEBOOKS_ENDPOINT = 'api/projects/:team_id/accounts/:account_id/notebooks/'
@@ -16,12 +18,20 @@ const INSIGHTS_ENDPOINT = 'api/environments/:team_id/insights/'
 
 type AccountNameCell = { name: string; external_id: string | null; id: string }
 type AccountRoleCell = [number, string] | null
-type AccountRow = [AccountNameCell, string[], number, AccountRoleCell, AccountRoleCell, AccountRoleCell]
+type AccountRow = [
+    AccountNameCell,
+    AccountHealthScore,
+    string[],
+    number,
+    AccountRoleCell,
+    AccountRoleCell,
+    AccountRoleCell,
+]
 
 function buildAccountsQueryResponse(rows: AccountRow[]): Record<string, unknown> {
     return {
         kind: 'AccountsQuery',
-        columns: ['name', 'tag_names', 'notebook_count', 'csm', 'account_executive', 'account_owner'],
+        columns: ['name', 'health_score', 'tag_names', 'notebook_count', 'csm', 'account_executive', 'account_owner'],
         results: rows,
         types: [],
         hogql: '',
@@ -33,18 +43,112 @@ function buildAccountsQueryResponse(rows: AccountRow[]): Record<string, unknown>
     }
 }
 
+function healthScore(score: number | null, status: AccountHealthScore['status']): AccountHealthScore {
+    if (score === null) {
+        return {
+            score: null,
+            status: 'no_data',
+            lookbackDays: 30,
+            activityEvent: '$pageview',
+            factors: [],
+            noDataReason: 'No $pageview activity in the current or previous 30-day window.',
+            lastActivityAt: null,
+        }
+    }
+    return {
+        score,
+        status,
+        lookbackDays: 30,
+        activityEvent: '$pageview',
+        lastActivityAt: '2026-05-20T12:00:00Z',
+        noDataReason: null,
+        factors: [
+            {
+                key: 'activity',
+                label: 'Activity volume',
+                value: score >= 75 ? 820 : score >= 40 ? 240 : 18,
+                previousValue: score >= 75 ? 640 : score >= 40 ? 260 : 220,
+                score: score >= 75 ? 100 : score >= 40 ? 54 : 8,
+                weight: 0.35,
+                description: "$pageview events in the last 30 days, normalized against the team's active-account p90.",
+                reason: null,
+            },
+            {
+                key: 'active_users',
+                label: 'Active users',
+                value: score >= 75 ? 41 : score >= 40 ? 12 : 2,
+                previousValue: null,
+                score: score >= 75 ? 91 : score >= 40 ? 47 : 10,
+                weight: 0.25,
+                description:
+                    "Distinct users with $pageview activity, normalized against the team's active-account p90.",
+                reason: null,
+            },
+            {
+                key: 'frequency',
+                label: 'Active days',
+                value: score >= 75 ? 27 : score >= 40 ? 13 : 1,
+                previousValue: null,
+                score: score >= 75 ? 90 : score >= 40 ? 43 : 3,
+                weight: 0.2,
+                description: 'Days with $pageview activity during the 30-day window.',
+                reason: null,
+            },
+            {
+                key: 'recency',
+                label: 'Recency',
+                value: score >= 75 ? 1 : score >= 40 ? 5 : 24,
+                previousValue: null,
+                score: score >= 75 ? 97 : score >= 40 ? 83 : 20,
+                weight: 0.1,
+                description: 'How recently this account had $pageview activity.',
+                reason: null,
+            },
+            {
+                key: 'trend',
+                label: 'Trend',
+                value: score >= 75 ? 820 : score >= 40 ? 240 : 18,
+                previousValue: score >= 75 ? 640 : score >= 40 ? 260 : 220,
+                score: score >= 75 ? 100 : score >= 40 ? 92 : 8,
+                weight: 0.1,
+                description: 'Current 30-day activity compared with the previous 30 days.',
+                reason: null,
+            },
+        ],
+    }
+}
+
 const SAMPLE_ROWS: AccountRow[] = [
     [
         { name: 'Acme Inc', external_id: 'cust_acme_001', id: 'acc-1' },
+        healthScore(92, 'healthy'),
         ['enterprise', 'priority'],
         0,
         [1, 'alice@posthog.com'],
         [2, 'bob@posthog.com'],
         null,
     ],
-    [{ name: 'Globex', external_id: 'cust_globex_002', id: 'acc-2' }, [], 0, null, null, null],
     [
-        { name: 'Hooli', external_id: null, id: 'acc-3' },
+        { name: 'Globex', external_id: 'cust_globex_002', id: 'acc-2' },
+        healthScore(58, 'neutral'),
+        [],
+        0,
+        null,
+        null,
+        null,
+    ],
+    [
+        { name: 'Initech', external_id: 'cust_initech_003', id: 'acc-3' },
+        healthScore(18, 'at_risk'),
+        [],
+        0,
+        null,
+        null,
+        null,
+    ],
+    [
+        { name: 'Hooli', external_id: null, id: 'acc-4' },
+        healthScore(null, 'no_data'),
         ['scaleup'],
         0,
         [1, 'alice@posthog.com'],
@@ -56,6 +160,7 @@ const SAMPLE_ROWS: AccountRow[] = [
 const SINGLE_ROW: AccountRow[] = [
     [
         { name: 'Acme Inc', external_id: 'cust_acme_001', id: 'acc-1' },
+        healthScore(92, 'healthy'),
         ['enterprise', 'priority'],
         1,
         [1, 'alice@posthog.com'],
@@ -187,6 +292,7 @@ async function expandFirstRow(canvasElement: HTMLElement, notesLoadedText: strin
     await userEvent.click(await canvas.findByTitle('Show more'))
     await canvas.findByText('Useful links')
     await canvas.findByText('Organization')
+    await userEvent.click(await canvas.findByRole('tab', { name: 'Notes' }))
     await canvas.findByText(notesLoadedText)
 }
 
@@ -279,6 +385,28 @@ export const RowExpandedEmpty: Story = {
     ],
     play: async ({ canvasElement }) => {
         await expandFirstRow(canvasElement, 'No notes linked to this account yet.')
+    },
+}
+
+export const RowExpandedHealthScore: Story = {
+    render: () => <App />,
+    decorators: [
+        mswDecorator({
+            get: {
+                [ACCOUNT_RETRIEVE_ENDPOINT]: ACCOUNT_WITH_LINKS,
+                [ACCOUNT_NOTEBOOKS_ENDPOINT]: { count: 0, next: null, previous: null, results: [] },
+            },
+            post: {
+                [QUERY_ENDPOINT]: mockAccountsQuery(SAMPLE_ROWS),
+            },
+        }),
+    ],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement)
+        await userEvent.click(await canvas.findByTitle('Show more'))
+        await canvas.findByText('Health score')
+        await canvas.findByText('Activity volume')
+        await canvas.findByText('No LLMs, no persisted score', { exact: false })
     },
 }
 

@@ -14,6 +14,7 @@ import { accountsPartialUpdate, accountsRetrieve } from 'products/customer_analy
 import type { AccountApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
     accountsColumnConfigLogic,
@@ -251,6 +252,12 @@ describe('accountsLogic', () => {
             expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['name'])
             logic.actions.toggleSort('name')
             expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['name DESC'])
+        })
+
+        it('does not sort by query-time health score', () => {
+            logic.actions.toggleSort(ACCOUNTS_HEALTH_SCORE_COLUMN)
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
         })
     })
 

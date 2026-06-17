@@ -1,4 +1,10 @@
-from posthog.test.base import ClickhouseTestMixin, NonAtomicBaseTest
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+
+from freezegun import freeze_time
+from posthog.test.base import ClickhouseTestMixin, NonAtomicBaseTest, _create_event, flush_persons_and_events
+from unittest.mock import patch
 
 from django.test import override_settings
 from django.utils import timezone
@@ -15,7 +21,16 @@ from posthog.models import Tag, User
 from posthog.models.team import Team
 from posthog.rbac.user_access_control import UserAccessControlError
 
+from products.customer_analytics.backend.hogql_queries.account_health_score import (
+    ACCOUNT_HEALTH_SCORE_COLUMN,
+    AccountActivityMetrics,
+    AccountHealthBaseline,
+    AccountHealthScoreCalculator,
+    no_data_health_score,
+    score_account_health,
+)
 from products.customer_analytics.backend.hogql_queries.accounts_query_runner import AccountsQueryRunner
+from products.customer_analytics.backend.models.team_customer_analytics_config import TeamCustomerAnalyticsConfig
 from products.customer_analytics.backend.test.factories import create_account
 from products.notebooks.backend.models import Notebook, ResourceNotebook
 
@@ -55,6 +70,85 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
             older = create_account(team_id=self.team.id, name="Older")
             newer = create_account(team_id=self.team.id, name="Newer")
         self.assertEqual(self._ids(), [str(newer.id), str(older.id)])
+
+    def test_health_score_ordering_falls_back_to_default_ordering(self):
+        with timezone.override("UTC"):
+            older = create_account(team_id=self.team.id, name="Older")
+            newer = create_account(team_id=self.team.id, name="Newer")
+        self.assertEqual(self._ids(orderBy=[ACCOUNT_HEALTH_SCORE_COLUMN]), [str(newer.id), str(older.id)])
+
+    def test_score_account_health_normalizes_weighted_factors(self):
+        date_to = datetime(2026, 6, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
+        score = score_account_health(
+            AccountActivityMetrics(
+                current_count=50,
+                previous_count=25,
+                active_users=10,
+                active_days=15,
+                last_activity_at=date_to - timedelta(days=3),
+            ),
+            AccountHealthBaseline(p90_activity_count=100, p90_active_users=20),
+            activity_event="$pageview",
+            date_to=date_to,
+        )
+        self.assertEqual(score["score"], 59)
+        self.assertEqual(score["status"], "neutral")
+        self.assertEqual(
+            [factor["key"] for factor in score["factors"]],
+            ["activity", "active_users", "frequency", "recency", "trend"],
+        )
+
+    def test_score_account_health_returns_no_data_for_empty_current_and_previous_windows(self):
+        score = score_account_health(
+            AccountActivityMetrics(
+                current_count=0,
+                previous_count=0,
+                active_users=0,
+                active_days=0,
+                last_activity_at=None,
+            ),
+            AccountHealthBaseline(p90_activity_count=0, p90_active_users=0),
+            activity_event="$pageview",
+            date_to=datetime(2026, 6, 1, 12, 0, tzinfo=ZoneInfo("UTC")),
+        )
+        self.assertEqual(score["status"], "no_data")
+        self.assertEqual(score["score"], None)
+        self.assertIn("No $pageview activity", score["noDataReason"])
+
+    def test_default_columns_include_health_score(self):
+        create_account(team_id=self.team.id, name="A")
+        runner, response = self._run_query()
+        self.assertEqual(runner.columns[:2], ["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+        self.assertEqual(response.columns[:2], ["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+
+    def test_health_score_is_not_calculated_when_column_is_not_selected(self):
+        account = create_account(team_id=self.team.id, name="A", external_id="org-a")
+        with patch(
+            "products.customer_analytics.backend.hogql_queries.accounts_query_runner.AccountHealthScoreCalculator.score_accounts",
+            return_value={str(account.id): no_data_health_score("No data")},
+        ) as score_accounts:
+            self._run_query(select=["name"])
+            score_accounts.assert_not_called()
+
+            self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+            score_accounts.assert_called_once_with({str(account.id): "org-a"})
+
+    def test_health_score_column_serializes_no_data_for_missing_external_id(self):
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "EventsNode", "event": "$pageview", "name": "$pageview"},
+            },
+        )
+        account = create_account(team_id=self.team.id, name="A", external_id=None)
+        runner, response = self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        name_idx = runner.columns.index("name")
+        self.assertEqual(response.results[0][name_idx]["id"], str(account.id))
+        self.assertEqual(response.results[0][health_idx]["status"], "no_data")
+        self.assertEqual(response.results[0][health_idx]["score"], None)
+        self.assertIn("no external ID", response.results[0][health_idx]["noDataReason"])
 
     @parameterized.expand(
         [
@@ -273,6 +367,115 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         apple = create_account(team_id=self.team.id, name="Apple")
         banana = create_account(team_id=self.team.id, name="Banana")
         self.assertEqual(self._ids(orderBy=["-name"]), [str(banana.id), str(apple.id)])
+
+    @freeze_time("2026-06-01T12:00:00Z")
+    def test_health_score_uses_activity_metrics_and_respects_team_isolation(self):
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "EventsNode", "event": "$pageview", "name": "$pageview"},
+            },
+        )
+        create_account(team_id=self.team.id, name="Healthy", external_id="org-healthy")
+        create_account(team_id=self.team.id, name="At risk", external_id="org-at-risk")
+        create_account(team_id=self.team.id, name="No data", external_id="org-no-data")
+
+        other_team = Team.objects.create(organization=self.organization)
+        create_account(team_id=other_team.id, name="Other", external_id="org-healthy")
+
+        now = timezone.now()
+        for index in range(10):
+            _create_event(
+                event="$pageview",
+                team=self.team,
+                distinct_id=f"healthy-{index % 5}",
+                person_id=f"00000000-0000-4000-8000-00000000000{index % 5}",
+                timestamp=now - timedelta(days=index + 1),
+                properties={"$group_0": "org-healthy"},
+            )
+        for index in range(5):
+            _create_event(
+                event="$pageview",
+                team=self.team,
+                distinct_id=f"healthy-prev-{index}",
+                person_id=f"00000000-0000-4000-8000-00000000001{index}",
+                timestamp=now - timedelta(days=35 + index),
+                properties={"$group_0": "org-healthy"},
+            )
+        _create_event(
+            event="$pageview",
+            team=self.team,
+            distinct_id="at-risk-prev",
+            person_id="00000000-0000-4000-8000-000000000020",
+            timestamp=now - timedelta(days=40),
+            properties={"$group_0": "org-at-risk"},
+        )
+        for index in range(20):
+            _create_event(
+                event="$pageview",
+                team=other_team,
+                distinct_id=f"other-{index}",
+                person_id=f"00000000-0000-4000-8000-00000000010{index % 10}",
+                timestamp=now - timedelta(days=1),
+                properties={"$group_0": "org-healthy"},
+            )
+        flush_persons_and_events()
+
+        runner, response = self._run_query(
+            select=["name", ACCOUNT_HEALTH_SCORE_COLUMN],
+            orderBy=["name"],
+        )
+        name_idx = runner.columns.index("name")
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        scores_by_name = {row[name_idx]["name"]: row[health_idx] for row in response.results}
+
+        self.assertEqual(scores_by_name["Healthy"]["status"], "healthy")
+        self.assertGreaterEqual(scores_by_name["Healthy"]["score"], 75)
+        self.assertEqual(scores_by_name["At risk"]["status"], "at_risk")
+        self.assertLess(scores_by_name["At risk"]["score"], 40)
+        self.assertEqual(scores_by_name["No data"]["status"], "no_data")
+        self.assertEqual(scores_by_name["No data"]["score"], None)
+        self.assertTrue(all(factor["key"] for factor in scores_by_name["Healthy"]["factors"]))
+
+    def test_health_score_unsupported_activity_source_returns_no_data(self):
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "DataWarehouseNode", "name": "Billing usage"},
+            },
+        )
+        create_account(team_id=self.team.id, name="A", external_id="org-a")
+        runner, response = self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        self.assertEqual(response.results[0][health_idx]["status"], "no_data")
+        self.assertIn("not supported", response.results[0][health_idx]["noDataReason"])
+
+    def test_health_score_calculator_uses_batched_baseline_and_metrics_queries(self):
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "EventsNode", "event": "$pageview", "name": "$pageview"},
+            },
+        )
+        with patch(
+            "products.customer_analytics.backend.hogql_queries.account_health_score.execute_hogql_query",
+            side_effect=[
+                SimpleNamespace(results=[[10, 5]]),
+                SimpleNamespace(results=[["org-a", 4, 2, 2, 3, timezone.now()]]),
+            ],
+        ) as execute:
+            scores = AccountHealthScoreCalculator(team=self.team, user=self.user).score_accounts(
+                {"account-a": "org-a", "account-b": None}
+            )
+
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(execute.call_args_list[0].kwargs["query_type"], "AccountsHealthBaselineQuery")
+        self.assertEqual(execute.call_args_list[1].kwargs["query_type"], "AccountsHealthMetricsQuery")
+        self.assertEqual(scores["account-a"]["status"], "neutral")
+        self.assertEqual(scores["account-b"]["status"], "no_data")
 
     def _link_notebooks(self, account, count: int) -> None:
         for i in range(count):

@@ -277,6 +277,9 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
     const hasQuestion = question.trim().length > 0
     const isQueueingSubmission = queueingEnabled && threadLoading && hasQuestion
     const showStopButton = threadLoading && !isQueueingSubmission
+    const askMaxWithPendingAttachments = (prompt: string): void => {
+        askMax(prompt, true, undefined, undefined, undefined, true)
+    }
     const canAttachImages = !inputDisabled && !isSharedThread && !handsFreeActive
     const handleAttachmentFiles = (files: File[]): void => {
         if (!canAttachImages || files.length === 0) {
@@ -496,7 +499,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                                 (!threadLoading || queueingEnabled)
                                             ) {
                                                 onSubmit?.()
-                                                askMax(question)
+                                                askMaxWithPendingAttachments(question)
                                             }
                                         }}
                                         onKeyDown={(event) => {
@@ -525,7 +528,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                         maxRows={10}
                                         className={cn(
                                             '!border-none !bg-transparent min-h-16 py-2 pl-2 resize-none',
-                                            handsFreeFlagEnabled ? 'pr-20' : 'pr-12'
+                                            handsFreeFlagEnabled ? 'pr-28' : 'pr-20'
                                         )}
                                         hideFocus
                                     />
@@ -534,11 +537,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                         )}
 
                         {!isSharedThread && !handsFreeActive && (
-                            // When the hands-free flag is on, reserve ~80px (pr-20) so the chip
-                            // row doesn't wrap under the absolutely-positioned mic + send pair.
-                            // Without the flag the row only has send and the legacy pr-12 is
-                            // enough — keep it so non-flagged users see the original layout.
-                            <div className={cn('pb-2', handsFreeFlagEnabled ? 'pr-20' : 'pr-12')}>
+                            <div className={cn('pb-2', handsFreeFlagEnabled ? 'pr-28' : 'pr-20')}>
                                 {!isThreadVisible ? (
                                     <div
                                         className={cn(
@@ -592,7 +591,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                 placement="bottom-end"
                                 showArrow
                                 ignoreDismissal
-                                onApprove={() => askMax(pendingPrompt || question)}
+                                onApprove={() => askMaxWithPendingAttachments(pendingPrompt || question)}
                                 onDismiss={() => completeThreadGeneration()}
                                 middleware={[
                                     offset((state) => ({
@@ -611,7 +610,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                                     textAreaRef?.current?.focus()
                                                     return
                                                 }
-                                                askMax(question)
+                                                askMaxWithPendingAttachments(question)
                                                 return
                                             }
                                             stopGeneration()
@@ -621,7 +620,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                             textAreaRef?.current?.focus()
                                             return
                                         }
-                                        askMax(question)
+                                        askMaxWithPendingAttachments(question)
                                     }}
                                     tooltip={
                                         disabledReason ? (

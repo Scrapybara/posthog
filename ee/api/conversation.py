@@ -53,6 +53,7 @@ from posthog.temporal.ai.research_agent import (
 from products.posthog_ai.backend.attachments import (
     MAX_ATTACHMENTS_PER_MESSAGE,
     AttachmentNotFoundError,
+    AttachmentStorageUnavailableError,
     AttachmentValidationError,
     delete_conversation_attachments,
     mark_attachment_references_attached,
@@ -389,7 +390,7 @@ class ConversationViewSet(
             # Mark conversation as internal if created during an impersonated session (support agents)
             is_impersonated = is_impersonated_session(request)
             conversation_type = Conversation.Type.DEEP_RESEARCH if is_research else Conversation.Type.ASSISTANT
-            conversation = Conversation.objects.create(
+            conversation = Conversation(
                 user=cast(User, request.user),
                 team=self.team,
                 id=conversation_id,
@@ -447,6 +448,8 @@ class ConversationViewSet(
         if is_sandbox and has_message:
             if attachment_references:
                 raise serializers.ValidationError({"attachment_ids": "Attachments are not supported in sandbox mode."})
+            if is_new_conversation:
+                conversation.save(force_insert=True)
             return handle_sandbox_message(
                 conversation=conversation,
                 conversation_id=str(conversation_id),
@@ -455,6 +458,9 @@ class ConversationViewSet(
                 team=self.team,
                 is_new_conversation=is_new_conversation,
             )
+
+        if is_new_conversation:
+            conversation.save(force_insert=True)
 
         if attachment_references:
             mark_attachment_references_attached(team=self.team, references=attachment_references)
@@ -663,7 +669,13 @@ class ConversationViewSet(
     )
     def destroy(self, request: Request, *args, **kwargs) -> Response:
         instance: Conversation = self.get_object()
-        delete_conversation_attachments(instance, deleted_by=cast(User, request.user))
+        try:
+            delete_conversation_attachments(instance, deleted_by=cast(User, request.user))
+        except AttachmentStorageUnavailableError:
+            return Response(
+                {"detail": "Image attachment storage is temporarily unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         Conversation.objects.filter(pk=instance.pk).update(deleted=True, deleted_at=timezone.now())
         return Response(status=status.HTTP_204_NO_CONTENT)
 

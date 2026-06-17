@@ -1015,7 +1015,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                     {
                         conversation_id: values.conversationId,
                         file,
-                    } as unknown as Parameters<typeof conversationAttachmentsCreate>[1],
+                    },
                     { signal: controller.signal }
                 )
 
@@ -1311,14 +1311,20 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 })
                 void uploadPendingAttachment(attachment, file)
             },
-            askMax: async ({ prompt, addToThread = true, uiContext, attachmentIds, attachments }, breakpoint) => {
+            askMax: async (
+                { prompt, addToThread = true, uiContext, attachmentIds, attachments, consumePendingAttachments },
+                breakpoint
+            ) => {
                 // Only process if this thread is the currently active one
                 if (values.conversationId !== values.activeThreadKey) {
                     return
                 }
-                const usePendingAttachments = attachmentIds === undefined && attachments === undefined
-                const messageAttachmentIds = attachmentIds ?? values.readyPendingAttachmentIds
-                const messageAttachments = attachments ?? values.readyPendingAttachmentMessageRefs
+                const usePendingAttachments =
+                    consumePendingAttachments && attachmentIds === undefined && attachments === undefined
+                const messageAttachmentIds =
+                    attachmentIds ?? (usePendingAttachments ? values.readyPendingAttachmentIds : [])
+                const messageAttachments =
+                    attachments ?? (usePendingAttachments ? values.readyPendingAttachmentMessageRefs : [])
                 const attachmentDisabledReason = usePendingAttachments
                     ? values.pendingAttachmentSubmitDisabledReason
                     : undefined

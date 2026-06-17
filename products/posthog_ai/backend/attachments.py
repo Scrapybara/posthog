@@ -1,6 +1,7 @@
 import os
 import re
 import base64
+import hashlib
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -10,6 +11,10 @@ from uuid import UUID
 
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
+from django.db import (
+    connection as db_connection,
+    transaction,
+)
 from django.db.models import Count, Sum
 from django.utils import timezone
 
@@ -28,6 +33,7 @@ MAX_TOTAL_ATTACHMENT_BYTES = 12 * 1024 * 1024
 ABANDONED_PENDING_ATTACHMENT_AGE = timedelta(hours=24)
 SUPPORTED_ATTACHMENT_CONTENT_TYPES = ("image/png", "image/jpeg")
 OBJECT_STORAGE_PREFIX = "posthog_ai/conversation_attachments"
+ATTACHMENT_QUOTA_LOCK_NAMESPACE = "posthog_ai_conversation_attachment_quota"
 _FILENAME_STRIP_RE = re.compile(r"[^\w\s\-.,()[\]]+")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _JPEG_SIGNATURE = b"\xff\xd8\xff"
@@ -102,6 +108,13 @@ def _object_key(team: Team, conversation_id: UUID, attachment_id: UUID, content_
     return f"{OBJECT_STORAGE_PREFIX}/team_{_canonical_team_id(team)}/{conversation_id}/{attachment_id}.{extension}"
 
 
+def _acquire_attachment_quota_lock(*, team_id: int, user_id: int, conversation_id: UUID) -> None:
+    lock_key = f"{ATTACHMENT_QUOTA_LOCK_NAMESPACE}:{team_id}:{user_id}:{conversation_id}"
+    lock_id = int.from_bytes(hashlib.blake2b(lock_key.encode("utf-8"), digest_size=8).digest(), "big")
+    with db_connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_id & 0x7FFFFFFFFFFFFFFF])
+
+
 def _detect_image_content_type(data: bytes) -> str:
     if data.startswith(_PNG_SIGNATURE):
         expected_format = "PNG"
@@ -119,7 +132,7 @@ def _detect_image_content_type(data: bytes) -> str:
             with Image.open(BytesIO(data)) as image:
                 image.load()
                 loaded_format = image.format
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombWarning) as error:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise AttachmentValidationError("Image file is invalid or corrupt.") from error
 
     if detected_format != expected_format or loaded_format != expected_format:
@@ -152,23 +165,6 @@ def create_attachment(
 
     data = _read_upload(uploaded_file)
     content_type = _detect_image_content_type(data)
-    pending_attachment_totals = (
-        ConversationAttachment.objects.for_team(team.id)
-        .filter(
-            conversation_id=conversation.id,
-            created_by=user,
-            deleted=False,
-            attachment_status=ConversationAttachment.AttachmentStatus.PENDING,
-        )
-        .aggregate(count=Count("id"), byte_size=Sum("byte_size"))
-    )
-    pending_count = pending_attachment_totals["count"] or 0
-    pending_byte_size = pending_attachment_totals["byte_size"] or 0
-    if pending_count >= MAX_ATTACHMENTS_PER_MESSAGE:
-        raise AttachmentValidationError("You can attach up to 4 images.")
-    if pending_byte_size + len(data) > MAX_TOTAL_ATTACHMENT_BYTES:
-        raise AttachmentValidationError("Images must be 12 MiB or smaller in total.")
-
     attachment = ConversationAttachment(
         team=team,
         conversation_id=conversation.id,
@@ -180,15 +176,35 @@ def create_attachment(
     )
     attachment.object_key = _object_key(team, conversation.id, attachment.id, content_type)
 
+    object_written = False
     try:
-        object_storage.write(attachment.object_key, data, extras={"ContentType": content_type})
+        with transaction.atomic():
+            _acquire_attachment_quota_lock(team_id=team.id, user_id=user.id, conversation_id=conversation.id)
+            pending_attachment_totals = (
+                ConversationAttachment.objects.for_team(team.id)
+                .filter(
+                    conversation_id=conversation.id,
+                    created_by=user,
+                    deleted=False,
+                    attachment_status=ConversationAttachment.AttachmentStatus.PENDING,
+                )
+                .aggregate(count=Count("id"), byte_size=Sum("byte_size"))
+            )
+            pending_count = pending_attachment_totals["count"] or 0
+            pending_byte_size = pending_attachment_totals["byte_size"] or 0
+            if pending_count >= MAX_ATTACHMENTS_PER_MESSAGE:
+                raise AttachmentValidationError("You can attach up to 4 images.")
+            if pending_byte_size + len(data) > MAX_TOTAL_ATTACHMENT_BYTES:
+                raise AttachmentValidationError("Images must be 12 MiB or smaller in total.")
+
+            object_storage.write(attachment.object_key, data, extras={"ContentType": content_type})
+            object_written = True
+            attachment.save()
     except ObjectStorageError as error:
         raise AttachmentStorageUnavailableError("Object storage write failed.") from error
-
-    try:
-        attachment.save()
     except Exception:
-        object_storage.delete(attachment.object_key)
+        if object_written:
+            object_storage.delete(attachment.object_key)
         raise
     return attachment
 
@@ -223,7 +239,10 @@ def delete_conversation_attachments(conversation: Conversation, *, deleted_by: U
     if not attachments:
         return
 
-    failed_keys = object_storage.delete_objects([attachment.object_key for attachment in attachments])
+    try:
+        failed_keys = object_storage.delete_objects([attachment.object_key for attachment in attachments])
+    except ObjectStorageError as error:
+        raise AttachmentStorageUnavailableError("Object storage delete failed.") from error
     deleted_ids = [attachment.id for attachment in attachments if attachment.object_key not in failed_keys]
     if deleted_ids:
         ConversationAttachment.objects.unscoped().filter(id__in=deleted_ids).update(
@@ -231,6 +250,8 @@ def delete_conversation_attachments(conversation: Conversation, *, deleted_by: U
             deleted_at=timezone.now(),
             deleted_by=deleted_by,
         )
+    if failed_keys:
+        raise AttachmentStorageUnavailableError("Object storage delete failed.")
 
 
 def cleanup_abandoned_pending_attachments(now: datetime | None = None) -> int:
@@ -325,7 +346,7 @@ def resolve_message_attachments(
     team: Team,
     attachment_refs: Iterable[object],
 ) -> list[ResolvedAttachment]:
-    refs_by_id: dict[UUID, str] = {}
+    ordered_refs: list[tuple[UUID, str]] = []
     for attachment_ref in attachment_refs:
         if isinstance(attachment_ref, dict):
             raw_id = attachment_ref.get("id")
@@ -336,17 +357,23 @@ def resolve_message_attachments(
         if not isinstance(raw_id, str) or not isinstance(raw_conversation_id, str):
             continue
         try:
-            refs_by_id[UUID(raw_id)] = raw_conversation_id
+            ordered_refs.append((UUID(raw_id), raw_conversation_id))
         except ValueError:
             continue
 
-    if not refs_by_id:
+    if not ordered_refs:
         return []
 
-    attachments = ConversationAttachment.objects.for_team(team.id).filter(id__in=list(refs_by_id), deleted=False)
+    attachments_by_id = {
+        attachment.id: attachment
+        for attachment in ConversationAttachment.objects.for_team(team.id).filter(
+            id__in=[attachment_id for attachment_id, _conversation_id in ordered_refs], deleted=False
+        )
+    }
     resolved: list[ResolvedAttachment] = []
-    for attachment in attachments:
-        if str(attachment.conversation_id) != refs_by_id[attachment.id]:
+    for attachment_id, conversation_id in ordered_refs:
+        attachment = attachments_by_id.get(attachment_id)
+        if attachment is None or str(attachment.conversation_id) != conversation_id:
             continue
         data = object_storage.read_bytes(attachment.object_key)
         if data is None:

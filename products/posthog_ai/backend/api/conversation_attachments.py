@@ -5,7 +5,8 @@ from django.core.files.uploadedfile import UploadedFile
 from django.db.models import QuerySet
 from django.utils.translation import gettext_lazy as _
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema, extend_schema_field
 from rest_framework import exceptions, serializers, status, viewsets
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
@@ -31,12 +32,17 @@ class AttachmentStorageUnavailable(exceptions.APIException):
     default_code = "attachment_storage_unavailable"
 
 
+@extend_schema_field(OpenApiTypes.BINARY)
+class ConversationAttachmentFileField(serializers.FileField):
+    pass
+
+
 class ConversationAttachmentCreateSerializer(serializers.Serializer):
     conversation_id = serializers.UUIDField(
         required=True,
         help_text="Conversation UUID the pending image attachment belongs to.",
     )
-    file = serializers.FileField(
+    file = ConversationAttachmentFileField(
         required=True,
         max_length=255,
         help_text="PNG or JPEG image file. Maximum size is 4 MiB.",

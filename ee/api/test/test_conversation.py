@@ -203,6 +203,7 @@ class TestConversation(APIBaseTest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Conversation.objects.filter(id=conversation_id).exists())
 
     def test_create_conversation_rejects_attachment_from_other_user(self):
         conversation_id = uuid.uuid4()
@@ -227,6 +228,33 @@ class TestConversation(APIBaseTest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Conversation.objects.filter(id=conversation_id).exists())
+
+    def test_create_sandbox_conversation_rejects_attachment_without_persisting_conversation(self):
+        conversation_id = uuid.uuid4()
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id=conversation_id,
+            created_by=self.user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+        )
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/",
+            {
+                "content": "what is in this screenshot?",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation_id),
+                "is_sandbox": True,
+                "attachment_ids": [str(attachment.id)],
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Conversation.objects.filter(id=conversation_id).exists())
 
     def test_create_conversation_rejects_too_many_attachment_refs(self):
         conversation_id = uuid.uuid4()
@@ -307,6 +335,29 @@ class TestConversation(APIBaseTest):
         attachment.refresh_from_db()
         self.assertTrue(attachment.deleted)
         self.assertEqual(attachment.deleted_by, self.user)
+
+    @patch("products.posthog_ai.backend.attachments.object_storage.delete_objects", return_value=["private/key.png"])
+    def test_destroy_conversation_keeps_conversation_visible_when_attachment_delete_fails(self, mock_delete_objects):
+        conversation = Conversation.objects.create(user=self.user, team=self.team)
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id=conversation.id,
+            created_by=self.user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+            attachment_status=ConversationAttachment.AttachmentStatus.ATTACHED,
+        )
+
+        response = self.client.delete(f"/api/environments/{self.team.id}/conversations/{conversation.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        mock_delete_objects.assert_called_once_with(["private/key.png"])
+        conversation.refresh_from_db()
+        attachment.refresh_from_db()
+        self.assertFalse(conversation.deleted)
+        self.assertFalse(attachment.deleted)
 
     def test_add_message_to_existing_conversation(self):
         with patch(

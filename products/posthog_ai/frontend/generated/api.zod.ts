@@ -14,7 +14,7 @@ import * as zod from 'zod'
  */
 export const ConversationAttachmentsCreateBody = /* @__PURE__ */ zod.object({
     conversation_id: zod.uuid().describe('Conversation UUID the pending image attachment belongs to.'),
-    file: zod.url().describe('PNG or JPEG image file. Maximum size is 4 MiB.'),
+    file: zod.instanceof(File).describe('PNG or JPEG image file. Maximum size is 4 MiB.'),
 })
 
 /**

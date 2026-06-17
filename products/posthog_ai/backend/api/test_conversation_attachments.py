@@ -3,7 +3,7 @@ from datetime import timedelta
 from io import BytesIO
 
 from posthog.test.base import APIBaseTest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
@@ -89,6 +89,25 @@ class TestConversationAttachmentAPI(APIBaseTest):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ConversationAttachment.objects.unscoped().count(), 0)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    @patch("products.posthog_ai.backend.attachments.object_storage.write")
+    @patch("products.posthog_ai.backend.attachments.Image.open")
+    def test_upload_rejects_pillow_decompression_bombs(self, mock_open, mock_write) -> None:
+        mock_open.side_effect = Image.DecompressionBombError("too many pixels")
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/conversation_attachments/",
+            {
+                "conversation_id": "11111111-1111-4111-8111-111111111111",
+                "file": SimpleUploadedFile("screenshot.png", _image_bytes(), content_type="image/png"),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ConversationAttachment.objects.unscoped().count(), 0)
+        mock_write.assert_not_called()
 
     @override_settings(OBJECT_STORAGE_ENABLED=True)
     def test_upload_rejects_existing_conversation_owned_by_other_user(self) -> None:
@@ -256,32 +275,53 @@ class TestConversationAttachmentAPI(APIBaseTest):
         self.assertTrue(old_attachment.deleted)
 
     @patch("products.posthog_ai.backend.attachments.object_storage.read_bytes")
-    def test_resolve_message_attachments_reads_private_object_bytes(self, mock_read_bytes) -> None:
+    def test_resolve_message_attachments_reads_private_object_bytes_in_reference_order(self, mock_read_bytes) -> None:
         image = _image_bytes()
-        mock_read_bytes.return_value = image
-        attachment = ConversationAttachment.objects.unscoped().create(
+        other_image = _image_bytes("JPEG")
+        mock_read_bytes.side_effect = lambda object_key: {
+            "private/first.png": image,
+            "private/second.jpg": other_image,
+        }[object_key]
+        first_attachment = ConversationAttachment.objects.unscoped().create(
             team=self.team,
             conversation_id="11111111-1111-4111-8111-111111111111",
             created_by=self.user,
             original_filename="screenshot.png",
             content_type="image/png",
             byte_size=len(image),
-            object_key="private/key.png",
+            object_key="private/first.png",
+        )
+        second_attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id="11111111-1111-4111-8111-111111111111",
+            created_by=self.user,
+            original_filename="other.jpg",
+            content_type="image/jpeg",
+            byte_size=len(other_image),
+            object_key="private/second.jpg",
         )
 
         resolved = resolve_message_attachments(
             team=self.team,
             attachment_refs=[
                 {
-                    "id": str(attachment.id),
-                    "conversation_id": str(attachment.conversation_id),
-                }
+                    "id": str(second_attachment.id),
+                    "conversation_id": str(second_attachment.conversation_id),
+                },
+                {
+                    "id": str(first_attachment.id),
+                    "conversation_id": str(first_attachment.conversation_id),
+                },
             ],
         )
 
-        self.assertEqual(len(resolved), 1)
-        self.assertEqual(resolved[0].data, image)
         self.assertEqual(
-            resolved[0].as_anthropic_block()["source"],
+            [attachment.id for attachment in resolved], [str(second_attachment.id), str(first_attachment.id)]
+        )
+        self.assertEqual(resolved[0].data, other_image)
+        self.assertEqual(resolved[1].data, image)
+        mock_read_bytes.assert_has_calls([call("private/second.jpg"), call("private/first.png")])
+        self.assertEqual(
+            resolved[1].as_anthropic_block()["source"],
             {"type": "base64", "media_type": "image/png", "data": b64encode(image).decode("ascii")},
         )

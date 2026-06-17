@@ -438,7 +438,7 @@ describe('maxThreadLogic', () => {
                 }),
             ])
 
-            logic.actions.askMax('What is in this screenshot?')
+            logic.actions.askMax('What is in this screenshot?', true, undefined, undefined, undefined, true)
             await new Promise((resolve) => setTimeout(resolve, 0))
 
             const streamPayload = streamSpy.mock.calls[0][0]
@@ -476,7 +476,7 @@ describe('maxThreadLogic', () => {
             await new Promise((resolve) => setTimeout(resolve, 0))
 
             expect(logic.values.submissionDisabledReason).toBe('Wait for image upload to finish')
-            logic.actions.askMax('try too early')
+            logic.actions.askMax('try too early', true, undefined, undefined, undefined, true)
             await new Promise((resolve) => setTimeout(resolve, 0))
             expect(api.conversations.stream).not.toHaveBeenCalled()
 
@@ -487,6 +487,42 @@ describe('maxThreadLogic', () => {
             await new Promise((resolve) => setTimeout(resolve, 0))
 
             expect(logic.values.submissionDisabledReason).toBe('Remove or retry failed image uploads')
+        })
+
+        it('does not block internal continuations on pending image uploads', async () => {
+            const streamSpy = mockStream()
+            ;(conversationAttachmentsCreate as jest.Mock).mockImplementation(() => new Promise(() => {}))
+
+            logic.actions.addPendingAttachmentFiles([imageFile()])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+            expect(logic.values.pendingAttachments[0].status).toBe('uploading')
+
+            logic.actions.askMax(null)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            const streamPayload = streamSpy.mock.calls.find(([payload]) => payload?.content === null)?.[0]
+            expect(streamPayload).toEqual(expect.objectContaining({ content: null }))
+            expect(streamPayload.attachment_ids).toBeUndefined()
+            expect(streamPayload.attachments).toBeUndefined()
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+        })
+
+        it('does not send ready pending images from non-composer askMax callers', async () => {
+            const streamSpy = mockStream()
+
+            logic.actions.addPendingAttachmentFiles([imageFile()])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(logic.values.pendingAttachments[0].status).toBe('ready')
+
+            logic.actions.askMax('hands-free turn')
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            const streamPayload = streamSpy.mock.calls.find(([payload]) => payload?.content === 'hands-free turn')?.[0]
+            expect(streamPayload).toEqual(expect.objectContaining({ content: 'hands-free turn' }))
+            expect(streamPayload.attachment_ids).toBeUndefined()
+            expect(streamPayload.attachments).toBeUndefined()
+            expect(logic.values.pendingAttachments).toHaveLength(1)
         })
 
         it('deletes removed pending attachments and allows the same image to be re-added', async () => {
@@ -874,7 +910,7 @@ describe('maxThreadLogic', () => {
             logic.actions.setConversation(MOCK_IN_PROGRESS_CONVERSATION)
             await new Promise((resolve) => setTimeout(resolve, 0))
 
-            logic.actions.askMax('Queued prompt with image')
+            logic.actions.askMax('Queued prompt with image', true, undefined, undefined, undefined, true)
             await new Promise((resolve) => setTimeout(resolve, 0))
 
             expect(enqueueSpy).toHaveBeenCalledWith(

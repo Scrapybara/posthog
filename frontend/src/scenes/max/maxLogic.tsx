@@ -197,13 +197,15 @@ export const maxLogic = kea<maxLogicType>([
             addToThread: boolean = true,
             uiContext?: Partial<MaxUIContext>,
             attachmentIds?: string[],
-            attachments?: HumanMessage['attachments']
+            attachments?: HumanMessage['attachments'],
+            consumePendingAttachments: boolean = false
         ) => ({
             prompt,
             addToThread,
             uiContext,
             attachmentIds,
             attachments,
+            consumePendingAttachments,
         }), // used by maxThreadLogic to start a conversation
         scrollThreadToBottom: (behavior?: 'instant' | 'smooth') => ({ behavior }),
         openConversation: (conversationId: string) => ({ conversationId }),

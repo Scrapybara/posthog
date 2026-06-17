@@ -11,7 +11,7 @@ export interface ConversationAttachmentCreateApi {
     /** Conversation UUID the pending image attachment belongs to. */
     conversation_id: string
     /** PNG or JPEG image file. Maximum size is 4 MiB. */
-    file: string
+    file: Blob
 }
 
 /**

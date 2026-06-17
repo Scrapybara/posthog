@@ -47,6 +47,51 @@ class TestOpenAIUtils(BaseTest):
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,anBlZy1ieXRlcw=="}},
         )
 
+    @patch("ee.hogai.utils.openai.resolve_message_attachments")
+    def test_convert_human_message_preserves_multiple_image_attachment_order(self, mock_resolve):
+        mock_resolve.return_value = [
+            ResolvedAttachment(
+                id="first-attachment-id",
+                filename="first.png",
+                content_type="image/png",
+                byte_size=5,
+                data=b"first",
+            ),
+            ResolvedAttachment(
+                id="second-attachment-id",
+                filename="second.jpg",
+                content_type="image/jpeg",
+                byte_size=6,
+                data=b"second",
+            ),
+        ]
+        message = HumanMessage(
+            content="compare these screenshots",
+            attachments=[
+                {
+                    "id": "first-attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "first.png",
+                    "content_type": "image/png",
+                    "byte_size": 5,
+                },
+                {
+                    "id": "second-attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "second.jpg",
+                    "content_type": "image/jpeg",
+                    "byte_size": 6,
+                },
+            ],
+        )
+
+        result = convert_human_message_to_openai_message(message, self.team)
+
+        assert isinstance(result.content, list)
+        self.assertEqual(result.content[0], {"type": "text", "text": "compare these screenshots"})
+        self.assertEqual(result.content[1]["image_url"]["url"], "data:image/png;base64,Zmlyc3Q=")
+        self.assertEqual(result.content[2]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25k")
+
     def test_convert_context_message_to_openai_message(self):
         message = ContextMessage(content="Context information")
 

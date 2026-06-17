@@ -403,6 +403,22 @@ class TestEventFilterConfigModel(BaseTest):
         self.assertIsNone(config.filter_tree)
         self.assertEqual(config.test_cases, [])
 
+    def test_save_empty_filter_tree_with_update_fields_persists_normalized_fields(self):
+        config = EventFilterConfig.objects.create(
+            team=self.team,
+            mode=EventFilterMode.LIVE,
+            filter_tree=_cond("event_name", "exact", "$pageview"),
+            test_cases=[{"event_name": "$pageview", "expected_result": "drop"}],
+        )
+
+        config.filter_tree = _or()
+        config.save(update_fields={"filter_tree"})
+        config.refresh_from_db()
+
+        self.assertEqual(config.mode, EventFilterMode.DISABLED)
+        self.assertIsNone(config.filter_tree)
+        self.assertEqual(config.test_cases, [])
+
     def test_save_prunes_filter_tree(self):
         # Empty and single-child nested groups are pruned, but the root stays a group.
         tree = _or(_and(_cond("event_name", "exact", "pageview")), {"type": "and", "children": []})

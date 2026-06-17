@@ -4226,6 +4226,17 @@ class TestExperimentService(APIBaseTest):
     def _base_queryset(self):
         return Experiment.objects.filter(team=self.team)
 
+    def _make_ordering_experiment(self, name, *, conclusion=None, created_by="__self__"):
+        flag = self._create_flag(key=f"order-{name.lower().replace(' ', '-')}")
+        creator = self.user if created_by == "__self__" else created_by
+        return Experiment.objects.create(
+            team=self.team,
+            feature_flag=flag,
+            name=name,
+            conclusion=conclusion,
+            created_by=creator,
+        )
+
     def test_order_by_invalid_field_raises_validation_error(self):
         """Ordering by a non-allowlisted field should be rejected."""
         service = self._service()
@@ -4257,7 +4268,98 @@ class TestExperimentService(APIBaseTest):
     def test_order_by_valid_fields_works(self, order: str):
         service = self._service()
         qs = service.filter_experiments_queryset(self._base_queryset(), action="list", query_params={"order": order})
-        assert qs is not None
+        # Force SQL evaluation so annotation errors (e.g. a mixed-type Coalesce missing
+        # output_field) surface here rather than as a 500 at request time.
+        assert list(qs.values_list("id", flat=True)) == []
+
+    @parameterized.expand(
+        [
+            ("ascending", "conclusion", ["Won", "Lost", "Inconclusive", "Stopped", "Invalid", "Undecided"]),
+            ("descending", "-conclusion", ["Undecided", "Invalid", "Stopped", "Inconclusive", "Lost", "Won"]),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_conclusion(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        self._make_ordering_experiment("Inconclusive", conclusion="inconclusive")
+        self._make_ordering_experiment("Undecided", conclusion=None)
+        self._make_ordering_experiment("Won", conclusion="won")
+        self._make_ordering_experiment("Invalid", conclusion="invalid")
+        self._make_ordering_experiment("Lost", conclusion="lost")
+        self._make_ordering_experiment("Stopped", conclusion="stopped_early")
+
+        queryset = service.filter_experiments_queryset(
+            self._base_queryset(),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    def test_filter_experiments_queryset_orders_by_conclusion_is_global_across_pages(self) -> None:
+        service = self._service()
+        self._make_ordering_experiment("Won", conclusion="won")
+        self._make_ordering_experiment("Lost", conclusion="lost")
+        self._make_ordering_experiment("Inconclusive", conclusion="inconclusive")
+        self._make_ordering_experiment("Stopped", conclusion="stopped_early")
+        self._make_ordering_experiment("Invalid", conclusion="invalid")
+        self._make_ordering_experiment("Undecided", conclusion=None)
+
+        queryset = service.filter_experiments_queryset(
+            self._base_queryset(),
+            action="list",
+            query_params={"order": "conclusion"},
+        )
+
+        # Slicing the ordered queryset (how the viewset paginates) must yield a globally
+        # sorted result, not a per-page client sort.
+        assert list(queryset.values_list("name", flat=True)[0:3]) == ["Won", "Lost", "Inconclusive"]
+        assert list(queryset.values_list("name", flat=True)[3:6]) == ["Stopped", "Invalid", "Undecided"]
+
+    @parameterized.expand(
+        [
+            ("ascending", "created_by", ["Alice exp", "Bob exp", "No creator"]),
+            ("descending", "-created_by", ["No creator", "Bob exp", "Alice exp"]),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_created_by(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        alice = self._create_user("alice@example.com", first_name="Alice")
+        bob = self._create_user("bob@example.com", first_name="Bob")
+        self._make_ordering_experiment("Bob exp", created_by=bob)
+        self._make_ordering_experiment("Alice exp", created_by=alice)
+        self._make_ordering_experiment("No creator", created_by=None)
+
+        queryset = service.filter_experiments_queryset(
+            self._base_queryset(),
+            action="list",
+            query_params={"order": order},
+        )
+
+        # Force evaluation — the mixed-type Coalesce regression only raised once the SQL ran.
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    def test_filter_experiments_queryset_orders_by_created_by_falls_back_to_email(self) -> None:
+        service = self._service()
+        # A blank first_name must fall back to email instead of collapsing to an empty
+        # string, matching the frontend `first_name || email` sorter.
+        blank_name = self._create_user("zzz@example.com", first_name="")
+        named = self._create_user("a@example.com", first_name="mmm")
+        self._make_ordering_experiment("Blank exp", created_by=blank_name)
+        self._make_ordering_experiment("Named exp", created_by=named)
+
+        queryset = service.filter_experiments_queryset(
+            self._base_queryset(),
+            action="list",
+            query_params={"order": "created_by"},
+        )
+
+        # "mmm" < "zzz@example.com"; without the email fallback the blank name would
+        # collapse to "" and sort first instead.
+        assert list(queryset.values_list("name", flat=True)) == ["Named exp", "Blank exp"]
 
     def test_eligible_flags_order_by_invalid_field_raises(self):
         """Ordering eligible flags by a non-allowlisted field should be rejected."""

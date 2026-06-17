@@ -10,7 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
-from django.db.models import Case, Count, F, Prefetch, Q, QuerySet, Value, When
+from django.db.models import Case, CharField, Count, F, Prefetch, Q, QuerySet, Value, When
 from django.db.models.functions import Coalesce, Now, NullIf
 from django.utils import timezone
 
@@ -458,7 +458,20 @@ class ExperimentService:
         "-duration",
         "status",
         "-status",
+        "conclusion",
+        "-conclusion",
     }
+
+    # Fixed ranking for the experiment conclusion ("Result" column). Mirrors the
+    # frontend list sorter so server-side ordering stays consistent across pages:
+    # won < lost < inconclusive < stopped_early < invalid, with no conclusion last.
+    CONCLUSION_SORT_RANKING = (
+        ("won", 1),
+        ("lost", 2),
+        ("inconclusive", 3),
+        ("stopped_early", 4),
+        ("invalid", 5),
+    )
 
     ELIGIBLE_FLAGS_ORDER_ALLOWLIST = {
         "created_at",
@@ -2531,8 +2544,22 @@ class ExperimentService:
                     created_by_display=Coalesce(
                         NullIf(F("created_by__first_name"), Value("")),
                         F("created_by__email"),
+                        # first_name is a CharField and email an EmailField; Coalesce
+                        # over mixed field types needs an explicit output_field.
+                        output_field=CharField(),
                     )
                 ).order_by(f"{prefix}created_by_display")
+            elif order_value in ["conclusion", "-conclusion"]:
+                # Order by the fixed conclusion ranking (not alphabetically) so the
+                # server matches the frontend "Result" sorter; missing conclusions sort
+                # last ascending (and first descending, mirroring the client sorter).
+                prefix = "-" if order_value.startswith("-") else ""
+                queryset = queryset.annotate(
+                    conclusion_sort_key=Case(
+                        *[When(conclusion=value, then=Value(rank)) for value, rank in self.CONCLUSION_SORT_RANKING],
+                        default=Value(len(self.CONCLUSION_SORT_RANKING) + 1),
+                    )
+                ).order_by(f"{prefix}conclusion_sort_key")
             else:
                 queryset = queryset.order_by(order_value)
         else:

@@ -52,3 +52,9 @@ def resolve_experiment_baseline_variant_key(experiment: "Experiment") -> str:
         experiment.stats_config,
         excluded_variants=excluded_variants,
     )
+
+
+def get_experiment_fingerprint_baseline_variant_key(experiment: "Experiment") -> str | None:
+    if get_explicit_baseline_variant_key(experiment.stats_config) is None:
+        return None
+    return resolve_experiment_baseline_variant_key(experiment)

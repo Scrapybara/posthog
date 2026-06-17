@@ -26,7 +26,7 @@ from posthog.models.team.team import Team
 from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 
 from products.ai_observability.backend.models.llm_prompt import LLMPrompt
-from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.facade.contracts import CreateExperimentInput
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
@@ -384,7 +384,7 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
         # Update date ranges in saved metrics
         # Note: Action name refresh is handled by ExperimentToSavedMetricSerializer.to_representation
         try:
-            baseline_variant_key = resolve_experiment_baseline_variant_key(instance)
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(instance)
         except ValidationError:
             baseline_variant_key = None
 

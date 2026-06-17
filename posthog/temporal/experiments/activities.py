@@ -28,7 +28,7 @@ from posthog.temporal.experiments.utils import (
     get_metric,
 )
 
-from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -73,7 +73,7 @@ def _get_experiment_regular_metrics_for_hour_sync(hour: int) -> list[ExperimentR
 
     for experiment in experiments:
         try:
-            baseline_variant_key = resolve_experiment_baseline_variant_key(experiment)
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
         except ValidationError as error:
             logger.warning(
                 "Skipping experiment metric discovery because baseline variant is invalid",
@@ -337,7 +337,7 @@ def _get_experiment_saved_metrics_for_hour_sync(hour: int) -> list[ExperimentSav
 
     for experiment in experiments:
         try:
-            baseline_variant_key = resolve_experiment_baseline_variant_key(experiment)
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
         except ValidationError as error:
             logger.warning(
                 "Skipping experiment saved metric discovery because baseline variant is invalid",

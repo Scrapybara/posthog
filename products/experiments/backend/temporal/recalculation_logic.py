@@ -27,7 +27,7 @@ from posthog.models.scoping import team_scope
 from posthog.ph_client import ph_scoped_capture
 from posthog.sync import database_sync_to_async
 
-from products.experiments.backend.baseline import resolve_experiment_baseline_variant_key
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -439,7 +439,7 @@ def _calculate_experiment_metric_for_recalculation_sync(
             return _fail(recalculation_id, metric_uuid, "discovery", f"Experiment {experiment_id} has no start_date")
 
         try:
-            baseline_variant_key = resolve_experiment_baseline_variant_key(experiment)
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
         except ValidationError as error:
             return _fail(recalculation_id, metric_uuid, "discovery", str(error.detail))
 

@@ -30,7 +30,7 @@ from posthog.utils import str_to_bool
 
 from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
-from products.experiments.backend.baseline import resolve_baseline_variant_key
+from products.experiments.backend.baseline import get_explicit_baseline_variant_key, resolve_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.funnel_validation import FunnelDWValidator
 from products.experiments.backend.metric_utils import collect_metric_events_and_action_ids, resolve_action_events
@@ -769,11 +769,12 @@ class ExperimentService:
 
         team_config = self._get_team_experiments_config()
         stats_config = self._apply_stats_config_defaults(stats_config, team_config)
-        baseline_variant_key = resolve_baseline_variant_key(
+        resolve_baseline_variant_key(
             used_variant_keys,
             stats_config,
             excluded_variants=(parameters or {}).get("excluded_variants"),
         )
+        fingerprint_baseline_variant_key = get_explicit_baseline_variant_key(stats_config)
         exposure_criteria = self._apply_exposure_criteria_defaults(exposure_criteria)
 
         if only_count_matured_users is None:
@@ -789,7 +790,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
-                    baseline_variant_key=baseline_variant_key,
+                    baseline_variant_key=fingerprint_baseline_variant_key,
                 )
         if metrics_secondary is not None:
             for metric in metrics_secondary:
@@ -800,7 +801,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
-                    baseline_variant_key=baseline_variant_key,
+                    baseline_variant_key=fingerprint_baseline_variant_key,
                 )
 
         self.validate_no_duplicate_metric_uuids(metrics, metrics_secondary)
@@ -1275,11 +1276,12 @@ class ExperimentService:
             variant_keys,
             excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
         )
-        baseline_variant_key = resolve_baseline_variant_key(
+        resolve_baseline_variant_key(
             variant_keys,
             experiment.stats_config,
             excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
         )
+        fingerprint_baseline_variant_key = get_explicit_baseline_variant_key(experiment.stats_config)
 
         # Set start_date
         experiment.start_date = timezone.now()
@@ -1298,7 +1300,7 @@ class ExperimentService:
                         experiment.exposure_criteria,
                         only_count_matured_users=experiment.only_count_matured_users,
                         excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
-                        baseline_variant_key=baseline_variant_key,
+                        baseline_variant_key=fingerprint_baseline_variant_key,
                     ),
                 )
 
@@ -2019,11 +2021,9 @@ class ExperimentService:
         new_parameters = update_data.get("parameters", experiment.parameters)
         excluded_variants = (new_parameters or {}).get("excluded_variants")
         variant_keys = self._resolved_variant_keys(experiment, update_data)
-        baseline_variant_key = (
+        if variant_keys:
             resolve_baseline_variant_key(variant_keys, stats_config, excluded_variants=excluded_variants)
-            if variant_keys
-            else None
-        )
+        fingerprint_baseline_variant_key = get_explicit_baseline_variant_key(stats_config)
 
         for metric_field in ["metrics", "metrics_secondary"]:
             metrics = update_data.get(metric_field, getattr(experiment, metric_field, None))
@@ -2035,7 +2035,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
-                    baseline_variant_key=baseline_variant_key,
+                    baseline_variant_key=fingerprint_baseline_variant_key,
                 )
 
         # --- metric ordering sync + validation -----------------------------

@@ -23,7 +23,9 @@ from posthog.models.team.extensions import get_or_create_team_extension
 from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
 from products.event_definitions.backend.models.event_definition import EventDefinition
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.experiment_service import ExperimentService
+from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.models.experiment import (
     Experiment,
     ExperimentHoldout,
@@ -5090,6 +5092,71 @@ class TestExperimentService(APIBaseTest):
         )
 
         assert updated.stats_config["baseline_variant_key"] == "variant-a"
+
+    def test_implicit_default_baseline_does_not_change_metric_fingerprint(self) -> None:
+        flag = self._create_flag(
+            key="implicit-baseline-fingerprint",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 50},
+                {"key": "test", "name": "Test", "rollout_percentage": 50},
+            ],
+        )
+        service = self._service()
+        experiment = service.create_experiment(name="Implicit baseline fingerprint", feature_flag_key=flag.key)
+        metric = {"uuid": "metric-1", "kind": "ExperimentMetric", "metric_type": "mean"}
+
+        assert get_experiment_fingerprint_baseline_variant_key(experiment) is None
+        assert compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
+        ) == compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
+
+    def test_explicit_baseline_changes_metric_fingerprint(self) -> None:
+        flag = self._create_flag(
+            key="explicit-baseline-fingerprint",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 33},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 33},
+            ],
+        )
+        service = self._service()
+        experiment = service.create_experiment(
+            name="Explicit baseline fingerprint",
+            feature_flag_key=flag.key,
+            stats_config={"baseline_variant_key": "variant-a"},
+        )
+        metric = {"uuid": "metric-1", "kind": "ExperimentMetric", "metric_type": "mean"}
+
+        assert get_experiment_fingerprint_baseline_variant_key(experiment) == "variant-a"
+        assert compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
+        ) != compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
 
     def test_update_experiment_allows_excluding_control_when_explicit_baseline_is_different(self) -> None:
         self._create_flag(

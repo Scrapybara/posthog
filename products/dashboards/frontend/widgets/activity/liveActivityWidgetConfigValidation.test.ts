@@ -44,6 +44,21 @@ describe('liveActivityWidgetConfigValidation', () => {
             }
         })
 
+        it('rejects fractional limit and refresh interval settings', () => {
+            const result = validateLiveActivityWidgetConfigInput({
+                limit: 5.5,
+                refreshIntervalSeconds: 15.5,
+                filterTestAccounts: true,
+                baseConfig: liveActivityWidgetConfigSchema.parse({}),
+            })
+
+            expect(result.success).toBe(false)
+            if (!result.success) {
+                expect(result.fieldErrors.limit).toBe('Expected integer')
+                expect(result.fieldErrors.refreshIntervalSeconds).toBe('Expected integer')
+            }
+        })
+
         it('accepts valid config', () => {
             const result = validateLiveActivityWidgetConfigInput({
                 limit: 8,
@@ -76,6 +91,22 @@ describe('liveActivityWidgetConfigValidation', () => {
                 })
             ).toEqual({
                 limit: 'Too big: expected number to be <=10',
+            })
+        })
+
+        it('maps fractional config values to local field errors', () => {
+            const error = new ApiError('limit must be an integer.', 400, undefined, {
+                config: 'limit must be an integer.',
+            })
+
+            expect(
+                parseLiveActivityWidgetConfigApiError(error, {
+                    limit: 5.5,
+                    refreshIntervalSeconds: 15.5,
+                })
+            ).toEqual({
+                limit: 'Expected integer',
+                refreshIntervalSeconds: 'Expected integer',
             })
         })
     })

@@ -17,6 +17,7 @@ function getSchemaShape(schema: z.ZodTypeAny): Record<string, z.ZodTypeAny> {
 
 describe('dashboard-update schema', () => {
     const tool = GENERATED_TOOLS['dashboard-update']!()
+    const batchAddTool = GENERATED_TOOLS['dashboard-widgets-batch-add']!()
 
     it('includes every OpenAPI PATCH body field from DashboardsPartialUpdateBody', () => {
         const toolShape = getSchemaShape(tool.schema)
@@ -36,9 +37,50 @@ describe('dashboard-update schema', () => {
             use_template: '',
             use_dashboard: null,
             delete_insights: false,
-            tiles: [{ id: 1, widget: { config: { limit: 10 } } }],
+            tiles: [{ id: 1, widget: { widget_type: 'live_activity', config: { limit: 10 } } }],
         })
 
         expect(result.success).toBe(true)
+    })
+
+    it('preserves live activity config fields when widget_type is provided', () => {
+        const result = tool.schema.safeParse({
+            id: 1,
+            tiles: [
+                {
+                    id: 2,
+                    widget: {
+                        widget_type: 'live_activity',
+                        config: { filterTestAccounts: false, refreshIntervalSeconds: 30 },
+                    },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(true)
+        expect(result.data.tiles?.[0]?.widget?.config).toEqual({
+            filterTestAccounts: false,
+            limit: 5,
+            refreshIntervalSeconds: 30,
+        })
+    })
+
+    it('preserves live activity config fields for batch-add widgets', () => {
+        const result = batchAddTool.schema.safeParse({
+            id: 1,
+            widgets: [
+                {
+                    widget_type: 'live_activity',
+                    config: { filterTestAccounts: false, refreshIntervalSeconds: 30 },
+                },
+            ],
+        })
+
+        expect(result.success).toBe(true)
+        expect(result.data.widgets?.[0]?.config).toEqual({
+            filterTestAccounts: false,
+            limit: 5,
+            refreshIntervalSeconds: 30,
+        })
     })
 })

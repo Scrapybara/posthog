@@ -79,9 +79,11 @@ def _build_openapi_serializers() -> tuple[
     dict[str, type[serializers.Serializer]],
     dict[str, type[serializers.Serializer]],
     dict[str, type[serializers.Serializer]],
+    dict[str, type[serializers.Serializer]],
 ]:
     config_serializers: dict[str, type[serializers.Serializer]] = {}
     add_request_serializers: dict[str, type[serializers.Serializer]] = {}
+    patch_request_serializers: dict[str, type[serializers.Serializer]] = {}
     catalog_entry_serializers: dict[str, type[serializers.Serializer]] = {}
 
     for widget_type, spec in WIDGET_SPECS.items():
@@ -97,6 +99,36 @@ def _build_openapi_serializers() -> tuple[
                 "config": pydantic_config_field(
                     spec.config_model,
                     help_text=f"Configuration for the {spec.label.lower()} widget.",
+                ),
+            },
+        )
+        patch_request_serializers[widget_type] = type(
+            f"{prefix}PatchRequestOpenApiSerializer",
+            (serializers.Serializer,),
+            {
+                "id": serializers.UUIDField(
+                    required=False,
+                    help_text="Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                ),
+                "widget_type": serializers.ChoiceField(
+                    choices=[widget_type],
+                ),
+                "config": pydantic_config_field(
+                    spec.config_model,
+                    required=False,
+                    help_text=f"Configuration patch for the {spec.label.lower()} widget.",
+                ),
+                "name": serializers.CharField(
+                    max_length=400,
+                    required=False,
+                    allow_null=True,
+                    allow_blank=True,
+                    help_text="Optional custom display name for the widget tile.",
+                ),
+                "description": serializers.CharField(
+                    required=False,
+                    allow_blank=True,
+                    help_text="Optional markdown description shown when show_description is enabled.",
                 ),
             },
         )
@@ -120,12 +152,15 @@ def _build_openapi_serializers() -> tuple[
             },
         )
 
-    return config_serializers, add_request_serializers, catalog_entry_serializers
+    return config_serializers, add_request_serializers, patch_request_serializers, catalog_entry_serializers
 
 
-WIDGET_CONFIG_SERIALIZERS, _WIDGET_ADD_REQUEST_SERIALIZERS, _WIDGET_CATALOG_ENTRY_SERIALIZERS = (
-    _build_openapi_serializers()
-)
+(
+    WIDGET_CONFIG_SERIALIZERS,
+    _WIDGET_ADD_REQUEST_SERIALIZERS,
+    _WIDGET_PATCH_REQUEST_SERIALIZERS,
+    _WIDGET_CATALOG_ENTRY_SERIALIZERS,
+) = _build_openapi_serializers()
 
 DashboardWidgetConfigOpenApi = PolymorphicProxySerializer(
     component_name="DashboardWidgetConfig",
@@ -145,6 +180,14 @@ AddDashboardWidgetRequestOpenApi = PolymorphicProxySerializer(
     component_name="AddDashboardWidgetRequest",
     serializers=cast("dict[str, Any]", _WIDGET_ADD_REQUEST_SERIALIZERS),
     resource_type_field_name="widget_type",
+)
+
+DashboardPatchWidgetRequestOpenApi = PolymorphicProxySerializer(
+    component_name="DashboardPatchWidgetRequest",
+    serializers=cast("dict[str, Any]", _WIDGET_PATCH_REQUEST_SERIALIZERS),
+    resource_type_field_name="widget_type",
+    required=False,
+    help_text="Nested widget row updates.",
 )
 
 WidgetCatalogEntryOpenApi = PolymorphicProxySerializer(
@@ -191,7 +234,7 @@ class DashboardPatchWidgetOpenApiSerializer(serializers.Serializer):
 
 class DashboardPatchTileOpenApiSerializer(serializers.Serializer):
     id = serializers.IntegerField(required=False, help_text="Dashboard tile ID to update.")
-    widget = DashboardPatchWidgetOpenApiSerializer(required=False, help_text="Nested widget row updates.")
+    widget = DashboardPatchWidgetRequestOpenApi
 
 
 class PatchedDashboardOpenApiSerializer(serializers.Serializer):

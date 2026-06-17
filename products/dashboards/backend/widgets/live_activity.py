@@ -215,6 +215,22 @@ def _active_users_lower_bound(events: list[dict[str, Any]]) -> int:
     return len(distinct_ids)
 
 
+def _latest_event_timestamp_lower_bound(current: str | None, events: list[dict[str, Any]]) -> str | None:
+    if not events:
+        return current
+
+    feed_timestamp = events[0]["timestamp"]
+    parsed_feed_timestamp = _parse_serialized_timestamp(feed_timestamp)
+    if parsed_feed_timestamp is None:
+        return current
+
+    parsed_current = _parse_serialized_timestamp(current)
+    if parsed_current is None or parsed_feed_timestamp > parsed_current:
+        return feed_timestamp
+
+    return current
+
+
 def _peak_events_per_minute(pulse: list[dict[str, Any]]) -> int:
     buckets_per_minute = 60 // LIVE_ACTIVITY_BUCKET_SECONDS
     counts = [int(bucket["count"]) for bucket in pulse]
@@ -274,8 +290,7 @@ def run_live_activity_widget(
     events = [_feed_row_to_event(row) for row in feed_rows]
     events_in_window = max(events_in_window, len(events))
     active_users = max(active_users, _active_users_lower_bound(events))
-    if latest_event_timestamp is None and events:
-        latest_event_timestamp = events[0]["timestamp"]
+    latest_event_timestamp = _latest_event_timestamp_lower_bound(latest_event_timestamp, events)
     pulse = _build_pulse(pulse_rows, window_start)
     _apply_feed_lower_bounds_to_pulse(pulse, events, window_start)
 

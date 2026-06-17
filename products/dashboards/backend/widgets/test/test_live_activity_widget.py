@@ -150,7 +150,7 @@ class TestLiveActivityWidget(ClickhouseTestMixin, APIBaseTest):
         def runner_side_effect(*_args: object, **kwargs: object) -> MagicMock:
             query = kwargs["query"]
             if "events_in_window" in query.query:
-                results = [[0, 0, datetime(1970, 1, 1, tzinfo=UTC)]]
+                results = [[1, 1, datetime(2026, 6, 17, 11, 59, 30, tzinfo=UTC)]]
             elif "bucket_index" in query.query:
                 results = []
             else:

@@ -1738,6 +1738,29 @@ export namespace Schemas {
       required_product_access?: string | null;
     }
 
+    export type ActivityEventsListWidgetPatchRequestOpenApiWidgetType = typeof ActivityEventsListWidgetPatchRequestOpenApiWidgetType[keyof typeof ActivityEventsListWidgetPatchRequestOpenApiWidgetType];
+
+
+    export const ActivityEventsListWidgetPatchRequestOpenApiWidgetType = {
+      ActivityEventsList: 'activity_events_list',
+    } as const;
+
+    export interface ActivityEventsListWidgetPatchRequestOpenApi {
+      /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+      id?: string;
+      widget_type: ActivityEventsListWidgetPatchRequestOpenApiWidgetType;
+      /** Configuration patch for the recent events widget. */
+      config?: ActivityEventsListWidgetConfig;
+      /**
+         * Optional custom display name for the widget tile.
+         * @maxLength 400
+         * @nullable
+         */
+      name?: string | null;
+      /** Optional markdown description shown when show_description is enabled. */
+      description?: string;
+    }
+
     /**
      * * `activity_events_list` - activity_events_list
      */
@@ -13778,34 +13801,19 @@ export namespace Schemas {
       properties?: (EventPropertyFilter | PersonPropertyFilter | ElementPropertyFilter | EventMetadataPropertyFilter | SessionPropertyFilter | CohortPropertyFilter | RecordingPropertyFilter | LogEntryPropertyFilter | GroupPropertyFilter | FeaturePropertyFilter | FlagPropertyFilter | HogQLPropertyFilter | EmptyPropertyFilter | DataWarehousePropertyFilter | DataWarehousePersonPropertyFilter | ErrorTrackingIssueFilter | LogPropertyFilter | SpanPropertyFilter | RevenueAnalyticsPropertyFilter | WorkflowVariablePropertyFilter)[] | null;
     }
 
-    /**
-     * * `activity_events_list` - activity_events_list
-     * * `error_tracking_list` - error_tracking_list
-     * * `live_activity` - live_activity
-     * * `session_replay_list` - session_replay_list
-     */
-    export type DashboardPatchWidgetOpenApiWidgetTypeEnum = typeof DashboardPatchWidgetOpenApiWidgetTypeEnum[keyof typeof DashboardPatchWidgetOpenApiWidgetTypeEnum];
+    export type ErrorTrackingListWidgetPatchRequestOpenApiWidgetType = typeof ErrorTrackingListWidgetPatchRequestOpenApiWidgetType[keyof typeof ErrorTrackingListWidgetPatchRequestOpenApiWidgetType];
 
 
-    export const DashboardPatchWidgetOpenApiWidgetTypeEnum = {
-      ActivityEventsList: 'activity_events_list',
+    export const ErrorTrackingListWidgetPatchRequestOpenApiWidgetType = {
       ErrorTrackingList: 'error_tracking_list',
-      LiveActivity: 'live_activity',
-      SessionReplayList: 'session_replay_list',
     } as const;
 
-    export interface DashboardPatchWidgetOpenApi {
+    export interface ErrorTrackingListWidgetPatchRequestOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id?: string;
-      /** Widget type identifier (cannot be changed on update).
-       *
-       * * `activity_events_list` - activity_events_list
-       * * `error_tracking_list` - error_tracking_list
-       * * `live_activity` - live_activity
-       * * `session_replay_list` - session_replay_list */
-      widget_type?: DashboardPatchWidgetOpenApiWidgetTypeEnum;
-      /** Widget-specific configuration. Shape depends on the tile's widget_type. */
-      config?: DashboardWidgetConfig;
+      widget_type: ErrorTrackingListWidgetPatchRequestOpenApiWidgetType;
+      /** Configuration patch for the top issues widget. */
+      config?: ErrorTrackingListWidgetConfig;
       /**
          * Optional custom display name for the widget tile.
          * @maxLength 400
@@ -13816,11 +13824,59 @@ export namespace Schemas {
       description?: string;
     }
 
+    export type LiveActivityWidgetPatchRequestOpenApiWidgetType = typeof LiveActivityWidgetPatchRequestOpenApiWidgetType[keyof typeof LiveActivityWidgetPatchRequestOpenApiWidgetType];
+
+
+    export const LiveActivityWidgetPatchRequestOpenApiWidgetType = {
+      LiveActivity: 'live_activity',
+    } as const;
+
+    export interface LiveActivityWidgetPatchRequestOpenApi {
+      /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+      id?: string;
+      widget_type: LiveActivityWidgetPatchRequestOpenApiWidgetType;
+      /** Configuration patch for the live activity widget. */
+      config?: LiveActivityWidgetConfig;
+      /**
+         * Optional custom display name for the widget tile.
+         * @maxLength 400
+         * @nullable
+         */
+      name?: string | null;
+      /** Optional markdown description shown when show_description is enabled. */
+      description?: string;
+    }
+
+    export type SessionReplayListWidgetPatchRequestOpenApiWidgetType = typeof SessionReplayListWidgetPatchRequestOpenApiWidgetType[keyof typeof SessionReplayListWidgetPatchRequestOpenApiWidgetType];
+
+
+    export const SessionReplayListWidgetPatchRequestOpenApiWidgetType = {
+      SessionReplayList: 'session_replay_list',
+    } as const;
+
+    export interface SessionReplayListWidgetPatchRequestOpenApi {
+      /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+      id?: string;
+      widget_type: SessionReplayListWidgetPatchRequestOpenApiWidgetType;
+      /** Configuration patch for the recent recordings widget. */
+      config?: SessionReplayListWidgetConfig;
+      /**
+         * Optional custom display name for the widget tile.
+         * @maxLength 400
+         * @nullable
+         */
+      name?: string | null;
+      /** Optional markdown description shown when show_description is enabled. */
+      description?: string;
+    }
+
+    export type DashboardPatchWidgetRequest = ActivityEventsListWidgetPatchRequestOpenApi | ErrorTrackingListWidgetPatchRequestOpenApi | LiveActivityWidgetPatchRequestOpenApi | SessionReplayListWidgetPatchRequestOpenApi;
+
     export interface DashboardPatchTileOpenApi {
+      /** Nested widget row updates. */
+      widget?: DashboardPatchWidgetRequest;
       /** Dashboard tile ID to update. */
       id?: number;
-      /** Nested widget row updates. */
-      widget?: DashboardPatchWidgetOpenApi;
     }
 
     /**

@@ -364,20 +364,11 @@ export interface DashboardCollaboratorApi {
     user_uuid: string
 }
 
-/**
- * * `activity_events_list` - activity_events_list
- * * `error_tracking_list` - error_tracking_list
- * * `live_activity` - live_activity
- * * `session_replay_list` - session_replay_list
- */
-export type DashboardPatchWidgetOpenApiWidgetTypeEnumApi =
-    (typeof DashboardPatchWidgetOpenApiWidgetTypeEnumApi)[keyof typeof DashboardPatchWidgetOpenApiWidgetTypeEnumApi]
+export type ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType =
+    (typeof ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType]
 
-export const DashboardPatchWidgetOpenApiWidgetTypeEnumApi = {
+export const ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType = {
     ActivityEventsList: 'activity_events_list',
-    ErrorTrackingList: 'error_tracking_list',
-    LiveActivity: 'live_activity',
-    SessionReplayList: 'session_replay_list',
 } as const
 
 export type WidgetDateRangeApiDateFrom =
@@ -462,6 +453,29 @@ export interface ActivityEventsListWidgetConfigApi {
     limit?: number
 }
 
+export interface ActivityEventsListWidgetPatchRequestOpenApiApi {
+    /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+    id?: string
+    widget_type: ActivityEventsListWidgetPatchRequestOpenApiApiWidgetType
+    /** Configuration patch for the recent events widget. */
+    config?: ActivityEventsListWidgetConfigApi
+    /**
+     * Optional custom display name for the widget tile.
+     * @maxLength 400
+     * @nullable
+     */
+    name?: string | null
+    /** Optional markdown description shown when show_description is enabled. */
+    description?: string
+}
+
+export type ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType =
+    (typeof ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType]
+
+export const ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType = {
+    ErrorTrackingList: 'error_tracking_list',
+} as const
+
 /**
  * Issue ranking column.
  */
@@ -536,6 +550,29 @@ export interface ErrorTrackingListWidgetConfigApi {
     assignee?: WidgetAssigneeFilterApi | null
 }
 
+export interface ErrorTrackingListWidgetPatchRequestOpenApiApi {
+    /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+    id?: string
+    widget_type: ErrorTrackingListWidgetPatchRequestOpenApiApiWidgetType
+    /** Configuration patch for the top issues widget. */
+    config?: ErrorTrackingListWidgetConfigApi
+    /**
+     * Optional custom display name for the widget tile.
+     * @maxLength 400
+     * @nullable
+     */
+    name?: string | null
+    /** Optional markdown description shown when show_description is enabled. */
+    description?: string
+}
+
+export type LiveActivityWidgetPatchRequestOpenApiApiWidgetType =
+    (typeof LiveActivityWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof LiveActivityWidgetPatchRequestOpenApiApiWidgetType]
+
+export const LiveActivityWidgetPatchRequestOpenApiApiWidgetType = {
+    LiveActivity: 'live_activity',
+} as const
+
 export interface LiveActivityWidgetConfigApi {
     /**
      * Maximum number of recent events to return.
@@ -552,6 +589,29 @@ export interface LiveActivityWidgetConfigApi {
      */
     refreshIntervalSeconds?: number
 }
+
+export interface LiveActivityWidgetPatchRequestOpenApiApi {
+    /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
+    id?: string
+    widget_type: LiveActivityWidgetPatchRequestOpenApiApiWidgetType
+    /** Configuration patch for the live activity widget. */
+    config?: LiveActivityWidgetConfigApi
+    /**
+     * Optional custom display name for the widget tile.
+     * @maxLength 400
+     * @nullable
+     */
+    name?: string | null
+    /** Optional markdown description shown when show_description is enabled. */
+    description?: string
+}
+
+export type SessionReplayListWidgetPatchRequestOpenApiApiWidgetType =
+    (typeof SessionReplayListWidgetPatchRequestOpenApiApiWidgetType)[keyof typeof SessionReplayListWidgetPatchRequestOpenApiApiWidgetType]
+
+export const SessionReplayListWidgetPatchRequestOpenApiApiWidgetType = {
+    SessionReplayList: 'session_replay_list',
+} as const
 
 /**
  * Recording ranking column.
@@ -599,24 +659,12 @@ export interface SessionReplayListWidgetConfigApi {
     savedFilterId?: string | null
 }
 
-export type DashboardWidgetConfigApi =
-    | ActivityEventsListWidgetConfigApi
-    | ErrorTrackingListWidgetConfigApi
-    | LiveActivityWidgetConfigApi
-    | SessionReplayListWidgetConfigApi
-
-export interface DashboardPatchWidgetOpenApiApi {
+export interface SessionReplayListWidgetPatchRequestOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id?: string
-    /** Widget type identifier (cannot be changed on update).
-     *
-     * * `activity_events_list` - activity_events_list
-     * * `error_tracking_list` - error_tracking_list
-     * * `live_activity` - live_activity
-     * * `session_replay_list` - session_replay_list */
-    widget_type?: DashboardPatchWidgetOpenApiWidgetTypeEnumApi
-    /** Widget-specific configuration. Shape depends on the tile's widget_type. */
-    config?: DashboardWidgetConfigApi
+    widget_type: SessionReplayListWidgetPatchRequestOpenApiApiWidgetType
+    /** Configuration patch for the recent recordings widget. */
+    config?: SessionReplayListWidgetConfigApi
     /**
      * Optional custom display name for the widget tile.
      * @maxLength 400
@@ -627,11 +675,17 @@ export interface DashboardPatchWidgetOpenApiApi {
     description?: string
 }
 
+export type DashboardPatchWidgetRequestApi =
+    | ActivityEventsListWidgetPatchRequestOpenApiApi
+    | ErrorTrackingListWidgetPatchRequestOpenApiApi
+    | LiveActivityWidgetPatchRequestOpenApiApi
+    | SessionReplayListWidgetPatchRequestOpenApiApi
+
 export interface DashboardPatchTileOpenApiApi {
+    /** Nested widget row updates. */
+    widget?: DashboardPatchWidgetRequestApi
     /** Dashboard tile ID to update. */
     id?: number
-    /** Nested widget row updates. */
-    widget?: DashboardPatchWidgetOpenApiApi
 }
 
 /**
@@ -7767,6 +7821,12 @@ export interface ButtonTileApi {
     readonly last_modified_at: string
     team: number
 }
+
+export type DashboardWidgetConfigApi =
+    | ActivityEventsListWidgetConfigApi
+    | ErrorTrackingListWidgetConfigApi
+    | LiveActivityWidgetConfigApi
+    | SessionReplayListWidgetConfigApi
 
 export interface DashboardWidgetApi {
     readonly id: string

@@ -25,6 +25,21 @@ export type LiveActivityWidgetFormInput = {
 
 const liveActivityConfigDefaults = liveActivityWidgetConfigSchema.parse({})
 
+function addIntegerFieldIssues(
+    data: Pick<LiveActivityWidgetFormInput, 'limit' | 'refreshIntervalSeconds'>,
+    context: z.RefinementCtx
+): void {
+    if (!Number.isInteger(data.limit)) {
+        context.addIssue({ code: 'custom', path: ['limit'], message: 'Expected integer' })
+    }
+    if (!Number.isInteger(data.refreshIntervalSeconds)) {
+        context.addIssue({ code: 'custom', path: ['refreshIntervalSeconds'], message: 'Expected integer' })
+    }
+}
+
+const strictLiveActivityWidgetFormSchema = liveActivityWidgetFormSchema.superRefine(addIntegerFieldIssues)
+const strictLiveActivityWidgetConfigSchema = liveActivityWidgetConfigSchema.superRefine(addIntegerFieldIssues)
+
 export function parseLiveActivityWidgetConfig(config: Record<string, unknown>): LiveActivityWidgetConfig {
     return parseWidgetConfig(liveActivityWidgetConfigSchema, config)
 }
@@ -33,7 +48,7 @@ export function buildLiveActivityWidgetConfig(
     formInput: LiveActivityWidgetFormInput,
     baseConfig: LiveActivityWidgetConfig
 ): LiveActivityWidgetConfig {
-    return liveActivityWidgetConfigSchema.parse({
+    return strictLiveActivityWidgetConfigSchema.parse({
         ...baseConfig,
         ...formInput,
     })
@@ -47,7 +62,7 @@ export function validateLiveActivityWidgetConfigInput(input: {
 }):
     | { success: true; config: LiveActivityWidgetConfig }
     | { success: false; fieldErrors: LiveActivityWidgetFieldErrors } {
-    const parsed = liveActivityWidgetFormSchema.safeParse({
+    const parsed = strictLiveActivityWidgetFormSchema.safeParse({
         limit: input.limit,
         refreshIntervalSeconds: input.refreshIntervalSeconds,
         filterTestAccounts: input.filterTestAccounts,
@@ -78,12 +93,12 @@ export function parseLiveActivityWidgetConfigApiError(
         return null
     }
 
-    const parsedConfig = liveActivityWidgetConfigSchema.safeParse(config)
+    const parsedConfig = strictLiveActivityWidgetConfigSchema.safeParse(config)
     if (parsedConfig.success) {
         return null
     }
 
-    const parsedForm = liveActivityWidgetFormSchema.safeParse({
+    const parsedForm = strictLiveActivityWidgetFormSchema.safeParse({
         limit: (config.limit as number) ?? liveActivityConfigDefaults.limit ?? 0,
         refreshIntervalSeconds:
             (config.refreshIntervalSeconds as number) ?? liveActivityConfigDefaults.refreshIntervalSeconds ?? 0,

@@ -131,7 +131,7 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertEqual(data["mode"], "disabled")
         self.assertEqual(data["id"], seed["id"])
 
-    def test_create_empty_filter_tree_disables_filtering(self):
+    def test_create_empty_filter_tree_disables_filtering(self) -> None:
         response = self.client.post(
             self._url(),
             data={
@@ -148,7 +148,7 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertIsNone(data["filter_tree"])
         self.assertEqual(data["test_cases"], [])
 
-    def test_update_delete_all_disables_filter_and_clears_test_cases(self):
+    def test_update_delete_all_disables_filter_and_clears_test_cases(self) -> None:
         seed = self._seed_config()
 
         response = self.client.post(self._url(), data={"filter_tree": _or()}, format="json")
@@ -160,7 +160,7 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertIsNone(data["filter_tree"])
         self.assertEqual(data["test_cases"], [])
 
-    def test_update_delete_all_can_be_saved_repeatedly(self):
+    def test_update_delete_all_can_be_saved_repeatedly(self) -> None:
         seed = self._seed_config()
         self.client.post(self._url(), data={"filter_tree": _or()}, format="json")
 
@@ -174,7 +174,7 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertEqual(data["test_cases"], [])
         self.assertEqual(EventFilterConfig.objects.filter(team=self.team).count(), 1)
 
-    def test_nested_empty_groups_disable_filtering(self):
+    def test_nested_empty_groups_disable_filtering(self) -> None:
         self._seed_config()
         tree = _or(_and(), _not(_or()))
 
@@ -251,7 +251,7 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertEqual(data["attr"], "filter_tree__filter_tree")
         self.assertIn("field must be one of", data["detail"])
 
-    def test_rejects_partially_completed_condition_without_creating_config(self):
+    def test_rejects_partially_completed_condition_without_creating_config(self) -> None:
         response = self.client.post(
             self._url(),
             data={"mode": "dry_run", "filter_tree": _or(_cond(value=""))},

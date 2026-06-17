@@ -391,7 +391,7 @@ class TestEventFilterConfigModel(BaseTest):
         retrieved = EventFilterConfig.objects.get(pk=config.pk)
         self.assertIsNone(retrieved.filter_tree)
 
-    def test_save_empty_filter_tree_disables_and_clears_test_cases(self):
+    def test_save_empty_filter_tree_disables_and_clears_test_cases(self) -> None:
         config = EventFilterConfig.objects.create(
             team=self.team,
             mode=EventFilterMode.LIVE,
@@ -403,7 +403,7 @@ class TestEventFilterConfigModel(BaseTest):
         self.assertIsNone(config.filter_tree)
         self.assertEqual(config.test_cases, [])
 
-    def test_save_empty_filter_tree_with_update_fields_persists_normalized_fields(self):
+    def test_save_empty_filter_tree_with_update_fields_persists_normalized_fields(self) -> None:
         config = EventFilterConfig.objects.create(
             team=self.team,
             mode=EventFilterMode.LIVE,

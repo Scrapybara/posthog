@@ -3541,7 +3541,7 @@ class TestExperimentService(APIBaseTest):
             query_params={"order": order},
         )
 
-        assert list(queryset.values_list("name", flat=True)) == expected_order
+        assert [experiment.name for experiment in queryset] == expected_order
 
     @parameterized.expand(
         [

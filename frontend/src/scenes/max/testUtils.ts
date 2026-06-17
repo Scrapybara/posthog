@@ -4,12 +4,24 @@ import { ReadableStream as NodeReadableStream } from 'stream/web'
 
 import api from 'lib/api'
 
+import { billingJson } from '~/mocks/fixtures/_billing'
 import { Mocks } from '~/mocks/utils'
 import { Conversation, ConversationStatus, ConversationType } from '~/types'
 
 export const maxMocks: Mocks = {
     get: {
         '/api/environments/:team_id/conversations/': { results: [] },
+        '/api/environments/:team_id/conversations/:conversation_id/queue/': {
+            messages: [],
+            max_queue_messages: 2,
+        },
+        '/api/projects/:team_id/notebooks/:notebook_id/kernel/status/': {
+            status: 'idle',
+        },
+        '/api/billing/': {
+            ...billingJson,
+            has_active_subscription: false,
+        },
     },
     post: {
         '/api/environments/:team_id/query/': { questions: ['Question'] },

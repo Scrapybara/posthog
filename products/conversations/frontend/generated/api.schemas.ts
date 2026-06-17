@@ -220,6 +220,11 @@ export interface MessageApi {
     agent_mode?: AgentModeEnumApi
     is_sandbox?: boolean
     resume_payload?: unknown
+    /**
+     * Pending image attachment IDs to include with this message.
+     * @maxItems 4
+     */
+    attachment_ids?: string[]
 }
 
 export type ConversationApiMessagesItem = { [key: string]: unknown }

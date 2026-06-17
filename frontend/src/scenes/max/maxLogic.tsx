@@ -18,7 +18,7 @@ import { sidePanelStateLogic } from '~/layout/navigation-3000/sidepanel/sidePane
 import { iconForType } from '~/layout/panel-layout/ProjectTree/defaultTree'
 import { actionsModel } from '~/models/actionsModel'
 import { productUrls } from '~/products'
-import { AgentMode, RootAssistantMessage } from '~/queries/schema/schema-assistant-messages'
+import { AgentMode, HumanMessage, RootAssistantMessage } from '~/queries/schema/schema-assistant-messages'
 import {
     Breadcrumb,
     Conversation,
@@ -192,10 +192,18 @@ export const maxLogic = kea<maxLogicType>([
 
     actions({
         setQuestion: (question: string) => ({ question }), // update the form input
-        askMax: (prompt: string | null, addToThread: boolean = true, uiContext?: Partial<MaxUIContext>) => ({
+        askMax: (
+            prompt: string | null,
+            addToThread: boolean = true,
+            uiContext?: Partial<MaxUIContext>,
+            attachmentIds?: string[],
+            attachments?: HumanMessage['attachments']
+        ) => ({
             prompt,
             addToThread,
             uiContext,
+            attachmentIds,
+            attachments,
         }), // used by maxThreadLogic to start a conversation
         scrollThreadToBottom: (behavior?: 'instant' | 'smooth') => ({ behavior }),
         openConversation: (conversationId: string) => ({ conversationId }),

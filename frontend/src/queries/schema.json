@@ -23688,6 +23688,12 @@
         "HumanMessage": {
             "additionalProperties": false,
             "properties": {
+                "attachments": {
+                    "items": {
+                        "$ref": "#/definitions/HumanMessageAttachment"
+                    },
+                    "type": "array"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -23709,6 +23715,34 @@
                 }
             },
             "required": ["type", "content"],
+            "type": "object"
+        },
+        "HumanMessageAttachment": {
+            "additionalProperties": false,
+            "properties": {
+                "byte_size": {
+                    "description": "Validated image size in bytes.",
+                    "type": "number"
+                },
+                "content_type": {
+                    "description": "Server-detected image MIME type.",
+                    "enum": ["image/png", "image/jpeg"],
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "description": "Conversation UUID this attachment belongs to.",
+                    "type": "string"
+                },
+                "filename": {
+                    "description": "Sanitized display filename.",
+                    "type": "string"
+                },
+                "id": {
+                    "description": "Attachment identifier, scoped to a single PostHog AI conversation.",
+                    "type": "string"
+                }
+            },
+            "required": ["id", "conversation_id", "filename", "content_type", "byte_size"],
             "type": "object"
         },
         "IQRDetectorConfig": {

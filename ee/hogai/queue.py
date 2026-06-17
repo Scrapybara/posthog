@@ -24,6 +24,7 @@ class ConversationQueueMessage(TypedDict):
     billing_context: dict[str, Any] | None
     agent_mode: str | None
     session_id: str | None
+    attachment_refs: list[dict[str, Any]]
 
 
 class QueueFullError(Exception):
@@ -161,6 +162,7 @@ def build_queue_message(
     billing_context: dict[str, Any] | None = None,
     agent_mode: str | None = None,
     session_id: str | None = None,
+    attachment_refs: list[dict[str, Any]] | None = None,
 ) -> ConversationQueueMessage:
     return {
         "id": str(uuid4()),
@@ -171,4 +173,5 @@ def build_queue_message(
         "billing_context": billing_context,
         "agent_mode": agent_mode,
         "session_id": session_id,
+        "attachment_refs": attachment_refs or [],
     }

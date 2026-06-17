@@ -3,6 +3,7 @@ import {
     BuiltLogic,
     actions,
     afterMount,
+    beforeUnmount,
     connect,
     kea,
     key,
@@ -30,6 +31,7 @@ import { notebookLogic } from 'scenes/notebooks/Notebook/notebookLogic'
 import { NotebookTarget } from 'scenes/notebooks/types'
 import { sceneLogic } from 'scenes/sceneLogic'
 import { Scene } from 'scenes/sceneTypes'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 import { userLogic } from 'scenes/userLogic'
 
@@ -64,6 +66,11 @@ import {
     SidePanelTab,
 } from '~/types'
 
+import {
+    conversationAttachmentsCreate,
+    conversationAttachmentsDestroy,
+} from 'products/posthog_ai/frontend/generated/api'
+import type { ConversationAttachmentApi } from 'products/posthog_ai/frontend/generated/api.schemas'
 import { LogEntry, parseLogEvent } from 'products/tasks/frontend/lib/parse-logs'
 
 import { handsFreeLogic } from './handsFreeLogic'
@@ -94,11 +101,100 @@ export const PENDING_AI_PROMPT_KEY = 'posthog_ai_pending_prompt'
 // dashboard context is included. Bounded so a stuck/failed load never blocks sending.
 export const MAX_DASHBOARD_CONTEXT_WAIT_MS = 8000
 const DASHBOARD_CONTEXT_POLL_INTERVAL_MS = 100
+export const MAX_AI_IMAGE_ATTACHMENT_COUNT = 4
+export const MAX_AI_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024
+export const MAX_AI_IMAGE_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024
+const SUPPORTED_AI_IMAGE_ATTACHMENT_TYPES = new Set(['image/png', 'image/jpeg'])
 
 export type MessageStatus = 'loading' | 'completed' | 'error'
 
 export type ThreadMessage = RootAssistantMessage & {
     status: MessageStatus
+}
+
+export type PendingAttachmentStatus = 'uploading' | 'ready' | 'error'
+
+export interface PendingConversationAttachment {
+    localId: string
+    id?: string
+    filename: string
+    contentType: string
+    byteSize: number
+    previewUrl: string
+    status: PendingAttachmentStatus
+    error?: string
+}
+
+type AttachmentCache = {
+    files?: Map<string, File>
+    uploads?: Map<string, AbortController>
+    previewUrls?: Map<string, string>
+}
+
+function getAttachmentCache(cache: AttachmentCache): Required<AttachmentCache> {
+    cache.files ??= new Map<string, File>()
+    cache.uploads ??= new Map<string, AbortController>()
+    cache.previewUrls ??= new Map<string, string>()
+    return cache as Required<AttachmentCache>
+}
+
+function formatAttachmentBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+    }
+    return `${Math.ceil(bytes / 1024)} KiB`
+}
+
+function createAttachmentPreviewUrl(file: File): string {
+    if (typeof URL === 'undefined' || !URL.createObjectURL) {
+        return ''
+    }
+    return URL.createObjectURL(file)
+}
+
+function revokeAttachmentPreviewUrl(previewUrl?: string): void {
+    if (!previewUrl || typeof URL === 'undefined' || !URL.revokeObjectURL) {
+        return
+    }
+    URL.revokeObjectURL(previewUrl)
+}
+
+function attachmentUploadErrorMessage(error: unknown): string {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+        return 'Upload cancelled.'
+    }
+    if (error instanceof ApiError) {
+        const fileError = error.data?.file
+        if (Array.isArray(fileError)) {
+            return fileError.join(' ')
+        }
+        if (typeof fileError === 'string') {
+            return fileError
+        }
+        if (typeof error.detail === 'string') {
+            return error.detail
+        }
+    }
+    return 'Failed to upload image.'
+}
+
+function pendingAttachmentToMessageAttachment(
+    attachment: PendingConversationAttachment,
+    conversationId: string
+): NonNullable<HumanMessage['attachments']>[number] | null {
+    if (!attachment.id || attachment.status !== 'ready') {
+        return null
+    }
+    if (attachment.contentType !== 'image/png' && attachment.contentType !== 'image/jpeg') {
+        return null
+    }
+    return {
+        id: attachment.id,
+        conversation_id: conversationId,
+        filename: attachment.filename,
+        content_type: attachment.contentType,
+        byte_size: attachment.byteSize,
+    }
 }
 
 const FAILURE_MESSAGE: FailureMessage & ThreadMessage = {
@@ -163,6 +259,8 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             ['compiledContext'],
             maxBillingContextLogic,
             ['billingContext'],
+            teamLogic,
+            ['currentTeamId'],
             featureFlagLogic,
             ['featureFlags'],
             sceneLogic,
@@ -198,6 +296,8 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 contextual_tools?: Record<string, any>
                 ui_context?: any
                 resume_payload?: ResumePayload | null
+                attachment_ids?: string[]
+                attachments?: HumanMessage['attachments']
             },
             generationAttempt: number,
             addToThread: boolean = true
@@ -237,6 +337,8 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             contextualTools?: Record<string, any>
             billingContext?: MaxBillingContext | null
             agentMode?: AgentMode | null
+            attachmentIds?: string[]
+            clearPendingAttachmentsOnSuccess?: boolean
         }) => payload,
         updateQueuedMessage: (queueId: string, content: string) => ({
             queueId,
@@ -281,6 +383,16 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         }),
         addPendingApprovalData: (approval: PendingApproval) => ({ approval }),
         loadPendingApprovalsData: (approvals: PendingApproval[]) => ({ approvals }),
+        addPendingAttachmentFiles: (files: File[]) => ({ files }),
+        addPendingAttachment: (attachment: PendingConversationAttachment) => ({ attachment }),
+        updatePendingAttachment: (localId: string, patch: Partial<PendingConversationAttachment>) => ({
+            localId,
+            patch,
+        }),
+        removePendingAttachment: (attachment: PendingConversationAttachment) => ({ attachment }),
+        clearPendingAttachments: true,
+        retryPendingAttachmentUpload: (localId: string) => ({ localId }),
+        setAttachmentDragActive: (active: boolean) => ({ active }),
     }),
 
     reducers(({ props }) => ({
@@ -557,6 +669,33 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             },
         ],
 
+        pendingAttachments: [
+            [] as PendingConversationAttachment[],
+            {
+                addPendingAttachment: (state, { attachment }) => [...state, attachment],
+                updatePendingAttachment: (state, { localId, patch }) =>
+                    state.map((attachment) =>
+                        attachment.localId === localId
+                            ? {
+                                  ...attachment,
+                                  ...patch,
+                              }
+                            : attachment
+                    ),
+                removePendingAttachment: (state, { attachment }) =>
+                    state.filter((existingAttachment) => existingAttachment.localId !== attachment.localId),
+                clearPendingAttachments: () => [],
+            },
+        ],
+
+        attachmentDragActive: [
+            false,
+            {
+                setAttachmentDragActive: (_, { active }) => active,
+                addPendingAttachmentFiles: () => false,
+            },
+        ],
+
         // Whether support agents have explicitly acknowledged they want to use an existing conversation
         supportOverrideEnabled: [
             false,
@@ -609,7 +748,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
     listeners((logic) => ({
         streamConversation: async (
             {
-                streamData: { agent_mode: agentMode, is_sandbox: isSandbox, ...streamData },
+                streamData: { agent_mode: agentMode, is_sandbox: isSandbox, attachments, ...streamData },
                 generationAttempt,
                 addToThread = true,
             },
@@ -630,6 +769,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                     content: streamData.content,
                     status: 'completed',
                     trace_id: traceId,
+                    ...(attachments?.length ? { attachments } : {}),
                 }
                 actions.addMessage(message)
             }
@@ -705,6 +845,8 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                             conversation: streamData.conversation,
                             contextual_tools: streamData.contextual_tools,
                             ui_context: streamData.ui_context,
+                            attachment_ids: streamData.attachment_ids,
+                            attachments,
                             agent_mode: agentMode,
                         },
                         generationAttempt + 1
@@ -852,562 +994,759 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             releaseStreamingLock() // release the lock
         },
     })),
-    listeners(({ actions, values, cache, props }) => ({
-        setConversation: ({ conversation }) => {
-            const nextConversationId = conversation?.id ?? null
-            if (cache.lastConversationId !== nextConversationId) {
-                cache.lastConversationId = nextConversationId
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                if (values.queueingEnabled && conversation?.id) {
-                    actions.loadQueueData()
-                }
-            }
-            // Sync agentMode from conversation only if user hasn't manually selected a mode after submission
-            if (!values.agentModeLockedByUser && conversation?.agent_mode) {
-                actions.syncAgentModeFromConversation(conversation.agent_mode as AgentMode)
-            }
-            if (conversation?.is_sandbox) {
-                actions.setIsSandboxMode(true)
-            }
-            if (
-                values.queueingEnabled &&
-                conversation?.pending_approvals?.some((approval) => approval.decision_status === 'pending')
-            ) {
-                actions.clearQueuedMessages()
-            }
-            // Note: pending approvals loading is handled in the reducer (pendingApprovalsData.setConversation)
-        },
-        enqueueQueuedMessage: async ({ content, contextualTools, uiContext, billingContext, agentMode }) => {
-            if (!values.queueingEnabled || !values.conversation?.id) {
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                return
-            }
+    listeners(({ actions, values, cache, props }) => {
+        const uploadPendingAttachment = async (
+            attachment: PendingConversationAttachment,
+            file: File
+        ): Promise<void> => {
+            const attachmentCache = getAttachmentCache(cache as AttachmentCache)
+            attachmentCache.uploads.get(attachment.localId)?.abort()
+
+            const controller = new AbortController()
+            attachmentCache.uploads.set(attachment.localId, controller)
+
             try {
-                const queuePayload: {
-                    content: string
-                    contextual_tools?: Record<string, any>
-                    ui_context?: MaxUIContext
-                    billing_context?: MaxBillingContext
-                    agent_mode?: AgentMode
-                } = {
-                    content,
-                    contextual_tools: contextualTools,
+                if (!values.currentTeamId) {
+                    throw new Error('Project is not loaded.')
                 }
 
-                if (uiContext != null) {
-                    queuePayload.ui_context = uiContext
-                }
+                const uploadedAttachment: ConversationAttachmentApi = await conversationAttachmentsCreate(
+                    String(values.currentTeamId),
+                    {
+                        conversation_id: values.conversationId,
+                        file,
+                    } as unknown as Parameters<typeof conversationAttachmentsCreate>[1],
+                    { signal: controller.signal }
+                )
 
-                if (billingContext != null) {
-                    queuePayload.billing_context = billingContext
-                }
-
-                if (agentMode != null) {
-                    queuePayload.agent_mode = agentMode
-                }
-
-                const queue = await api.conversations.queue.enqueue(values.conversation.id, queuePayload)
-                actions.setQueuedMessages(queue.messages)
-                actions.setQueueLimit(queue.max_queue_messages)
-            } catch (error: any) {
-                posthog.captureException(error)
-                actions.setQueuedMessages(values.queuedMessages)
-                if (error instanceof ApiError && error.status === 409) {
-                    lemonToast.error('You can only queue two messages at a time.')
-                    return
-                }
-                lemonToast.error(error?.data?.detail || 'Failed to queue the message.')
-            }
-        },
-        updateQueuedMessage: async ({ queueId, content }) => {
-            if (!values.queueingEnabled || !values.conversation?.id) {
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                return
-            }
-            try {
-                const queue = await api.conversations.queue.update(values.conversation.id, queueId, content)
-                actions.setQueuedMessages(queue.messages)
-                actions.setQueueLimit(queue.max_queue_messages)
-            } catch (error: any) {
-                posthog.captureException(error)
-                lemonToast.error(error?.data?.detail || 'Failed to update the queued message.')
-            }
-        },
-        deleteQueuedMessage: async ({ queueId }) => {
-            if (!values.queueingEnabled || !values.conversation?.id) {
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                return
-            }
-            if (!queueId) {
-                return
-            }
-            const fallbackQueue = values.queuedMessages.filter((item) => item.id !== queueId)
-            actions.setQueuedMessages(fallbackQueue)
-            try {
-                const queue = await api.conversations.queue.delete(values.conversation.id, queueId)
-                actions.setQueuedMessages(queue.messages)
-                actions.setQueueLimit(queue.max_queue_messages)
-            } catch (error: any) {
-                posthog.captureException(error)
-                if (error instanceof ApiError && error.status === 404) {
-                    return
-                }
-                actions.setQueuedMessages(fallbackQueue)
-            }
-        },
-        consumeQueuedMessage: async ({ message }) => {
-            if (!values.queueingEnabled || !values.conversation?.id) {
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                return
-            }
-            const queueId = message.id
-            if (!queueId) {
-                return
-            }
-            const fallbackQueue = values.queuedMessages.filter((item) => item.id !== queueId)
-            actions.setQueuedMessages(fallbackQueue)
-            try {
-                const queue = await api.conversations.queue.delete(values.conversation.id, queueId)
-                actions.setQueuedMessages(queue.messages)
-                actions.setQueueLimit(queue.max_queue_messages)
-            } catch (error: any) {
-                posthog.captureException(error)
-                if (error instanceof ApiError && error.status === 404) {
-                    return
-                }
-                actions.setQueuedMessages(fallbackQueue)
-            }
-        },
-        clearQueuedMessages: async () => {
-            if (!values.queueingEnabled || !values.conversation?.id) {
-                actions.setQueuedMessages([])
-                actions.setQueueLimit(0)
-                return
-            }
-            try {
-                const queue = await api.conversations.queue.clear(values.conversation.id)
-                actions.setQueuedMessages(queue.messages)
-                actions.setQueueLimit(queue.max_queue_messages)
-            } catch (error: any) {
-                posthog.captureException(error)
-                lemonToast.error(error?.data?.detail || 'Failed to clear queued messages.')
-            }
-        },
-        setPendingApproval: () => {
-            if (values.queueingEnabled) {
-                actions.clearQueuedMessages()
-            }
-        },
-        askMax: async ({ prompt, addToThread = true, uiContext }, breakpoint) => {
-            // Only process if this thread is the currently active one
-            if (values.conversationId !== values.activeThreadKey) {
-                return
-            }
-            // Wait for the open dashboard to finish loading before collecting context (see the
-            // constants above for why). The scene is re-read every tick, so the gate releases the
-            // moment the dashboard's metadata lands — and immediately if the user navigates away
-            // mid-wait (no longer on a dashboard, or onto a different one that's already loaded).
-            const isDashboardSceneLoading = (): boolean => {
-                if (sceneLogic.values.activeSceneId !== Scene.Dashboard) {
-                    return false
-                }
-                const activeSceneLogic = sceneLogic.values.activeSceneLogic
-                if (!activeSceneLogic || !('maxContext' in activeSceneLogic.selectors)) {
-                    return false
-                }
-                return !(activeSceneLogic.values as { dashboard?: unknown }).dashboard
-            }
-            // Measure real elapsed time, not tick count: breakpoint() only guarantees a *minimum*
-            // delay, so a busy event loop would make a tick counter under-report the wait — letting
-            // it run past the cap and skewing the telemetry below. performance.now() is monotonic.
-            const dashboardWaitStart = performance.now()
-            while (
-                isDashboardSceneLoading() &&
-                performance.now() - dashboardWaitStart < MAX_DASHBOARD_CONTEXT_WAIT_MS
-            ) {
-                await breakpoint(DASHBOARD_CONTEXT_POLL_INTERVAL_MS)
-            }
-            if (isDashboardSceneLoading()) {
-                // We hit the wait cap while the dashboard was still loading, so the message ships
-                // without dashboard context (the original "Max can't see this dashboard" symptom).
-                // Capture it so we can tell whether the cap is ever the binding constraint in prod.
-                const activeLoadedScene = sceneLogic.values.activeLoadedScene
-                const sceneProps = activeLoadedScene?.paramsToProps?.(activeLoadedScene?.sceneParams) || {}
-                posthog.capture('max dashboard context wait timed out', {
-                    waited_ms: Math.round(performance.now() - dashboardWaitStart),
-                    dashboard_id: (sceneProps as { id?: number | string }).id,
-                    conversation_id: values.conversation?.id || values.conversationId,
+                actions.updatePendingAttachment(attachment.localId, {
+                    id: uploadedAttachment.id,
+                    filename: uploadedAttachment.filename,
+                    contentType: uploadedAttachment.content_type,
+                    byteSize: uploadedAttachment.byte_size,
+                    status: 'ready',
+                    error: undefined,
                 })
+            } catch (error) {
+                if (controller.signal.aborted) {
+                    return
+                }
+                posthog.captureException(error)
+                actions.updatePendingAttachment(attachment.localId, {
+                    status: 'error',
+                    error: attachmentUploadErrorMessage(error),
+                })
+            } finally {
+                if (attachmentCache.uploads.get(attachment.localId) === controller) {
+                    attachmentCache.uploads.delete(attachment.localId)
+                }
             }
-            const contextualTools = Object.fromEntries(values.tools.map((tool) => [tool.identifier, tool.context]))
-            // Always send voice_mode as an explicit boolean when handsFreeLogic is mounted,
-            // not just when active. Otherwise a typed turn following a spoken one inherits
-            // the earlier <voice_mode> system instruction from conversation history and
-            // keeps formatting for speech (no markdown, spelled-out numbers).
-            const handsFree = handsFreeLogic.findMounted({ panelId: props.panelId })
-            const voiceMode = handsFree ? { voice_mode: handsFree.values.isActive } : undefined
-            const mergedUiContext =
-                uiContext || voiceMode
-                    ? { ...values.compiledContext, ...uiContext, ...voiceMode }
-                    : values.compiledContext || undefined
-            const billingContext =
-                values.billingContext && values.featureFlags[FEATURE_FLAGS.MAX_BILLING_CONTEXT]
-                    ? values.billingContext
+        }
+
+        return {
+            setConversation: ({ conversation }) => {
+                const nextConversationId = conversation?.id ?? null
+                if (cache.lastConversationId !== nextConversationId) {
+                    cache.lastConversationId = nextConversationId
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    if (values.queueingEnabled && conversation?.id) {
+                        actions.loadQueueData()
+                    }
+                }
+                // Sync agentMode from conversation only if user hasn't manually selected a mode after submission
+                if (!values.agentModeLockedByUser && conversation?.agent_mode) {
+                    actions.syncAgentModeFromConversation(conversation.agent_mode as AgentMode)
+                }
+                if (conversation?.is_sandbox) {
+                    actions.setIsSandboxMode(true)
+                }
+                if (
+                    values.queueingEnabled &&
+                    conversation?.pending_approvals?.some((approval) => approval.decision_status === 'pending')
+                ) {
+                    actions.clearQueuedMessages()
+                }
+                // Note: pending approvals loading is handled in the reducer (pendingApprovalsData.setConversation)
+            },
+            enqueueQueuedMessage: async ({
+                content,
+                contextualTools,
+                uiContext,
+                billingContext,
+                agentMode,
+                attachmentIds,
+                clearPendingAttachmentsOnSuccess,
+            }) => {
+                if (!values.queueingEnabled || !values.conversation?.id) {
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    return
+                }
+                try {
+                    const queuePayload: {
+                        content: string
+                        contextual_tools?: Record<string, any>
+                        ui_context?: MaxUIContext
+                        billing_context?: MaxBillingContext
+                        agent_mode?: AgentMode
+                        attachment_ids?: string[]
+                    } = {
+                        content,
+                        contextual_tools: contextualTools,
+                    }
+
+                    if (uiContext != null) {
+                        queuePayload.ui_context = uiContext
+                    }
+
+                    if (billingContext != null) {
+                        queuePayload.billing_context = billingContext
+                    }
+
+                    if (agentMode != null) {
+                        queuePayload.agent_mode = agentMode
+                    }
+
+                    if (attachmentIds?.length) {
+                        queuePayload.attachment_ids = attachmentIds
+                    }
+
+                    const queue = await api.conversations.queue.enqueue(values.conversation.id, queuePayload)
+                    actions.setQueuedMessages(queue.messages)
+                    actions.setQueueLimit(queue.max_queue_messages)
+                    if (clearPendingAttachmentsOnSuccess) {
+                        actions.clearPendingAttachments()
+                    }
+                } catch (error: any) {
+                    posthog.captureException(error)
+                    actions.setQueuedMessages(values.queuedMessages)
+                    if (error instanceof ApiError && error.status === 409) {
+                        lemonToast.error('You can only queue two messages at a time.')
+                        return
+                    }
+                    lemonToast.error(error?.data?.detail || 'Failed to queue the message.')
+                }
+            },
+            updateQueuedMessage: async ({ queueId, content }) => {
+                if (!values.queueingEnabled || !values.conversation?.id) {
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    return
+                }
+                try {
+                    const queue = await api.conversations.queue.update(values.conversation.id, queueId, content)
+                    actions.setQueuedMessages(queue.messages)
+                    actions.setQueueLimit(queue.max_queue_messages)
+                } catch (error: any) {
+                    posthog.captureException(error)
+                    lemonToast.error(error?.data?.detail || 'Failed to update the queued message.')
+                }
+            },
+            deleteQueuedMessage: async ({ queueId }) => {
+                if (!values.queueingEnabled || !values.conversation?.id) {
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    return
+                }
+                if (!queueId) {
+                    return
+                }
+                const fallbackQueue = values.queuedMessages.filter((item) => item.id !== queueId)
+                actions.setQueuedMessages(fallbackQueue)
+                try {
+                    const queue = await api.conversations.queue.delete(values.conversation.id, queueId)
+                    actions.setQueuedMessages(queue.messages)
+                    actions.setQueueLimit(queue.max_queue_messages)
+                } catch (error: any) {
+                    posthog.captureException(error)
+                    if (error instanceof ApiError && error.status === 404) {
+                        return
+                    }
+                    actions.setQueuedMessages(fallbackQueue)
+                }
+            },
+            consumeQueuedMessage: async ({ message }) => {
+                if (!values.queueingEnabled || !values.conversation?.id) {
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    return
+                }
+                const queueId = message.id
+                if (!queueId) {
+                    return
+                }
+                const fallbackQueue = values.queuedMessages.filter((item) => item.id !== queueId)
+                actions.setQueuedMessages(fallbackQueue)
+                try {
+                    const queue = await api.conversations.queue.delete(values.conversation.id, queueId)
+                    actions.setQueuedMessages(queue.messages)
+                    actions.setQueueLimit(queue.max_queue_messages)
+                } catch (error: any) {
+                    posthog.captureException(error)
+                    if (error instanceof ApiError && error.status === 404) {
+                        return
+                    }
+                    actions.setQueuedMessages(fallbackQueue)
+                }
+            },
+            clearQueuedMessages: async () => {
+                if (!values.queueingEnabled || !values.conversation?.id) {
+                    actions.setQueuedMessages([])
+                    actions.setQueueLimit(0)
+                    return
+                }
+                try {
+                    const queue = await api.conversations.queue.clear(values.conversation.id)
+                    actions.setQueuedMessages(queue.messages)
+                    actions.setQueueLimit(queue.max_queue_messages)
+                } catch (error: any) {
+                    posthog.captureException(error)
+                    lemonToast.error(error?.data?.detail || 'Failed to clear queued messages.')
+                }
+            },
+            setPendingApproval: () => {
+                if (values.queueingEnabled) {
+                    actions.clearQueuedMessages()
+                }
+            },
+            addPendingAttachmentFiles: async ({ files }) => {
+                if (!files.length) {
+                    return
+                }
+
+                const attachmentCache = getAttachmentCache(cache as AttachmentCache)
+                let nextAttachmentCount = values.pendingAttachments.length
+                let nextTotalBytes = values.pendingAttachments.reduce((sum, attachment) => sum + attachment.byteSize, 0)
+
+                for (const file of files) {
+                    const filename = file.name || 'screenshot'
+                    if (!SUPPORTED_AI_IMAGE_ATTACHMENT_TYPES.has(file.type)) {
+                        lemonToast.error(`${filename} must be a PNG or JPEG image.`)
+                        continue
+                    }
+                    if (file.size > MAX_AI_IMAGE_ATTACHMENT_BYTES) {
+                        lemonToast.error(
+                            `${filename} must be ${formatAttachmentBytes(MAX_AI_IMAGE_ATTACHMENT_BYTES)} or smaller.`
+                        )
+                        continue
+                    }
+                    if (nextAttachmentCount >= MAX_AI_IMAGE_ATTACHMENT_COUNT) {
+                        lemonToast.error(`You can attach up to ${MAX_AI_IMAGE_ATTACHMENT_COUNT} images.`)
+                        continue
+                    }
+                    if (nextTotalBytes + file.size > MAX_AI_IMAGE_ATTACHMENTS_TOTAL_BYTES) {
+                        lemonToast.error(
+                            `Images must be ${formatAttachmentBytes(MAX_AI_IMAGE_ATTACHMENTS_TOTAL_BYTES)} or smaller in total.`
+                        )
+                        continue
+                    }
+
+                    const localId = uuid()
+                    const previewUrl = createAttachmentPreviewUrl(file)
+                    const attachment: PendingConversationAttachment = {
+                        localId,
+                        filename,
+                        contentType: file.type,
+                        byteSize: file.size,
+                        previewUrl,
+                        status: 'uploading',
+                    }
+
+                    attachmentCache.files.set(localId, file)
+                    attachmentCache.previewUrls.set(localId, previewUrl)
+                    actions.addPendingAttachment(attachment)
+                    void uploadPendingAttachment(attachment, file)
+
+                    nextAttachmentCount += 1
+                    nextTotalBytes += file.size
+                }
+            },
+            removePendingAttachment: async ({ attachment }) => {
+                const attachmentCache = getAttachmentCache(cache as AttachmentCache)
+                attachmentCache.uploads.get(attachment.localId)?.abort()
+                attachmentCache.uploads.delete(attachment.localId)
+                attachmentCache.files.delete(attachment.localId)
+                revokeAttachmentPreviewUrl(attachment.previewUrl || attachmentCache.previewUrls.get(attachment.localId))
+                attachmentCache.previewUrls.delete(attachment.localId)
+
+                if (!attachment.id || !values.currentTeamId) {
+                    return
+                }
+
+                try {
+                    await conversationAttachmentsDestroy(String(values.currentTeamId), attachment.id)
+                } catch (error) {
+                    posthog.captureException(error)
+                    if (!(error instanceof ApiError && error.status === 404)) {
+                        lemonToast.error('Failed to delete image attachment.')
+                    }
+                }
+            },
+            clearPendingAttachments: () => {
+                const attachmentCache = getAttachmentCache(cache as AttachmentCache)
+                for (const controller of attachmentCache.uploads.values()) {
+                    controller.abort()
+                }
+                for (const previewUrl of attachmentCache.previewUrls.values()) {
+                    revokeAttachmentPreviewUrl(previewUrl)
+                }
+                attachmentCache.uploads.clear()
+                attachmentCache.files.clear()
+                attachmentCache.previewUrls.clear()
+            },
+            retryPendingAttachmentUpload: ({ localId }) => {
+                const attachment = values.pendingAttachments.find(
+                    (pendingAttachment) => pendingAttachment.localId === localId
+                )
+                const file = getAttachmentCache(cache as AttachmentCache).files.get(localId)
+                if (!attachment || !file) {
+                    lemonToast.error('This image needs to be re-added before it can be retried.')
+                    return
+                }
+
+                actions.updatePendingAttachment(localId, {
+                    status: 'uploading',
+                    error: undefined,
+                })
+                void uploadPendingAttachment(attachment, file)
+            },
+            askMax: async ({ prompt, addToThread = true, uiContext, attachmentIds, attachments }, breakpoint) => {
+                // Only process if this thread is the currently active one
+                if (values.conversationId !== values.activeThreadKey) {
+                    return
+                }
+                const usePendingAttachments = attachmentIds === undefined && attachments === undefined
+                const messageAttachmentIds = attachmentIds ?? values.readyPendingAttachmentIds
+                const messageAttachments = attachments ?? values.readyPendingAttachmentMessageRefs
+                const attachmentDisabledReason = usePendingAttachments
+                    ? values.pendingAttachmentSubmitDisabledReason
                     : undefined
-
-            if (
-                values.queueingEnabled &&
-                values.threadLoading &&
-                addToThread &&
-                typeof prompt === 'string' &&
-                prompt.trim() !== ''
-            ) {
-                if (values.queueIsFull) {
-                    lemonToast.error('You can only queue two messages at a time.')
+                if (attachmentDisabledReason) {
+                    lemonToast.error(attachmentDisabledReason)
                     return
                 }
-                actions.enqueueQueuedMessage({
-                    content: prompt,
-                    contextualTools,
-                    uiContext: mergedUiContext,
-                    billingContext,
-                    agentMode: values.agentMode,
-                })
+                // Wait for the open dashboard to finish loading before collecting context (see the
+                // constants above for why). The scene is re-read every tick, so the gate releases the
+                // moment the dashboard's metadata lands — and immediately if the user navigates away
+                // mid-wait (no longer on a dashboard, or onto a different one that's already loaded).
+                const isDashboardSceneLoading = (): boolean => {
+                    if (sceneLogic.values.activeSceneId !== Scene.Dashboard) {
+                        return false
+                    }
+                    const activeSceneLogic = sceneLogic.values.activeSceneLogic
+                    if (!activeSceneLogic || !('maxContext' in activeSceneLogic.selectors)) {
+                        return false
+                    }
+                    return !(activeSceneLogic.values as { dashboard?: unknown }).dashboard
+                }
+                // Measure real elapsed time, not tick count: breakpoint() only guarantees a *minimum*
+                // delay, so a busy event loop would make a tick counter under-report the wait — letting
+                // it run past the cap and skewing the telemetry below. performance.now() is monotonic.
+                const dashboardWaitStart = performance.now()
+                while (
+                    isDashboardSceneLoading() &&
+                    performance.now() - dashboardWaitStart < MAX_DASHBOARD_CONTEXT_WAIT_MS
+                ) {
+                    await breakpoint(DASHBOARD_CONTEXT_POLL_INTERVAL_MS)
+                }
+                if (isDashboardSceneLoading()) {
+                    // We hit the wait cap while the dashboard was still loading, so the message ships
+                    // without dashboard context (the original "Max can't see this dashboard" symptom).
+                    // Capture it so we can tell whether the cap is ever the binding constraint in prod.
+                    const activeLoadedScene = sceneLogic.values.activeLoadedScene
+                    const sceneProps = activeLoadedScene?.paramsToProps?.(activeLoadedScene?.sceneParams) || {}
+                    posthog.capture('max dashboard context wait timed out', {
+                        waited_ms: Math.round(performance.now() - dashboardWaitStart),
+                        dashboard_id: (sceneProps as { id?: number | string }).id,
+                        conversation_id: values.conversation?.id || values.conversationId,
+                    })
+                }
+                const contextualTools = Object.fromEntries(values.tools.map((tool) => [tool.identifier, tool.context]))
+                // Always send voice_mode as an explicit boolean when handsFreeLogic is mounted,
+                // not just when active. Otherwise a typed turn following a spoken one inherits
+                // the earlier <voice_mode> system instruction from conversation history and
+                // keeps formatting for speech (no markdown, spelled-out numbers).
+                const handsFree = handsFreeLogic.findMounted({ panelId: props.panelId })
+                const voiceMode = handsFree ? { voice_mode: handsFree.values.isActive } : undefined
+                const mergedUiContext =
+                    uiContext || voiceMode
+                        ? { ...values.compiledContext, ...uiContext, ...voiceMode }
+                        : values.compiledContext || undefined
+                const billingContext =
+                    values.billingContext && values.featureFlags[FEATURE_FLAGS.MAX_BILLING_CONTEXT]
+                        ? values.billingContext
+                        : undefined
+
+                if (
+                    values.queueingEnabled &&
+                    values.threadLoading &&
+                    addToThread &&
+                    typeof prompt === 'string' &&
+                    prompt.trim() !== ''
+                ) {
+                    if (values.queueIsFull) {
+                        lemonToast.error('You can only queue two messages at a time.')
+                        return
+                    }
+                    actions.enqueueQueuedMessage({
+                        content: prompt,
+                        contextualTools,
+                        uiContext: mergedUiContext,
+                        billingContext,
+                        agentMode: values.agentMode,
+                        attachmentIds: messageAttachmentIds,
+                        clearPendingAttachmentsOnSuccess: usePendingAttachments,
+                    })
+                    actions.setQuestion('')
+                    if (props.panelId === SIDE_PANEL_PANEL_ID && sidePanelStateLogic.isMounted()) {
+                        sidePanelStateLogic.actions.setSidePanelOptions(null)
+                    }
+                    return
+                }
+                if (!values.dataProcessingAccepted) {
+                    // Persist prompt to sessionStorage in case of OAuth redirect during consent flow
+                    if (prompt) {
+                        try {
+                            sessionStorage.setItem(
+                                PENDING_AI_PROMPT_KEY,
+                                JSON.stringify({
+                                    prompt,
+                                    timestamp: Date.now(),
+                                })
+                            )
+                        } catch {
+                            // sessionStorage might be unavailable
+                        }
+                    }
+                    return // Skip - this will be re-fired by the `onApprove` on `AIConsentPopoverWrapper`
+                }
+
+                // Clear any stored prompt since we're proceeding with submission
+                try {
+                    sessionStorage.removeItem(PENDING_AI_PROMPT_KEY)
+                } catch {
+                    // sessionStorage might be unavailable
+                }
+
+                // Build auto-rejection payload if there's a pending approval that hasn't already been resolved
+                // (pendingApprovalProposalId might get re-set during streaming even after user approved/rejected)
+                let autoRejectPayload: { action: 'reject'; proposal_id: string; feedback?: string } | undefined =
+                    undefined
+                const pendingProposalId = values.pendingApprovalProposalId
+                const alreadyResolved = pendingProposalId
+                    ? !!values.resolvedApprovalStatuses[pendingProposalId]?.status
+                    : false
+                if (pendingProposalId && !alreadyResolved) {
+                    autoRejectPayload = {
+                        action: 'reject',
+                        proposal_id: pendingProposalId,
+                        feedback: prompt ?? undefined,
+                    }
+                    actions.clearPendingApproval()
+                    actions.setResolvedApprovalStatus(pendingProposalId, 'auto_rejected')
+                }
+                const agentMode = values.agentMode
+
+                // Clear the question
                 actions.setQuestion('')
+                // Drop #panel=max:… options so reload doesn't re-run auto-send from the hash
                 if (props.panelId === SIDE_PANEL_PANEL_ID && sidePanelStateLogic.isMounted()) {
                     sidePanelStateLogic.actions.setSidePanelOptions(null)
                 }
-                return
-            }
-            if (!values.dataProcessingAccepted) {
-                // Persist prompt to sessionStorage in case of OAuth redirect during consent flow
-                if (prompt) {
-                    try {
-                        sessionStorage.setItem(
-                            PENDING_AI_PROMPT_KEY,
-                            JSON.stringify({
-                                prompt,
-                                timestamp: Date.now(),
-                            })
-                        )
-                    } catch {
-                        // sessionStorage might be unavailable
-                    }
-                }
-                return // Skip - this will be re-fired by the `onApprove` on `AIConsentPopoverWrapper`
-            }
-
-            // Clear any stored prompt since we're proceeding with submission
-            try {
-                sessionStorage.removeItem(PENDING_AI_PROMPT_KEY)
-            } catch {
-                // sessionStorage might be unavailable
-            }
-
-            // Build auto-rejection payload if there's a pending approval that hasn't already been resolved
-            // (pendingApprovalProposalId might get re-set during streaming even after user approved/rejected)
-            let autoRejectPayload: { action: 'reject'; proposal_id: string; feedback?: string } | undefined = undefined
-            const pendingProposalId = values.pendingApprovalProposalId
-            const alreadyResolved = pendingProposalId
-                ? !!values.resolvedApprovalStatuses[pendingProposalId]?.status
-                : false
-            if (pendingProposalId && !alreadyResolved) {
-                autoRejectPayload = {
-                    action: 'reject',
-                    proposal_id: pendingProposalId,
-                    feedback: prompt ?? undefined,
-                }
-                actions.clearPendingApproval()
-                actions.setResolvedApprovalStatus(pendingProposalId, 'auto_rejected')
-            }
-            const agentMode = values.agentMode
-
-            // Clear the question
-            actions.setQuestion('')
-            // Drop #panel=max:… options so reload doesn't re-run auto-send from the hash
-            if (props.panelId === SIDE_PANEL_PANEL_ID && sidePanelStateLogic.isMounted()) {
-                sidePanelStateLogic.actions.setSidePanelOptions(null)
-            }
-            // For a new conversations, set the frontend conversation ID
-            if (!values.conversation) {
-                actions.setConversationId(values.conversationId)
-            } else {
-                const updatedConversation = {
-                    ...values.conversation,
-                    agent_mode: agentMode || values.conversation?.agent_mode,
-                    status: ConversationStatus.InProgress,
-                    updated_at: dayjs().toISOString(),
-                }
-                // Update the current status
-                actions.setConversation(updatedConversation)
-                // Update the global conversation cache
-                actions.updateGlobalConversationCache(updatedConversation)
-            }
-
-            actions.streamConversation(
-                {
-                    agent_mode: values.isSandboxMode ? null : agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                    content: prompt,
-                    contextual_tools: contextualTools,
-                    ui_context: mergedUiContext,
-                    conversation: values.conversation?.id || values.conversationId,
-                    // Include auto-rejection payload if there was a pending approval
-                    resume_payload: autoRejectPayload,
-                },
-                0,
-                addToThread
-            )
-        },
-        stopGeneration: async () => {
-            if (!values.conversation?.id) {
-                actions.setCancelLoading(false)
-                return
-            }
-
-            try {
-                await api.conversations.cancel(values.conversation.id)
-                cache.generationController?.abort()
-                actions.clearQueuedMessages()
-                actions.resetThread()
-            } catch (e: any) {
-                posthog.captureException(e)
-                lemonToast.error(e?.data?.detail || 'Failed to cancel the generation.')
-            }
-
-            actions.loadConversation(values.conversation.id)
-            actions.setCancelLoading(false)
-        },
-
-        reconnectToStream: () => {
-            const id = values.conversationId
-            if (!id) {
-                return
-            }
-            // Only skip if this *instance* already has an open stream
-            if (cache.generationController) {
-                return
-            }
-            // Don't reconnect if there's a pending form - user needs to fill it out first
-            if (values.multiQuestionFormPending) {
-                return
-            }
-            actions.streamConversation(
-                {
-                    conversation: id,
-                    content: null,
-                    agent_mode: values.isSandboxMode ? null : values.agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                },
-                0
-            )
-        },
-
-        retryLastMessage: () => {
-            const lastMessage = values.threadRaw.filter(isHumanMessage).pop() as HumanMessage | undefined
-            if (lastMessage) {
-                actions.askMax(lastMessage.content)
-            }
-        },
-
-        completeThreadGeneration: () => {
-            const handsFree = handsFreeLogic.findMounted({ panelId: props.panelId })
-            if (handsFree?.values.isActive) {
-                handsFree.actions.speakAssistantResponse(summariseAssistantThread(values.threadRaw))
-            }
-
-            // Update the conversation history to include the new conversation
-            actions.loadConversationHistory({ doNotUpdateCurrentThread: true })
-
-            if (!values.conversation) {
-                return
-            }
-
-            const newConversation = {
-                ...values.conversation,
-                status: ConversationStatus.Idle,
-            }
-
-            actions.setConversation(newConversation)
-            actions.updateGlobalConversationCache(newConversation)
-
-            // Fetch the full conversation to get state fields
-            // (those which aren't included in the streaming response)
-            actions.loadConversation(values.conversation.id)
-
-            const shouldConsumeSandboxQueue = values.isSandboxMode && values.queuedMessages.length > 0
-
-            if (values.queueingEnabled && values.conversation?.id && !shouldConsumeSandboxQueue) {
-                actions.loadQueueData()
-            }
-
-            // Process queued messages for sandbox conversations.
-            // Regular conversations handle queue consumption on the backend
-            // (process_chat_agent_activity pops and starts new workflows).
-            // Sandbox mode doesn't have this, so the frontend drives it.
-            if (shouldConsumeSandboxQueue) {
-                const nextMessage = values.queuedMessages[0]
-                actions.consumeQueuedMessage(nextMessage)
-                actions.askMax(nextMessage.content)
-            }
-
-            // Must go last. Otherwise, the logic will be unmounted before the lifecycle finishes.
-            if (values.activeThreadKey !== values.conversationId && cache.unmount) {
-                cache.unmount()
-            }
-        },
-
-        loadConversationHistorySuccess: ({ conversationHistory, payload }) => {
-            // payload is an object with doNotUpdateCurrentThread for loadConversationHistory,
-            // but it's a string (conversationId) for loadConversation
-            const doNotUpdate = typeof payload === 'object' && payload?.doNotUpdateCurrentThread
-            if (props.skipInitialLoad || doNotUpdate || values.autoRun || values.streamingActive) {
-                return
-            }
-            // Don't auto-reconnect if there's a pending form
-            if (values.multiQuestionFormPending) {
-                return
-            }
-            const conversation = conversationHistory.find((c) => c.id === values.conversationId)
-            if (!conversation) {
-                return
-            }
-
-            // Keep conversation and thread in sync to avoid empty thread after history updates.
-            actions.setConversation(conversation)
-            if (conversation.messages?.length && !values.threadRaw.length) {
-                actions.setThread(updateMessagesWithCompletedStatus(conversation.messages))
-            }
-        },
-        selectCommand: ({ command }) => {
-            if (command.arg) {
-                actions.setQuestion(command.name + ' ')
-            } else {
-                actions.setQuestion(command.name)
-            }
-        },
-        activateCommand: ({ command }) => {
-            if (command.arg) {
-                actions.setQuestion(command.name + ' ') // Rest must be filled in by the user
-            } else {
-                actions.askMax(command.name)
-            }
-        },
-        processNotebookUpdate: async ({ notebookId, notebookContent }) => {
-            try {
-                const currentPath = router.values.location.pathname
-                const notebookPath = urls.notebook(notebookId)
-
-                if (currentPath.includes(notebookPath)) {
-                    // We're already on the notebook page, refresh it
-                    let logic = notebookLogic.findMounted({ shortId: notebookId })
-                    if (logic) {
-                        logic.actions.setLocalContent(notebookContent, true, true)
-                    }
+                // For a new conversations, set the frontend conversation ID
+                if (!values.conversation) {
+                    actions.setConversationId(values.conversationId)
                 } else {
-                    // Navigate to the notebook
-                    await openNotebook(notebookId, NotebookTarget.Scene, undefined, (logic) => {
-                        logic.actions.setLocalContent(notebookContent, true, true)
-                    })
+                    const updatedConversation = {
+                        ...values.conversation,
+                        agent_mode: agentMode || values.conversation?.agent_mode,
+                        status: ConversationStatus.InProgress,
+                        updated_at: dayjs().toISOString(),
+                    }
+                    // Update the current status
+                    actions.setConversation(updatedConversation)
+                    // Update the global conversation cache
+                    actions.updateGlobalConversationCache(updatedConversation)
                 }
-            } catch (error) {
-                posthog.captureException(error)
-                console.error('Failed to navigate to notebook:', error)
-            }
-        },
-        appendMessageToConversation: async ({ message }) => {
-            const conversationId = values.conversationId
-            if (!conversationId) {
-                return
-            }
 
-            await api.conversations.appendMessage(conversationId, message)
-
-            actions.addMessage({
-                type: AssistantMessageType.Assistant,
-                content: message,
-                id: uuid(),
-                status: 'completed',
-            })
-        },
-        continueAfterForm: ({ formAnswers }) => {
-            actions.streamConversation(
-                {
-                    agent_mode: values.isSandboxMode ? null : values.agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                    content: null,
-                    conversation: values.conversationId,
-                    resume_payload: { action: 'form', form_answers: formAnswers },
-                },
-                0,
-                false // Don't add to thread - no human message to show
-            )
-        },
-        continueAfterFormDismissal: () => {
-            actions.streamConversation(
-                {
-                    agent_mode: values.isSandboxMode ? null : values.agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                    content: null,
-                    conversation: values.conversationId,
-                    resume_payload: { action: 'dismiss_form' },
-                },
-                0,
-                false // Don't add to thread - no human message to show
-            )
-        },
-        continueAfterApproval: ({ proposalId }) => {
-            actions.clearQueuedMessages()
-            // Persist the approved status so the card can display it
-            // NOTE: We don't call clearPendingApproval() here - the component should stay
-            // mounted to show the resolved state. The alreadyResolved check in askMax
-            // prevents auto-rejection for resolved approvals.
-            actions.setResolvedApprovalStatus(proposalId, 'approved')
-            // Resume the conversation with the approval payload
-            actions.streamConversation(
-                {
-                    agent_mode: values.isSandboxMode ? null : values.agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                    content: null,
-                    conversation: values.conversationId,
-                    contextual_tools: Object.fromEntries(values.tools.map((tool) => [tool.identifier, tool.context])),
-                    resume_payload: { action: 'approve', proposal_id: proposalId },
-                },
-                0,
-                false // Don't add to thread - no human message to show
-            )
-        },
-        continueAfterRejection: ({ proposalId, feedback }) => {
-            actions.clearQueuedMessages()
-            // Persist the rejected status and feedback so the card can display it
-            // NOTE: We don't call clearPendingApproval() here - the component should stay
-            // mounted to show the resolved state with feedback. The alreadyResolved check
-            // in askMax prevents auto-rejection for resolved approvals.
-            actions.setResolvedApprovalStatus(proposalId, 'rejected', feedback)
-            // Resume the conversation with the rejection payload
-            actions.streamConversation(
-                {
-                    agent_mode: values.isSandboxMode ? null : values.agentMode,
-                    is_sandbox: values.isSandboxMode || undefined,
-                    content: null,
-                    conversation: values.conversationId,
-                    contextual_tools: Object.fromEntries(values.tools.map((tool) => [tool.identifier, tool.context])),
-                    resume_payload: {
-                        action: 'reject',
-                        proposal_id: proposalId,
-                        feedback,
+                actions.streamConversation(
+                    {
+                        agent_mode: values.isSandboxMode ? null : agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                        content: prompt,
+                        contextual_tools: contextualTools,
+                        ui_context: mergedUiContext,
+                        conversation: values.conversation?.id || values.conversationId,
+                        // Include auto-rejection payload if there was a pending approval
+                        resume_payload: autoRejectPayload,
+                        attachment_ids: messageAttachmentIds.length ? messageAttachmentIds : undefined,
+                        attachments: messageAttachments.length ? messageAttachments : undefined,
                     },
-                },
-                0,
-                false // Don't add to thread - no human message to show
-            )
-        },
-    })),
+                    0,
+                    addToThread
+                )
+                if (usePendingAttachments) {
+                    actions.clearPendingAttachments()
+                }
+            },
+            stopGeneration: async () => {
+                if (!values.conversation?.id) {
+                    actions.setCancelLoading(false)
+                    return
+                }
+
+                try {
+                    await api.conversations.cancel(values.conversation.id)
+                    cache.generationController?.abort()
+                    actions.clearQueuedMessages()
+                    actions.resetThread()
+                } catch (e: any) {
+                    posthog.captureException(e)
+                    lemonToast.error(e?.data?.detail || 'Failed to cancel the generation.')
+                }
+
+                actions.loadConversation(values.conversation.id)
+                actions.setCancelLoading(false)
+            },
+
+            reconnectToStream: () => {
+                const id = values.conversationId
+                if (!id) {
+                    return
+                }
+                // Only skip if this *instance* already has an open stream
+                if (cache.generationController) {
+                    return
+                }
+                // Don't reconnect if there's a pending form - user needs to fill it out first
+                if (values.multiQuestionFormPending) {
+                    return
+                }
+                actions.streamConversation(
+                    {
+                        conversation: id,
+                        content: null,
+                        agent_mode: values.isSandboxMode ? null : values.agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                    },
+                    0
+                )
+            },
+
+            retryLastMessage: () => {
+                const lastMessage = values.threadRaw.filter(isHumanMessage).pop() as HumanMessage | undefined
+                if (lastMessage) {
+                    const attachmentIds = lastMessage.attachments?.map((attachment) => attachment.id)
+                    actions.askMax(lastMessage.content, true, undefined, attachmentIds, lastMessage.attachments)
+                }
+            },
+
+            completeThreadGeneration: () => {
+                const handsFree = handsFreeLogic.findMounted({ panelId: props.panelId })
+                if (handsFree?.values.isActive) {
+                    handsFree.actions.speakAssistantResponse(summariseAssistantThread(values.threadRaw))
+                }
+
+                // Update the conversation history to include the new conversation
+                actions.loadConversationHistory({ doNotUpdateCurrentThread: true })
+
+                if (!values.conversation) {
+                    return
+                }
+
+                const newConversation = {
+                    ...values.conversation,
+                    status: ConversationStatus.Idle,
+                }
+
+                actions.setConversation(newConversation)
+                actions.updateGlobalConversationCache(newConversation)
+
+                // Fetch the full conversation to get state fields
+                // (those which aren't included in the streaming response)
+                actions.loadConversation(values.conversation.id)
+
+                const shouldConsumeSandboxQueue = values.isSandboxMode && values.queuedMessages.length > 0
+
+                if (values.queueingEnabled && values.conversation?.id && !shouldConsumeSandboxQueue) {
+                    actions.loadQueueData()
+                }
+
+                // Process queued messages for sandbox conversations.
+                // Regular conversations handle queue consumption on the backend
+                // (process_chat_agent_activity pops and starts new workflows).
+                // Sandbox mode doesn't have this, so the frontend drives it.
+                if (shouldConsumeSandboxQueue) {
+                    const nextMessage = values.queuedMessages[0]
+                    actions.consumeQueuedMessage(nextMessage)
+                    const attachmentIds = nextMessage.attachment_refs?.map((attachment) => attachment.id)
+                    actions.askMax(
+                        nextMessage.content,
+                        true,
+                        nextMessage.ui_context ?? undefined,
+                        attachmentIds,
+                        nextMessage.attachment_refs
+                    )
+                }
+
+                // Must go last. Otherwise, the logic will be unmounted before the lifecycle finishes.
+                if (values.activeThreadKey !== values.conversationId && cache.unmount) {
+                    cache.unmount()
+                }
+            },
+
+            loadConversationHistorySuccess: ({ conversationHistory, payload }) => {
+                // payload is an object with doNotUpdateCurrentThread for loadConversationHistory,
+                // but it's a string (conversationId) for loadConversation
+                const doNotUpdate = typeof payload === 'object' && payload?.doNotUpdateCurrentThread
+                if (props.skipInitialLoad || doNotUpdate || values.autoRun || values.streamingActive) {
+                    return
+                }
+                // Don't auto-reconnect if there's a pending form
+                if (values.multiQuestionFormPending) {
+                    return
+                }
+                const conversation = conversationHistory.find((c) => c.id === values.conversationId)
+                if (!conversation) {
+                    return
+                }
+
+                // Keep conversation and thread in sync to avoid empty thread after history updates.
+                actions.setConversation(conversation)
+                if (conversation.messages?.length && !values.threadRaw.length) {
+                    actions.setThread(updateMessagesWithCompletedStatus(conversation.messages))
+                }
+            },
+            selectCommand: ({ command }) => {
+                if (command.arg) {
+                    actions.setQuestion(command.name + ' ')
+                } else {
+                    actions.setQuestion(command.name)
+                }
+            },
+            activateCommand: ({ command }) => {
+                if (command.arg) {
+                    actions.setQuestion(command.name + ' ') // Rest must be filled in by the user
+                } else {
+                    actions.askMax(command.name)
+                }
+            },
+            processNotebookUpdate: async ({ notebookId, notebookContent }) => {
+                try {
+                    const currentPath = router.values.location.pathname
+                    const notebookPath = urls.notebook(notebookId)
+
+                    if (currentPath.includes(notebookPath)) {
+                        // We're already on the notebook page, refresh it
+                        let logic = notebookLogic.findMounted({ shortId: notebookId })
+                        if (logic) {
+                            logic.actions.setLocalContent(notebookContent, true, true)
+                        }
+                    } else {
+                        // Navigate to the notebook
+                        await openNotebook(notebookId, NotebookTarget.Scene, undefined, (logic) => {
+                            logic.actions.setLocalContent(notebookContent, true, true)
+                        })
+                    }
+                } catch (error) {
+                    posthog.captureException(error)
+                    console.error('Failed to navigate to notebook:', error)
+                }
+            },
+            appendMessageToConversation: async ({ message }) => {
+                const conversationId = values.conversationId
+                if (!conversationId) {
+                    return
+                }
+
+                await api.conversations.appendMessage(conversationId, message)
+
+                actions.addMessage({
+                    type: AssistantMessageType.Assistant,
+                    content: message,
+                    id: uuid(),
+                    status: 'completed',
+                })
+            },
+            continueAfterForm: ({ formAnswers }) => {
+                actions.streamConversation(
+                    {
+                        agent_mode: values.isSandboxMode ? null : values.agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                        content: null,
+                        conversation: values.conversationId,
+                        resume_payload: { action: 'form', form_answers: formAnswers },
+                    },
+                    0,
+                    false // Don't add to thread - no human message to show
+                )
+            },
+            continueAfterFormDismissal: () => {
+                actions.streamConversation(
+                    {
+                        agent_mode: values.isSandboxMode ? null : values.agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                        content: null,
+                        conversation: values.conversationId,
+                        resume_payload: { action: 'dismiss_form' },
+                    },
+                    0,
+                    false // Don't add to thread - no human message to show
+                )
+            },
+            continueAfterApproval: ({ proposalId }) => {
+                actions.clearQueuedMessages()
+                // Persist the approved status so the card can display it
+                // NOTE: We don't call clearPendingApproval() here - the component should stay
+                // mounted to show the resolved state. The alreadyResolved check in askMax
+                // prevents auto-rejection for resolved approvals.
+                actions.setResolvedApprovalStatus(proposalId, 'approved')
+                // Resume the conversation with the approval payload
+                actions.streamConversation(
+                    {
+                        agent_mode: values.isSandboxMode ? null : values.agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                        content: null,
+                        conversation: values.conversationId,
+                        contextual_tools: Object.fromEntries(
+                            values.tools.map((tool) => [tool.identifier, tool.context])
+                        ),
+                        resume_payload: { action: 'approve', proposal_id: proposalId },
+                    },
+                    0,
+                    false // Don't add to thread - no human message to show
+                )
+            },
+            continueAfterRejection: ({ proposalId, feedback }) => {
+                actions.clearQueuedMessages()
+                // Persist the rejected status and feedback so the card can display it
+                // NOTE: We don't call clearPendingApproval() here - the component should stay
+                // mounted to show the resolved state with feedback. The alreadyResolved check
+                // in askMax prevents auto-rejection for resolved approvals.
+                actions.setResolvedApprovalStatus(proposalId, 'rejected', feedback)
+                // Resume the conversation with the rejection payload
+                actions.streamConversation(
+                    {
+                        agent_mode: values.isSandboxMode ? null : values.agentMode,
+                        is_sandbox: values.isSandboxMode || undefined,
+                        content: null,
+                        conversation: values.conversationId,
+                        contextual_tools: Object.fromEntries(
+                            values.tools.map((tool) => [tool.identifier, tool.context])
+                        ),
+                        resume_payload: {
+                            action: 'reject',
+                            proposal_id: proposalId,
+                            feedback,
+                        },
+                    },
+                    0,
+                    false // Don't add to thread - no human message to show
+                )
+            },
+        }
+    }),
 
     selectors({
         conversationId: [
@@ -1481,6 +1820,58 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             (s) => [s.queueingEnabled, s.threadLoading, s.queueIsFull],
             (queueingEnabled, threadLoading, queueIsFull): string | undefined =>
                 queueingEnabled && threadLoading && queueIsFull ? 'Queue is full' : undefined,
+        ],
+
+        pendingAttachmentUploadCount: [
+            (s) => [s.pendingAttachments],
+            (pendingAttachments): number =>
+                pendingAttachments.filter((attachment) => attachment.status === 'uploading').length,
+        ],
+
+        pendingAttachmentErrorCount: [
+            (s) => [s.pendingAttachments],
+            (pendingAttachments): number =>
+                pendingAttachments.filter((attachment) => attachment.status === 'error').length,
+        ],
+
+        readyPendingAttachmentIds: [
+            (s) => [s.pendingAttachments],
+            (pendingAttachments): string[] =>
+                pendingAttachments
+                    .filter((attachment) => attachment.status === 'ready' && !!attachment.id)
+                    .map((attachment) => attachment.id as string),
+        ],
+
+        readyPendingAttachmentMessageRefs: [
+            (s) => [s.pendingAttachments, s.conversationId],
+            (pendingAttachments, conversationId): NonNullable<HumanMessage['attachments']> =>
+                pendingAttachments
+                    .map((attachment) => pendingAttachmentToMessageAttachment(attachment, conversationId))
+                    .filter(
+                        (attachment): attachment is NonNullable<HumanMessage['attachments']>[number] =>
+                            attachment !== null
+                    ),
+        ],
+
+        pendingAttachmentSubmitDisabledReason: [
+            (s) => [
+                s.pendingAttachmentUploadCount,
+                s.pendingAttachmentErrorCount,
+                s.readyPendingAttachmentIds,
+                s.isSandboxMode,
+            ],
+            (uploadCount, errorCount, readyAttachmentIds, isSandboxMode): string | undefined => {
+                if (uploadCount > 0) {
+                    return 'Wait for image upload to finish'
+                }
+                if (errorCount > 0) {
+                    return 'Remove or retry failed image uploads'
+                }
+                if (readyAttachmentIds.length > 0 && isSandboxMode) {
+                    return 'Attachments are not supported in sandbox mode'
+                }
+                return undefined
+            },
         ],
 
         threadGrouped: [
@@ -1720,11 +2111,25 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         ],
 
         submissionDisabledReason: [
-            (s) => [s.contextDisabledReason, s.question, s.queueDisabledReason],
-            (contextDisabledReason, question, queueDisabledReason): string | undefined => {
+            (s) => [
+                s.contextDisabledReason,
+                s.pendingAttachmentSubmitDisabledReason,
+                s.question,
+                s.queueDisabledReason,
+            ],
+            (
+                contextDisabledReason,
+                pendingAttachmentSubmitDisabledReason,
+                question,
+                queueDisabledReason
+            ): string | undefined => {
                 // Context-related reasons take precedence (form pending, streaming, etc.)
                 if (contextDisabledReason) {
                     return contextDisabledReason
+                }
+
+                if (pendingAttachmentSubmitDisabledReason) {
+                    return pendingAttachmentSubmitDisabledReason
                 }
 
                 if (!question) {
@@ -1894,6 +2299,19 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         ) {
             actions.reconnectToStream()
         }
+    }),
+
+    beforeUnmount(({ cache }) => {
+        const attachmentCache = getAttachmentCache(cache as AttachmentCache)
+        for (const controller of attachmentCache.uploads.values()) {
+            controller.abort()
+        }
+        for (const previewUrl of attachmentCache.previewUrls.values()) {
+            revokeAttachmentPreviewUrl(previewUrl)
+        }
+        attachmentCache.uploads.clear()
+        attachmentCache.files.clear()
+        attachmentCache.previewUrls.clear()
     }),
 
     subscriptions(({ actions, values }) => ({

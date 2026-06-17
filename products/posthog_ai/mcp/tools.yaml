@@ -9,6 +9,12 @@ feature: posthog_ai
 url_prefix: /
 ui_apps: {}
 tools:
+    conversation-attachments-create:
+        operation: conversation_attachments_create
+        enabled: false
+    conversation-attachments-destroy:
+        operation: conversation_attachments_destroy
+        enabled: false
     docs-search:
         operation: docs_search
         enabled: false

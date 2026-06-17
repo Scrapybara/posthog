@@ -19,6 +19,13 @@ class TestConversationQueueStore(BaseTest):
         queue_messages = self.store.enqueue(message)
         self.assertEqual(queue_messages, [message])
         self.assertEqual(self.store.list(), [message])
+        self.assertEqual(message["attachment_refs"], [])
+
+    def test_build_queue_message_keeps_attachment_refs(self):
+        attachment_refs = [{"id": "attachment-id", "conversation_id": "conversation-id"}]
+        message = build_queue_message(content="hello", attachment_refs=attachment_refs)
+
+        self.assertEqual(message["attachment_refs"], attachment_refs)
 
     def test_enqueue_raises_when_full(self):
         self.store.enqueue(build_queue_message(content="first"))

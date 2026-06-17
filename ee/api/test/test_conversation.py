@@ -30,7 +30,7 @@ from posthog.models.user import User
 from posthog.temporal.ai.chat_agent import ChatAgentWorkflow, ChatAgentWorkflowInputs
 from posthog.temporal.ai.research_agent import ResearchAgentWorkflow, ResearchAgentWorkflowInputs
 
-from products.posthog_ai.backend.models.assistant import Conversation
+from products.posthog_ai.backend.models.assistant import Conversation, ConversationAttachment
 
 from ee.api.conversation import ConversationViewSet
 
@@ -134,6 +134,179 @@ class TestConversation(APIBaseTest):
                 self.assertEqual(workflow_inputs.conversation_id, conversation.id)
                 self.assertEqual(str(workflow_inputs.trace_id), trace_id)
                 self.assertEqual(workflow_inputs.message["content"], "test query")
+
+    def test_create_conversation_with_attachment_refs(self):
+        conversation_id = uuid.uuid4()
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id=conversation_id,
+            created_by=self.user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+        )
+
+        with patch(
+            "ee.hogai.core.executor.AgentExecutor.astream",
+            return_value=_async_generator(),
+        ) as mock_start_workflow_and_stream:
+            with patch("ee.api.conversation.StreamingHttpResponse", side_effect=self._create_mock_streaming_response):
+                response = self.client.post(
+                    f"/api/environments/{self.team.id}/conversations/",
+                    {
+                        "content": "what is in this screenshot?",
+                        "trace_id": str(uuid.uuid4()),
+                        "conversation": str(conversation_id),
+                        "attachment_ids": [str(attachment.id)],
+                    },
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        workflow_inputs = mock_start_workflow_and_stream.call_args[0][1]
+        self.assertEqual(
+            workflow_inputs.message["attachments"],
+            [
+                {
+                    "id": str(attachment.id),
+                    "conversation_id": str(conversation_id),
+                    "filename": "screenshot.png",
+                    "content_type": "image/png",
+                    "byte_size": 123,
+                }
+            ],
+        )
+        attachment.refresh_from_db()
+        self.assertEqual(attachment.attachment_status, ConversationAttachment.AttachmentStatus.ATTACHED)
+        self.assertIsNotNone(attachment.attached_at)
+
+    def test_create_conversation_rejects_attachment_from_other_team(self):
+        conversation_id = uuid.uuid4()
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.other_team,
+            conversation_id=conversation_id,
+            created_by=self.user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+        )
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/",
+            {
+                "content": "what is in this screenshot?",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation_id),
+                "attachment_ids": [str(attachment.id)],
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_conversation_rejects_attachment_from_other_user(self):
+        conversation_id = uuid.uuid4()
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id=conversation_id,
+            created_by=self.other_user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+        )
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/",
+            {
+                "content": "what is in this screenshot?",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation_id),
+                "attachment_ids": [str(attachment.id)],
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_conversation_rejects_too_many_attachment_refs(self):
+        conversation_id = uuid.uuid4()
+        attachments = [
+            ConversationAttachment.objects.unscoped().create(
+                team=self.team,
+                conversation_id=conversation_id,
+                created_by=self.user,
+                original_filename=f"screenshot-{index}.png",
+                content_type="image/png",
+                byte_size=123,
+                object_key=f"private/key-{index}.png",
+            )
+            for index in range(5)
+        ]
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/",
+            {
+                "content": "what is in these screenshots?",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation_id),
+                "attachment_ids": [str(attachment.id) for attachment in attachments],
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.json()["attr"], "attachment_ids")
+        self.assertIn("You can attach up to 4 images.", response.json()["detail"])
+
+    def test_create_conversation_rejects_oversized_attachment_total(self):
+        conversation_id = uuid.uuid4()
+        attachments = [
+            ConversationAttachment.objects.unscoped().create(
+                team=self.team,
+                conversation_id=conversation_id,
+                created_by=self.user,
+                original_filename=f"screenshot-{index}.png",
+                content_type="image/png",
+                byte_size=4 * 1024 * 1024,
+                object_key=f"private/key-{index}.png",
+            )
+            for index in range(4)
+        ]
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/",
+            {
+                "content": "what is in these screenshots?",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation_id),
+                "attachment_ids": [str(attachment.id) for attachment in attachments],
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.json()["attr"], "attachment_ids")
+        self.assertIn("Images must be 12 MiB or smaller in total.", response.json()["detail"])
+
+    @patch("products.posthog_ai.backend.attachments.object_storage.delete_objects", return_value=[])
+    def test_destroy_conversation_deletes_attachments(self, mock_delete_objects):
+        conversation = Conversation.objects.create(user=self.user, team=self.team)
+        attachment = ConversationAttachment.objects.unscoped().create(
+            team=self.team,
+            conversation_id=conversation.id,
+            created_by=self.user,
+            original_filename="screenshot.png",
+            content_type="image/png",
+            byte_size=123,
+            object_key="private/key.png",
+            attachment_status=ConversationAttachment.AttachmentStatus.ATTACHED,
+        )
+
+        response = self.client.delete(f"/api/environments/{self.team.id}/conversations/{conversation.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        mock_delete_objects.assert_called_once_with(["private/key.png"])
+        attachment.refresh_from_db()
+        self.assertTrue(attachment.deleted)
+        self.assertEqual(attachment.deleted_by, self.user)
 
     def test_add_message_to_existing_conversation(self):
         with patch(

@@ -18,6 +18,7 @@ import * as zod from 'zod'
 export const conversationsCreateBodyContentMax = 40000
 
 export const conversationsCreateBodyIsSandboxDefault = false
+export const conversationsCreateBodyAttachmentIdsMax = 4
 
 export const ConversationsCreateBody = /* @__PURE__ */ zod
     .object({
@@ -50,6 +51,11 @@ export const ConversationsCreateBody = /* @__PURE__ */ zod
             ),
         is_sandbox: zod.boolean().default(conversationsCreateBodyIsSandboxDefault),
         resume_payload: zod.unknown().optional(),
+        attachment_ids: zod
+            .array(zod.uuid())
+            .max(conversationsCreateBodyAttachmentIdsMax)
+            .optional()
+            .describe('Pending image attachment IDs to include with this message.'),
     })
     .describe('Serializer for appending a message to an existing conversation without triggering AI processing.')
 

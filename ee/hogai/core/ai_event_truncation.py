@@ -34,6 +34,7 @@ PER_STRING_CAP = 10_000
 # Tier 3 never front-trims the messages list below this many entries.
 MIN_TAIL_MESSAGES = 1
 TRUNCATION_MARKER = "...truncated"
+IMAGE_REDACTION_MARKER = "[redacted image data]"
 
 TRUNCATABLE_AI_EVENTS = frozenset({"$ai_trace", "$ai_span", "$ai_generation"})
 # State blobs on $ai_trace/$ai_span, and model input/output on $ai_generation.
@@ -46,7 +47,7 @@ _KEPT_MESSAGE_FIELDS = ("type", "role", "id", "name", "tool_call_id")
 AI_EVENT_TRUNCATED_COUNTER = Counter(
     "posthog_ai_event_truncated_total",
     "AI event blobs truncated before capture to stay under the SDK per-event size limit",
-    ["event", "property", "tier"],  # $ai_trace|$ai_span|$ai_generation ; property name ; leaf|strip|trim|hard
+    ["event", "property", "tier"],  # $ai_trace|$ai_span|$ai_generation ; property name ; redact|leaf|strip|trim|hard
 )
 
 
@@ -99,6 +100,10 @@ class AIEventTruncator:
             for prop in TRUNCATABLE_PROPS:
                 if properties.get(prop) is None:
                     continue
+                redacted_value, redacted = self._redact_image_payloads(deepcopy(properties[prop]))
+                if redacted:
+                    properties[prop] = redacted_value
+                    changed_tiers[prop] = "redact"
                 new_value, tier = self.truncate_blob(properties[prop])
                 if tier is not None:
                     properties[prop] = new_value
@@ -187,6 +192,41 @@ class AIEventTruncator:
                 obj[index] = self._cap_leaf_strings(value)
             return obj
         return obj
+
+    def _redact_image_payloads(self, obj: Any) -> tuple[Any, bool]:
+        changed = False
+
+        def redact(value: Any) -> Any:
+            nonlocal changed
+            if isinstance(value, str):
+                if value.startswith("data:image/") and ";base64," in value:
+                    changed = True
+                    return IMAGE_REDACTION_MARKER
+                return value
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            if isinstance(value, dict):
+                media_type = value.get("media_type")
+                if (
+                    value.get("type") == "base64"
+                    and isinstance(media_type, str)
+                    and media_type.startswith("image/")
+                    and isinstance(value.get("data"), str)
+                ):
+                    value["data"] = IMAGE_REDACTION_MARKER
+                    changed = True
+                image_url = value.get("image_url")
+                if isinstance(image_url, dict):
+                    url = image_url.get("url")
+                    if isinstance(url, str) and url.startswith("data:image/") and ";base64," in url:
+                        image_url["url"] = IMAGE_REDACTION_MARKER
+                        changed = True
+                for key, child in list(value.items()):
+                    value[key] = redact(child)
+                return value
+            return value
+
+        return redact(obj), changed
 
     def _front_trim_messages(self, messages: list[Any], byte_budget: int) -> list[Any]:
         """Drop messages from the FRONT (keep the tail) until under budget. Billing reads only the

@@ -7165,6 +7165,13 @@ export interface ConversationQueueMessage {
     billing_context?: Record<string, any> | null
     agent_mode?: string | null
     session_id?: string | null
+    attachment_refs?: {
+        id: string
+        conversation_id: string
+        filename: string
+        content_type: 'image/png' | 'image/jpeg'
+        byte_size: number
+    }[]
 }
 
 export interface ConversationQueueResponse {

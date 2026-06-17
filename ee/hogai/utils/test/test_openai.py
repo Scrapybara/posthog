@@ -1,11 +1,52 @@
 from posthog.test.base import BaseTest
+from unittest.mock import patch
 
 from posthog.schema import AssistantMessage, AssistantToolCallMessage, ContextMessage, FailureMessage, HumanMessage
 
-from ee.hogai.utils.openai import convert_to_openai_message, convert_to_openai_messages
+from products.posthog_ai.backend.attachments import ResolvedAttachment
+
+from ee.hogai.utils.openai import (
+    convert_human_message_to_openai_message,
+    convert_to_openai_message,
+    convert_to_openai_messages,
+)
 
 
 class TestOpenAIUtils(BaseTest):
+    @patch("ee.hogai.utils.openai.resolve_message_attachments")
+    def test_convert_human_message_with_image_attachment(self, mock_resolve):
+        image_data = b"jpeg-bytes"
+        mock_resolve.return_value = [
+            ResolvedAttachment(
+                id="attachment-id",
+                filename="screenshot.jpg",
+                content_type="image/jpeg",
+                byte_size=len(image_data),
+                data=image_data,
+            )
+        ]
+        message = HumanMessage(
+            content="what is in this screenshot?",
+            attachments=[
+                {
+                    "id": "attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "screenshot.jpg",
+                    "content_type": "image/jpeg",
+                    "byte_size": len(image_data),
+                }
+            ],
+        )
+
+        result = convert_human_message_to_openai_message(message, self.team)
+
+        assert isinstance(result.content, list)
+        self.assertEqual(result.content[0], {"type": "text", "text": "what is in this screenshot?"})
+        self.assertEqual(
+            result.content[1],
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,anBlZy1ieXRlcw=="}},
+        )
+
     def test_convert_context_message_to_openai_message(self):
         message = ContextMessage(content="Context information")
 

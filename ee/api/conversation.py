@@ -50,6 +50,14 @@ from posthog.temporal.ai.research_agent import (
     ResearchAgentWorkflowInputs,
 )
 
+from products.posthog_ai.backend.attachments import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    AttachmentNotFoundError,
+    AttachmentValidationError,
+    delete_conversation_attachments,
+    mark_attachment_references_attached,
+    validate_attachment_references,
+)
 from products.posthog_ai.backend.models.assistant import Conversation
 
 from ee.billing.quota_limiting import QuotaLimitingCaches, QuotaResource, is_team_limited
@@ -108,9 +116,19 @@ class MessageSerializer(MessageMinimalSerializer):
     agent_mode = serializers.ChoiceField(required=False, choices=[mode.value for mode in AgentMode])
     is_sandbox = serializers.BooleanField(required=False, default=False)
     resume_payload = serializers.JSONField(required=False, allow_null=True)
+    attachment_ids = serializers.ListField(
+        required=False,
+        allow_empty=True,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
+        child=serializers.UUIDField(),
+        error_messages={"max_length": "You can attach up to 4 images."},
+        help_text="Pending image attachment IDs to include with this message.",
+    )
 
     def validate(self, attrs):
         data = attrs
+        if data.get("content") is None and data.get("attachment_ids"):
+            raise serializers.ValidationError("Attachments require a new message.")
         if data["content"] is not None:
             try:
                 message = HumanMessage.model_validate(
@@ -152,6 +170,14 @@ class QueueMessageSerializer(serializers.Serializer):
     ui_context = serializers.JSONField(required=False)
     billing_context = serializers.JSONField(required=False)
     agent_mode = serializers.ChoiceField(required=False, choices=[mode.value for mode in AgentMode])
+    attachment_ids = serializers.ListField(
+        required=False,
+        allow_empty=True,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
+        child=serializers.UUIDField(),
+        error_messages={"max_length": "You can attach up to 4 images."},
+        help_text="Pending image attachment IDs to include with this queued message.",
+    )
 
     def validate(self, attrs):
         data = attrs
@@ -396,7 +422,31 @@ class ConversationViewSet(
 
         is_impersonated = is_impersonated_session(request)
 
+        attachment_references = []
+        if has_message:
+            try:
+                attachment_references = validate_attachment_references(
+                    team=self.team,
+                    user=cast(User, request.user),
+                    conversation=conversation,
+                    attachment_ids=serializer.validated_data.get("attachment_ids", []),
+                )
+            except AttachmentNotFoundError as error:
+                raise serializers.ValidationError({"attachment_ids": str(error)}) from error
+            except AttachmentValidationError as error:
+                raise serializers.ValidationError({"attachment_ids": str(error)}) from error
+
+            if attachment_references:
+                serializer.validated_data["message"] = HumanMessage.model_validate(
+                    {
+                        **serializer.validated_data["message"].model_dump(),
+                        "attachments": [reference.as_message_ref() for reference in attachment_references],
+                    }
+                )
+
         if is_sandbox and has_message:
+            if attachment_references:
+                raise serializers.ValidationError({"attachment_ids": "Attachments are not supported in sandbox mode."})
             return handle_sandbox_message(
                 conversation=conversation,
                 conversation_id=str(conversation_id),
@@ -405,6 +455,9 @@ class ConversationViewSet(
                 team=self.team,
                 is_new_conversation=is_new_conversation,
             )
+
+        if attachment_references:
+            mark_attachment_references_attached(team=self.team, references=attachment_references)
 
         workflow_inputs: ChatAgentWorkflowInputs | ResearchAgentWorkflowInputs
         workflow_class: type[ChatAgentWorkflow] | type[ResearchAgentWorkflow]
@@ -512,6 +565,19 @@ class ConversationViewSet(
 
         serializer = QueueMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        conversation = Conversation.objects.exclude(deleted=True).get(id=conversation_id, team=self.team)
+        try:
+            attachment_references = validate_attachment_references(
+                team=self.team,
+                user=cast(User, request.user),
+                conversation=conversation,
+                attachment_ids=serializer.validated_data.get("attachment_ids", []),
+            )
+        except AttachmentNotFoundError as error:
+            raise serializers.ValidationError({"attachment_ids": str(error)}) from error
+        except AttachmentValidationError as error:
+            raise serializers.ValidationError({"attachment_ids": str(error)}) from error
+
         message = build_queue_message(
             content=serializer.validated_data["content"],
             contextual_tools=serializer.validated_data.get("contextual_tools"),
@@ -519,6 +585,7 @@ class ConversationViewSet(
             billing_context=serializer.validated_data.get("billing_context"),
             agent_mode=serializer.validated_data.get("agent_mode"),
             session_id=request.headers.get("X-POSTHOG-SESSION-ID"),
+            attachment_refs=[reference.as_message_ref() for reference in attachment_references],
         )
 
         try:
@@ -532,6 +599,7 @@ class ConversationViewSet(
                 status=status.HTTP_409_CONFLICT,
             )
 
+        mark_attachment_references_attached(team=self.team, references=attachment_references)
         return self._queue_response(queue_store, queue)
 
     @extend_schema(parameters=[OpenApiParameter("queue_id", OpenApiTypes.STR, OpenApiParameter.PATH)])
@@ -595,6 +663,7 @@ class ConversationViewSet(
     )
     def destroy(self, request: Request, *args, **kwargs) -> Response:
         instance: Conversation = self.get_object()
+        delete_conversation_attachments(instance, deleted_by=cast(User, request.user))
         Conversation.objects.filter(pk=instance.pk).update(deleted=True, deleted_at=timezone.now())
         return Response(status=status.HTTP_204_NO_CONTENT)
 

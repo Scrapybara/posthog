@@ -3467,6 +3467,76 @@ class TestExperimentService(APIBaseTest):
 
         assert list(queryset.values_list("name", flat=True)[:3]) == expected_order
 
+    @parameterized.expand(
+        [
+            (
+                "ascending",
+                "conclusion",
+                ["Won", "Lost", "Inconclusive", "Stopped early", "Invalid", "No conclusion"],
+            ),
+            (
+                "descending",
+                "-conclusion",
+                ["No conclusion", "Invalid", "Stopped early", "Inconclusive", "Lost", "Won"],
+            ),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_conclusion(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        flag = self._create_flag(key="order-conclusion")
+        for name, conclusion in [
+            ("Invalid", "invalid"),
+            ("No conclusion", None),
+            ("Won", "won"),
+            ("Stopped early", "stopped_early"),
+            ("Lost", "lost"),
+            ("Inconclusive", "inconclusive"),
+        ]:
+            Experiment.objects.create(
+                team=self.team,
+                name=name,
+                feature_flag=flag,
+                conclusion=conclusion,
+                created_by=self.user,
+            )
+
+        queryset = self._service().filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    @parameterized.expand(
+        [
+            ("ascending", "created_by", ["No creator", "Alice", "Bob"]),
+            ("descending", "-created_by", ["Bob", "Alice", "No creator"]),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_created_by(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        flag = self._create_flag(key="order-created-by")
+        alice = self._create_user("alice@example.com", first_name="Alice")
+        bob = self._create_user("bob@example.com", first_name="Bob")
+        for name, created_by in [("Bob", bob), ("No creator", None), ("Alice", alice)]:
+            Experiment.objects.create(
+                team=self.team,
+                name=name,
+                feature_flag=flag,
+                created_by=created_by,
+            )
+
+        queryset = self._service().filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
     def test_filter_experiments_queryset_validates_feature_flag_id(self) -> None:
         with self.assertRaises(ValidationError) as ctx:
             self._service().filter_experiments_queryset(
@@ -4252,12 +4322,14 @@ class TestExperimentService(APIBaseTest):
             ("-duration",),
             ("status",),
             ("-status",),
+            ("conclusion",),
+            ("-conclusion",),
         ]
     )
     def test_order_by_valid_fields_works(self, order: str):
         service = self._service()
         qs = service.filter_experiments_queryset(self._base_queryset(), action="list", query_params={"order": order})
-        assert qs is not None
+        list(qs[:1])
 
     def test_eligible_flags_order_by_invalid_field_raises(self):
         """Ordering eligible flags by a non-allowlisted field should be rejected."""

@@ -318,6 +318,52 @@ describe('experimentsLogic', () => {
                 archived: false,
             })
         })
+
+        it.each([
+            ['result ascending', 'conclusion'],
+            ['result descending', '-conclusion'],
+            ['created by ascending', 'created_by'],
+            ['created by descending', '-created_by'],
+            ['created date descending', '-created_at'],
+        ])('keeps %s sorting in URL state and API params', async (_, order) => {
+            api.get.mockClear()
+
+            await expectLogic(logic, () => {
+                logic.actions.setExperimentsFilters({ order, page: 1 })
+            })
+                .delay(350)
+                .toFinishAllListeners()
+
+            expect(router.values.searchParams.order).toBe(order)
+            expect(logic.values.paramsFromFilters).toMatchObject({
+                order,
+                page: 1,
+                limit: 100,
+                offset: 0,
+            })
+            expect(api.get).toHaveBeenCalledWith(expect.stringContaining(`order=${encodeURIComponent(order)}`))
+        })
+
+        it('hydrates order and pagination from URL state', async () => {
+            api.get.mockClear()
+
+            router.actions.push(urls.experiments(), { order: '-conclusion', page: 3 })
+
+            await expectLogic(logic).toFinishAllListeners()
+
+            expect(logic.values.filters).toMatchObject({
+                order: '-conclusion',
+                page: 3,
+            })
+            expect(logic.values.paramsFromFilters).toMatchObject({
+                order: '-conclusion',
+                page: 3,
+                limit: 100,
+                offset: 200,
+            })
+            expect(api.get).toHaveBeenCalledWith(expect.stringContaining('order=-conclusion'))
+            expect(api.get).toHaveBeenCalledWith(expect.stringContaining('offset=200'))
+        })
     })
 
     describe('experiment CRUD operations', () => {

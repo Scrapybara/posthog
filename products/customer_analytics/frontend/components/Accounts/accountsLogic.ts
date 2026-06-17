@@ -9,6 +9,7 @@ import { urls } from 'scenes/urls'
 import { userLogic } from 'scenes/userLogic'
 
 import { dataNodeLogic } from '~/queries/nodes/DataNode/dataNodeLogic'
+import { orderByForSelectKey } from '~/queries/nodes/DataTable/utils'
 import { AccountsQuery, DataTableNode, NodeKind } from '~/queries/schema/schema-general'
 import type { UserBasicType } from '~/types'
 
@@ -96,15 +97,14 @@ export function isAccountsColumnSortable(column: string): boolean {
 }
 
 // Resolve the HogQL expression to use in ORDER BY for a sortable column.
-// HogQL ORDER BY resolves SELECT aliases by name, so the visible column name
-// (which is the alias for aliased entries, or the bare expression otherwise)
-// works directly — except for tuple-shaped role columns, where we sort by
-// the email element so the visual order matches the rendered cell.
-export function deriveAccountsOrderByExpr(column: string): string {
+// Resolve the visible column key back to the selected HogQL expression, except
+// for tuple-shaped role columns where we sort by the email element so the
+// visual order matches the rendered cell.
+export function deriveAccountsOrderByExpr(column: string, selectColumns: readonly string[]): string {
     if (TUPLE_SORT_COLUMNS.has(column)) {
         return `tupleElement(${column}, 2)`
     }
-    return column
+    return orderByForSelectKey(column, selectColumns)
 }
 
 const ROLE_LABELS: Record<AccountRoleKey, string> = {
@@ -369,7 +369,7 @@ export const accountsLogic = kea<accountsLogicType>([
                     source.filterExpression = tileFilter.expression
                 }
                 if (sortOrder) {
-                    const expr = deriveAccountsOrderByExpr(sortOrder.column)
+                    const expr = deriveAccountsOrderByExpr(sortOrder.column, querySelectColumns)
                     source.orderBy = [sortOrder.direction === 'asc' ? expr : `${expr} DESC`]
                 }
                 return {

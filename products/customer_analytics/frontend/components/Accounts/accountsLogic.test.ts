@@ -224,7 +224,7 @@ describe('accountsLogic', () => {
         it('toggleSort on a fresh column starts ascending', () => {
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toEqual({ column: 'notebook_count', direction: 'asc' })
-            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['notebook_count'])
+            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['accounts.notebooks.count'])
         })
 
         it('toggleSort cycles asc -> desc -> null on repeated clicks', () => {
@@ -232,7 +232,7 @@ describe('accountsLogic', () => {
             expect(logic.values.sortOrder?.direction).toBe('asc')
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toEqual({ column: 'notebook_count', direction: 'desc' })
-            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['notebook_count DESC'])
+            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['accounts.notebooks.count DESC'])
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toBeNull()
             expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
@@ -298,10 +298,12 @@ describe('accountsLogic', () => {
             const config = accountsColumnConfigLogic.findMounted()
             const userExpression = 'properties.plan AS health_score'
             config?.actions.setSelectColumns([ACCOUNTS_NAME_COLUMN, userExpression])
+            logic.actions.toggleSort(userExpression)
 
             const source = logic.values.hogqlQuery.source as AccountsQuery
             expect(config?.values.visibleColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, userExpression])
             expect(source.select).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, userExpression])
+            expect(orderByOf(source)).toEqual(['properties.plan'])
             expect(logic.values.hogqlQuery.hiddenColumns).toEqual([ACCOUNTS_HEALTH_SCORE_COLUMN])
             expect(logic.values.queryColumnNames).toEqual([
                 ACCOUNTS_NAME_COLUMN,

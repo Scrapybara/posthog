@@ -6,6 +6,7 @@ from freezegun import freeze_time
 from posthog.test.base import ClickhouseTestMixin, NonAtomicBaseTest, _create_event, flush_persons_and_events
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.test import override_settings
 from django.utils import timezone
 
@@ -21,6 +22,7 @@ from posthog.models import Tag, User
 from posthog.models.team import Team
 from posthog.rbac.user_access_control import UserAccessControlError
 
+from products.actions.backend.models.action import Action
 from products.customer_analytics.backend.hogql_queries.account_health_score import (
     ACCOUNT_HEALTH_SCORE_COLUMN,
     AccountActivityMetrics,
@@ -113,7 +115,25 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         )
         self.assertEqual(score["status"], "no_data")
         self.assertEqual(score["score"], None)
+        self.assertEqual(score["lookbackDays"], 30)
         self.assertIn("No $pageview activity", score["noDataReason"])
+
+    def test_score_account_health_preserves_custom_no_data_lookback(self):
+        score = score_account_health(
+            AccountActivityMetrics(
+                current_count=0,
+                previous_count=0,
+                active_users=0,
+                active_days=0,
+                last_activity_at=None,
+            ),
+            AccountHealthBaseline(p90_activity_count=0, p90_active_users=0),
+            activity_event="$pageview",
+            date_to=datetime(2026, 6, 1, 12, 0, tzinfo=ZoneInfo("UTC")),
+            lookback_days=14,
+        )
+        self.assertEqual(score["lookbackDays"], 14)
+        self.assertIn("14-day window", score["noDataReason"])
 
     def test_default_columns_include_health_score(self):
         create_account(team_id=self.team.id, name="A")
@@ -452,7 +472,48 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         self.assertEqual(response.results[0][health_idx]["status"], "no_data")
         self.assertIn("not supported", response.results[0][health_idx]["noDataReason"])
 
+    def test_health_score_invalid_action_source_returns_no_data(self):
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "ActionsNode", "id": "not-an-action", "name": "Deleted action"},
+            },
+        )
+        create_account(team_id=self.team.id, name="A", external_id="org-a")
+        runner, response = self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        self.assertEqual(response.results[0][health_idx]["status"], "no_data")
+        self.assertIn("no longer available", response.results[0][health_idx]["noDataReason"])
+
+    def test_health_score_valid_action_source_uses_resolved_action_cache(self):
+        action = Action.objects.create(team=self.team, name="Viewed docs")
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "ActionsNode", "id": action.id, "name": action.name},
+            },
+        )
+        calculator = AccountHealthScoreCalculator(team=self.team, user=self.user)
+        self.assertEqual(
+            calculator._actions_for_activity_event({"kind": "ActionsNode", "id": action.id}), {action.id: action}
+        )
+
+    def test_health_score_enrichment_failure_keeps_account_list_usable(self):
+        create_account(team_id=self.team.id, name="A", external_id="org-a")
+        with patch(
+            "products.customer_analytics.backend.hogql_queries.accounts_query_runner.AccountHealthScoreCalculator.score_accounts",
+            side_effect=RuntimeError("health query timed out"),
+        ):
+            runner, response = self._run_query(select=["name", ACCOUNT_HEALTH_SCORE_COLUMN])
+
+        health_idx = runner.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        self.assertEqual(response.results[0][health_idx]["status"], "no_data")
+        self.assertIn("could not be calculated", response.results[0][health_idx]["noDataReason"])
+
     def test_health_score_calculator_uses_batched_baseline_and_metrics_queries(self):
+        cache.clear()
         TeamCustomerAnalyticsConfig.objects.update_or_create(
             team=self.team,
             defaults={
@@ -476,6 +537,33 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
         self.assertEqual(execute.call_args_list[1].kwargs["query_type"], "AccountsHealthMetricsQuery")
         self.assertEqual(scores["account-a"]["status"], "neutral")
         self.assertEqual(scores["account-b"]["status"], "no_data")
+
+    def test_health_score_calculator_caches_full_team_baseline(self):
+        cache.clear()
+        TeamCustomerAnalyticsConfig.objects.update_or_create(
+            team=self.team,
+            defaults={
+                "account_group_type_index": 0,
+                "activity_event": {"kind": "EventsNode", "event": "$pageview", "name": "$pageview"},
+            },
+        )
+        with freeze_time("2026-06-01T12:00:00Z"):
+            with patch(
+                "products.customer_analytics.backend.hogql_queries.account_health_score.execute_hogql_query",
+                side_effect=[
+                    SimpleNamespace(results=[[10, 5]]),
+                    SimpleNamespace(results=[["org-a", 4, 2, 2, 3, timezone.now()]]),
+                    SimpleNamespace(results=[["org-a", 5, 4, 3, 4, timezone.now()]]),
+                ],
+            ) as execute:
+                calculator = AccountHealthScoreCalculator(team=self.team, user=self.user)
+                calculator.score_accounts({"account-a": "org-a"})
+                calculator.score_accounts({"account-a": "org-a"})
+
+        self.assertEqual(
+            [call.kwargs["query_type"] for call in execute.call_args_list],
+            ["AccountsHealthBaselineQuery", "AccountsHealthMetricsQuery", "AccountsHealthMetricsQuery"],
+        )
 
     def _link_notebooks(self, account, count: int) -> None:
         for i in range(count):

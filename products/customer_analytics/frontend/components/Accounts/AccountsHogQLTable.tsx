@@ -55,12 +55,12 @@ function getCellAt(record: unknown, names: string[], column: string): unknown {
 }
 
 function useGetCell(): (record: unknown, column: string) => unknown {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
-    return (record, column) => getCellAt(record, visibleColumnNames, column)
+    const { queryColumnNames } = useValues(accountsLogic)
+    return (record, column) => getCellAt(record, queryColumnNames, column)
 }
 
-function getNameCell(record: unknown, visibleColumnNames: string[]): AccountNameCell | undefined {
-    const value = getCellAt(record, visibleColumnNames, ACCOUNTS_NAME_COLUMN)
+function getNameCell(record: unknown, columnNames: string[]): AccountNameCell | undefined {
+    const value = getCellAt(record, columnNames, ACCOUNTS_NAME_COLUMN)
     if (!value || typeof value !== 'object') {
         return undefined
     }
@@ -84,8 +84,8 @@ function tupleToAssignment(value: unknown): AccountAssignment {
 }
 
 function NameCell({ record }: { record: unknown }): JSX.Element {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
-    const cell = getNameCell(record, visibleColumnNames)
+    const { queryColumnNames } = useValues(accountsLogic)
+    const cell = getNameCell(record, queryColumnNames)
     const name = cell?.name ?? ''
     const externalId = cell?.external_id ?? ''
     return (
@@ -122,11 +122,10 @@ function HealthScoreCell({ value }: { value: unknown }): JSX.Element {
 }
 
 function RoleAssignmentCell({ record, role }: { record: unknown; role: AccountRoleKey }): JSX.Element {
-    const { isRoleSaving, accountOverrides } = useValues(accountsLogic)
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
+    const { isRoleSaving, accountOverrides, queryColumnNames } = useValues(accountsLogic)
     const { updateAccountRole } = useActions(accountsLogic)
     const getCell = useGetCell()
-    const accountId = getNameCell(record, visibleColumnNames)?.id ?? ''
+    const accountId = getNameCell(record, queryColumnNames)?.id ?? ''
     const overrideProperties = accountId ? accountOverrides[accountId]?.properties : undefined
     const overrideRole = overrideProperties != null ? overrideProperties[role] : undefined
     const assignment: AccountAssignment =
@@ -265,7 +264,7 @@ function useContextColumns(): Record<string, QueryContextColumn> {
 }
 
 function useExpandable(): QueryContext<DataTableNode>['expandable'] {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
+    const { queryColumnNames } = useValues(accountsLogic)
     const { expandedAccountIds } = useValues(accountsExpansionLogic)
     const { toggleAccountExpanded } = useActions(accountsExpansionLogic)
     return useMemo(
@@ -273,25 +272,25 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
             noIndent: true,
             expandedRowClassName: '[&>td]:overflow-visible!',
             isRowExpanded: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 return !!cell && expandedAccountIds.includes(cell.id)
             },
             onRowExpand: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 if (cell) {
                     toggleAccountExpanded(cell.id)
                 }
             },
             onRowCollapse: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 if (cell) {
                     toggleAccountExpanded(cell.id)
                 }
             },
             expandedRowRender: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 const healthScore = parseAccountHealthScore(
-                    getCellAt(result, visibleColumnNames, ACCOUNTS_HEALTH_SCORE_COLUMN)
+                    getCellAt(result, queryColumnNames, ACCOUNTS_HEALTH_SCORE_COLUMN)
                 )
                 return cell ? (
                     <AccountNotebooksExpansion
@@ -302,7 +301,7 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
                 ) : null
             },
         }),
-        [visibleColumnNames, expandedAccountIds, toggleAccountExpanded]
+        [queryColumnNames, expandedAccountIds, toggleAccountExpanded]
     )
 }
 

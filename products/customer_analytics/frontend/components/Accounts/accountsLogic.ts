@@ -23,7 +23,9 @@ import {
     ACCOUNTS_HEALTH_SCORE_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
+    accountColumnDisplayNames,
     accountsColumnConfigLogic,
+    ensureAccountQueryColumns,
 } from './accountsColumnConfigLogic'
 import { AccountExpansionTab, accountsExpansionLogic } from './accountsExpansionLogic'
 import type { accountsLogicType } from './accountsLogicType'
@@ -316,6 +318,10 @@ export const accountsLogic = kea<accountsLogicType>([
                 return state
             },
         ],
+        queryColumnNames: [
+            (s) => [s.selectColumns],
+            (selectColumns: string[]): string[] => accountColumnDisplayNames(ensureAccountQueryColumns(selectColumns)),
+        ],
         hogqlQuery: [
             (s) => [
                 s.searchQuery,
@@ -337,9 +343,10 @@ export const accountsLogic = kea<accountsLogicType>([
                 sortOrder: AccountSortOrder,
                 selectColumns: string[]
             ): DataTableNode => {
+                const querySelectColumns = ensureAccountQueryColumns(selectColumns)
                 const source: AccountsQuery = {
                     kind: NodeKind.AccountsQuery,
-                    select: selectColumns,
+                    select: querySelectColumns,
                     tags: { ...CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS, name: 'customer_analytics_accounts_list' },
                 }
                 if (overviewMetrics.length > 0) {
@@ -369,6 +376,9 @@ export const accountsLogic = kea<accountsLogicType>([
                     kind: NodeKind.DataTableNode,
                     source,
                     full: true,
+                    hiddenColumns: selectColumns.includes(ACCOUNTS_HEALTH_SCORE_COLUMN)
+                        ? undefined
+                        : [ACCOUNTS_HEALTH_SCORE_COLUMN],
                     // Suppress DataTable's built-in sort indicator on column
                     // headers — our `SortableColumnHeader` renders its own (and
                     // correctly reflects sorts where the orderBy expression

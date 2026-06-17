@@ -1,3 +1,5 @@
+import structlog
+
 from posthog.schema import AccountsQuery, AccountsQueryResponse, CachedAccountsQueryResponse
 
 from posthog.hogql import ast
@@ -14,7 +16,10 @@ from posthog.rbac.user_access_control import UserAccessControl
 from products.customer_analytics.backend.hogql_queries.account_health_score import (
     ACCOUNT_HEALTH_SCORE_COLUMN,
     AccountHealthScoreCalculator,
+    no_data_health_score,
 )
+
+logger = structlog.get_logger(__name__)
 
 NAME_COLUMN = "name"
 
@@ -288,12 +293,23 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             external_id = cell.get("external_id")
             external_ids_by_account_id[cell["id"]] = external_id if isinstance(external_id, str) else None
 
-        scores = AccountHealthScoreCalculator(
-            team=self.team,
-            user=self.user,
-            timings=self.timings,
-            modifiers=self.modifiers,
-        ).score_accounts(external_ids_by_account_id)
+        try:
+            scores = AccountHealthScoreCalculator(
+                team=self.team,
+                user=self.user,
+                timings=self.timings,
+                modifiers=self.modifiers,
+            ).score_accounts(external_ids_by_account_id)
+        except Exception:
+            logger.exception(
+                "account_health_score.enrichment_failed",
+                team_id=self.team.id,
+                account_count=len(external_ids_by_account_id),
+            )
+            scores = {
+                account_id: no_data_health_score("Health score could not be calculated for this page.")
+                for account_id in external_ids_by_account_id
+            }
         for row in results:
             if len(row) <= max(name_index, health_index):
                 continue

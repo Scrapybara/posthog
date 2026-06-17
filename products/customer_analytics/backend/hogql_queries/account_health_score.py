@@ -1,9 +1,12 @@
+import json
 import math
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, TypedDict
 from zoneinfo import ZoneInfo
 
+from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 
@@ -18,11 +21,13 @@ from posthog.cdp.filters import hog_function_filters_to_expr
 from posthog.models.team import Team
 from posthog.models.user import User
 
+from products.actions.backend.models.action import Action
 from products.customer_analytics.backend.constants import DEFAULT_ACTIVITY_EVENT
 from products.customer_analytics.backend.models.team_customer_analytics_config import TeamCustomerAnalyticsConfig
 
 ACCOUNT_HEALTH_SCORE_COLUMN = "health_score"
 ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS = 30
+ACCOUNT_HEALTH_BASELINE_CACHE_TTL_SECONDS = 60 * 60
 
 AccountHealthStatus = Literal["healthy", "neutral", "at_risk", "no_data"]
 
@@ -63,11 +68,13 @@ class AccountHealthBaseline:
     p90_active_users: float
 
 
-def no_data_health_score(reason: str, activity_event: str = "Activity") -> AccountHealthScore:
+def no_data_health_score(
+    reason: str, activity_event: str = "Activity", lookback_days: int = ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS
+) -> AccountHealthScore:
     return {
         "score": None,
         "status": "no_data",
-        "lookbackDays": ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS,
+        "lookbackDays": lookback_days,
         "activityEvent": activity_event,
         "factors": [],
         "noDataReason": reason,
@@ -87,6 +94,7 @@ def score_account_health(
         return no_data_health_score(
             f"No {activity_event} activity in the current or previous {lookback_days}-day window.",
             activity_event,
+            lookback_days,
         )
 
     factors: list[AccountHealthFactor] = [
@@ -145,6 +153,7 @@ def score_account_health(
         return no_data_health_score(
             f"Not enough {activity_event} activity to calculate a health score.",
             activity_event,
+            lookback_days,
         )
 
     total_weight = sum(factor["weight"] for factor in scored_factors)
@@ -251,6 +260,18 @@ def _activity_event_label(activity_event: dict[str, Any]) -> str:
     return "Activity"
 
 
+def _baseline_cache_key(
+    *, team_id: int, group_type_index: int, activity_event: dict[str, Any], date_to: datetime, lookback_days: int
+) -> str:
+    if timezone.is_naive(date_to):
+        date_to = timezone.make_aware(date_to, ZoneInfo("UTC"))
+    event_hash = hashlib.sha256(
+        json.dumps(activity_event, sort_keys=True, default=str, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    bucket = date_to.astimezone(ZoneInfo("UTC")).strftime("%Y%m%d%H")
+    return f"customer_analytics:account_health_baseline:v1:{team_id}:{group_type_index}:{lookback_days}:{bucket}:{event_hash}"
+
+
 class AccountHealthScoreCalculator:
     def __init__(
         self,
@@ -290,6 +311,16 @@ class AccountHealthScoreCalculator:
                 for account_id in external_ids_by_account_id
             }
 
+        actions = self._actions_for_activity_event(activity_event)
+        if actions is None:
+            return {
+                account_id: no_data_health_score(
+                    "The configured activity source is no longer available.",
+                    activity_label,
+                )
+                for account_id in external_ids_by_account_id
+            }
+
         accounts_with_external_ids = {
             account_id: external_id
             for account_id, external_id in external_ids_by_account_id.items()
@@ -306,13 +337,20 @@ class AccountHealthScoreCalculator:
         date_to = timezone.now()
         date_from = date_to - timedelta(days=ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS)
         previous_date_from = date_to - timedelta(days=ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS * 2)
-        activity_filter = hog_function_filters_to_expr(filters, self.team, {})
+        activity_filter = hog_function_filters_to_expr(filters, self.team, actions)
 
         baseline = self._load_baseline(
             group_type_index=group_type_index,
             date_from=date_from,
             date_to=date_to,
             activity_filter=activity_filter,
+            cache_key=_baseline_cache_key(
+                team_id=self.team.id,
+                group_type_index=group_type_index,
+                activity_event=activity_event,
+                date_to=date_to,
+                lookback_days=ACCOUNT_HEALTH_SCORE_LOOKBACK_DAYS,
+            ),
         )
         metrics_by_external_id = self._load_account_metrics(
             group_type_index=group_type_index,
@@ -351,6 +389,19 @@ class AccountHealthScoreCalculator:
         event = config.activity_event
         return event if isinstance(event, dict) and event else DEFAULT_ACTIVITY_EVENT
 
+    def _actions_for_activity_event(self, activity_event: dict[str, Any]) -> dict[int, Action] | None:
+        if activity_event.get("kind") != "ActionsNode":
+            return {}
+        try:
+            action_id = int(activity_event["id"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        try:
+            action = Action.objects.get(id=action_id, team__project_id=self.team.project_id)
+        except ObjectDoesNotExist:
+            return None
+        return {action_id: action}
+
     def _config(self) -> TeamCustomerAnalyticsConfig | None:
         try:
             return TeamCustomerAnalyticsConfig.objects.get(team_id=self.team.id)
@@ -364,9 +415,16 @@ class AccountHealthScoreCalculator:
         date_from: datetime,
         date_to: datetime,
         activity_filter: ast.Expr,
+        cache_key: str,
     ) -> AccountHealthBaseline:
+        cached = cache.get(cache_key)
+        if isinstance(cached, dict):
+            return AccountHealthBaseline(
+                p90_activity_count=_read_float(cached.get("p90_activity_count")),
+                p90_active_users=_read_float(cached.get("p90_active_users")),
+            )
+
         group_expr = f"toString($group_{group_type_index})"
-        current_condition = "timestamp >= {date_from} AND timestamp < {date_to}"
         query = parse_select(
             f"""
             SELECT
@@ -375,8 +433,8 @@ class AccountHealthScoreCalculator:
             FROM (
                 SELECT
                     {group_expr} AS group_key,
-                    countIf({current_condition}) AS current_count,
-                    uniqIf(person_id, {current_condition}) AS active_users
+                    count() AS current_count,
+                    uniq(person_id) AS active_users
                 FROM events
                 WHERE timestamp >= {{date_from}}
                   AND timestamp < {{date_to}}
@@ -399,11 +457,20 @@ class AccountHealthScoreCalculator:
             timings=self.timings,
             modifiers=self.modifiers,
         )
-        row = response.results[0] if response.results else [0, 0]
-        return AccountHealthBaseline(
-            p90_activity_count=_read_float(row[0] if len(row) > 0 else 0),
+        row = response.results[0] if response.results else []
+        baseline = AccountHealthBaseline(
+            p90_activity_count=_read_float(row[0] if row else 0),
             p90_active_users=_read_float(row[1] if len(row) > 1 else 0),
         )
+        cache.set(
+            cache_key,
+            {
+                "p90_activity_count": baseline.p90_activity_count,
+                "p90_active_users": baseline.p90_active_users,
+            },
+            ACCOUNT_HEALTH_BASELINE_CACHE_TTL_SECONDS,
+        )
+        return baseline
 
     def _load_account_metrics(
         self,

@@ -37,6 +37,23 @@ function ensureNameColumn(columns: string[]): string[] {
     return columns.includes(ACCOUNTS_NAME_COLUMN) ? columns : [ACCOUNTS_NAME_COLUMN, ...columns]
 }
 
+export function ensureAccountQueryColumns(columns: string[]): string[] {
+    const columnsWithName = ensureNameColumn(columns)
+    if (columnsWithName.includes(ACCOUNTS_HEALTH_SCORE_COLUMN)) {
+        return columnsWithName
+    }
+    const nameIndex = columnsWithName.indexOf(ACCOUNTS_NAME_COLUMN)
+    return [
+        ...columnsWithName.slice(0, nameIndex + 1),
+        ACCOUNTS_HEALTH_SCORE_COLUMN,
+        ...columnsWithName.slice(nameIndex + 1),
+    ]
+}
+
+export function accountColumnDisplayNames(columns: string[]): string[] {
+    return columns.map((column) => extractDisplayLabel(column))
+}
+
 export function diffColumnConfiguration(
     previous: string[],
     next: string[]
@@ -271,7 +288,7 @@ export const accountsColumnConfigLogic = kea<accountsColumnConfigLogicType>([
     selectors({
         visibleColumnNames: [
             (s) => [s.selectColumns],
-            (selectColumns: string[]): string[] => selectColumns.map((c) => extractDisplayLabel(c)),
+            (selectColumns: string[]): string[] => accountColumnDisplayNames(selectColumns),
         ],
         accountsColumnGroups: [
             (s) => [s.allTablesMap, s.warehouseJoins],

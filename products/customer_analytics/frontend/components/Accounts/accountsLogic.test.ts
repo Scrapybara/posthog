@@ -30,6 +30,21 @@ jest.mock('products/customer_analytics/frontend/generated/api', () => ({
     accountsPartialUpdate: jest.fn(),
 }))
 
+jest.mock('lib/api', () => ({
+    __esModule: true,
+    default: {
+        query: () => Promise.resolve({ tables: [], fields: [], saved_queries: [] }),
+        columnConfigurations: {
+            list: () => Promise.resolve({ results: [] }),
+            create: () => Promise.resolve({ id: 'saved-1', columns: [] }),
+            update: () => Promise.resolve({ id: 'saved-1', columns: [] }),
+        },
+        dataWarehouseViewLinks: {
+            list: () => Promise.resolve({ results: [] }),
+        },
+    },
+}))
+
 const mockAccountsRetrieve = accountsRetrieve as jest.MockedFunction<typeof accountsRetrieve>
 const mockAccountsPartialUpdate = accountsPartialUpdate as jest.MockedFunction<typeof accountsPartialUpdate>
 
@@ -268,10 +283,21 @@ describe('accountsLogic', () => {
             expect(config?.values.selectColumns).toContain(ACCOUNTS_NAME_COLUMN)
         })
 
-        it('hogqlQuery.source.select equals selectColumns verbatim — no pinned aliases', () => {
+        it('keeps health score in the query when hidden from visible columns', () => {
             const config = accountsColumnConfigLogic.findMounted()
+            config?.actions.setSelectColumns([ACCOUNTS_NAME_COLUMN, 'csm'])
+
             const source = logic.values.hogqlQuery.source as AccountsQuery
-            expect(source.select).toEqual(config?.values.selectColumns)
+            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'csm'])
+            expect(source.select).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, 'csm'])
+            expect(logic.values.hogqlQuery.hiddenColumns).toEqual([ACCOUNTS_HEALTH_SCORE_COLUMN])
+            expect(logic.values.queryColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, 'csm'])
+        })
+
+        it('does not hide health score when it is selected', () => {
+            const source = logic.values.hogqlQuery.source as AccountsQuery
+            expect(source.select).toEqual(ACCOUNTS_HOGQL_DEFAULT_SELECT)
+            expect(logic.values.hogqlQuery.hiddenColumns).toBeUndefined()
         })
 
         it('refuses to remove the name column via unselectColumn', () => {

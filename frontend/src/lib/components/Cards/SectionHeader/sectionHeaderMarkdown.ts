@@ -101,6 +101,12 @@ export function parseSectionHeaderBody(body: string | null | undefined): Section
     }
 }
 
+function hasSectionHeaderDivider(body: string): boolean {
+    const doc = markdownToTextCardDoc(body)
+    const content = (doc.content || []).filter((node) => node.type !== undefined)
+    return content.length > 0 && content[content.length - 1].type === 'horizontalRule'
+}
+
 /**
  * Whether a dashboard tile should be treated as a section header: a transparent text tile whose body
  * round-trips to the section header shape. Used to route editing to the compact form and to label the
@@ -112,5 +118,5 @@ export function isSectionHeaderTile(
     if (!tile?.text?.body || tile.transparent_background !== true) {
         return false
     }
-    return parseSectionHeaderBody(tile.text.body) !== null
+    return hasSectionHeaderDivider(tile.text.body) && parseSectionHeaderBody(tile.text.body) !== null
 }

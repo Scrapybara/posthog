@@ -99,6 +99,15 @@ describe('sectionHeaderMarkdown', () => {
             ).toBe(false)
         })
 
+        it('ignores an existing transparent text tile that has a heading but no section divider', () => {
+            expect(
+                isSectionHeaderTile({
+                    text: { body: '## Existing text card\n\nA normal transparent text card' },
+                    transparent_background: true,
+                } as any)
+            ).toBe(false)
+        })
+
         it('ignores a tile without text', () => {
             expect(isSectionHeaderTile({ transparent_background: true } as any)).toBe(false)
         })

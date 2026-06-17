@@ -6,6 +6,11 @@ import {
     type DashboardWidgetCatalogEntry,
 } from '@posthog/products-dashboards/frontend/widget_types/catalog'
 
+import {
+    isDashboardSectionHeaderTile,
+    SECTION_HEADER_DESKTOP_HEIGHT,
+    SECTION_HEADER_MOBILE_HEIGHT,
+} from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import { BREAKPOINT_COLUMN_COUNTS } from 'scenes/dashboard/dashboardUtils'
 
 import { getQueryBasedInsightModel } from '~/queries/nodes/InsightViz/utils'
@@ -191,9 +196,15 @@ export const calculateLayouts = (
             let defaultW = 6
             let defaultH = 5
             // Content-adjusted constraints (note that widths should be factors of 12)
+            const isSectionHeaderTile = isDashboardSectionHeaderTile(tile)
             if (tile.text) {
-                defaultW = 2
-                defaultH = 2
+                defaultW = isSectionHeaderTile ? columnCount : 2
+                defaultH =
+                    breakpoint === 'xs' && isSectionHeaderTile
+                        ? SECTION_HEADER_MOBILE_HEIGHT
+                        : isSectionHeaderTile
+                          ? SECTION_HEADER_DESKTOP_HEIGHT
+                          : 2
             } else if (isFunnelsQuery(query)) {
                 defaultW = 4
                 defaultH = 4
@@ -229,8 +240,13 @@ export const calculateLayouts = (
                 defaultH = widgetCatalogLayout?.h ?? 5
             }
             const xsSmH = breakpoint === 'xs' ? tile.layouts?.sm?.h : undefined
+            const sectionHeaderXsH =
+                breakpoint === 'xs' && isSectionHeaderTile
+                    ? Math.max(typeof xsSmH === 'number' && xsSmH > 0 ? xsSmH : 0, SECTION_HEADER_MOBILE_HEIGHT)
+                    : undefined
             const realW = Math.min(w || defaultW, columnCount)
-            const realH = h || (typeof xsSmH === 'number' && xsSmH > 0 ? xsSmH : undefined) || defaultH
+            const realH =
+                h || sectionHeaderXsH || (typeof xsSmH === 'number' && xsSmH > 0 ? xsSmH : undefined) || defaultH
             const { minW, minH } = getTileMinDimensions({
                 isTextTile,
                 isButtonTile,

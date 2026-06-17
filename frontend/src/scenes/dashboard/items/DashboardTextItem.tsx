@@ -4,6 +4,7 @@ import React from 'react'
 import { dashboardWidgetMenusLogic } from 'lib/components/Cards/InsightCard/dashboardWidgetMenusLogic'
 import { DashboardWidgetPlacementMenus } from 'lib/components/Cards/InsightCard/DashboardWidgetPlacementMenus'
 import { TextCard } from 'lib/components/Cards/TextCard/TextCard'
+import { isDashboardSectionHeaderTile } from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { LemonDivider } from 'lib/lemon-ui/LemonDivider'
 
@@ -45,6 +46,7 @@ function DashboardTextItemInternal(
             dashboard_tiles: tile.text?.dashboard_tiles,
         })
     )
+    const isSectionHeader = isDashboardSectionHeaderTile(tile)
 
     return (
         <TextCard
@@ -53,8 +55,12 @@ function DashboardTextItemInternal(
             placement={placement}
             moreButtonOverlay={
                 <>
-                    <LemonButton fullWidth onClick={onEdit} data-attr="edit-text">
-                        Edit text
+                    <LemonButton
+                        fullWidth
+                        onClick={onEdit}
+                        data-attr={isSectionHeader ? 'edit-section-header' : 'edit-text'}
+                    >
+                        {isSectionHeader ? 'Edit section header' : 'Edit text'}
                     </LemonButton>
 
                     <DashboardWidgetPlacementMenus
@@ -63,7 +69,15 @@ function DashboardTextItemInternal(
                         onCopyToDashboard={onCopyToDashboard}
                     />
 
-                    <LemonButton onClick={onDuplicate} fullWidth data-attr="duplicate-text-from-dashboard">
+                    <LemonButton
+                        onClick={onDuplicate}
+                        fullWidth
+                        data-attr={
+                            isSectionHeader
+                                ? 'duplicate-section-header-from-dashboard'
+                                : 'duplicate-text-from-dashboard'
+                        }
+                    >
                         Duplicate
                     </LemonButton>
                     <LemonDivider />

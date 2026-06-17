@@ -1,5 +1,6 @@
 import { Layout, LayoutItem } from 'react-grid-layout'
 
+import { buildDashboardSectionHeaderBody } from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import { calculateDuplicateLayout, calculateLayouts } from 'scenes/dashboard/tileLayouts'
 
 import { DashboardLayoutSize, DashboardTile, QueryBasedInsightModel, TileLayout } from '~/types'
@@ -15,6 +16,20 @@ function textTileWithLayout(
     } as unknown as DashboardTile<QueryBasedInsightModel>
 }
 
+function sectionHeaderTileWithLayout(
+    layouts: Partial<Record<DashboardLayoutSize, TileLayout>>,
+    tileId: number = 1
+): DashboardTile<QueryBasedInsightModel> {
+    return {
+        id: tileId,
+        text: {
+            body: buildDashboardSectionHeaderBody({ title: 'Activation', description: 'Key funnel steps' }),
+        },
+        transparent_background: true,
+        layouts,
+    } as unknown as DashboardTile<QueryBasedInsightModel>
+}
+
 describe('calculating tile layouts', () => {
     it('minimum width and height are added if missing', () => {
         const tiles: DashboardTile<QueryBasedInsightModel>[] = [
@@ -27,6 +42,28 @@ describe('calculating tile layouts', () => {
             // xs uses the same row height as sm when sm is present
             xs: [{ i: '1', x: 0, y: 0, w: 1, h: 1, minW: 1, minH: 1 }],
         })
+    })
+
+    it('defaults section headers to full width and keeps mobile readable', () => {
+        const result = calculateLayouts([sectionHeaderTileWithLayout({})])
+
+        expect(result.sm?.[0]).toMatchObject({ i: '1', x: 0, y: 0, w: 12, h: 1, minW: 1, minH: 1 })
+        expect(result.xs?.[0]).toMatchObject({ i: '1', x: 0, y: 0, w: 1, h: 2, minW: 1, minH: 1 })
+    })
+
+    it('keeps section headers full width when deriving layouts around other tiles', () => {
+        const tiles = [
+            textTileWithLayout(
+                { sm: { i: '1', x: 0, y: 0, w: 6, h: 5 } } as Record<DashboardLayoutSize, TileLayout>,
+                1
+            ),
+            sectionHeaderTileWithLayout({ sm: { i: '2', x: 0, y: 5, w: 12, h: 1 } }, 2),
+        ]
+
+        const result = calculateLayouts(tiles)
+
+        expect(result.sm?.find((layout) => layout.i === '2')).toMatchObject({ x: 0, y: 5, w: 12, h: 1 })
+        expect(result.xs?.find((layout) => layout.i === '2')).toMatchObject({ x: 0, y: 5, w: 1, h: 2 })
     })
 
     it('when the tiles have only 2-col layouts, 1 col layout is calculated', () => {

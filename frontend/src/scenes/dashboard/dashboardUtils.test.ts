@@ -1,8 +1,10 @@
+import { buildDashboardSectionHeaderBody } from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import { dayjs } from 'lib/dayjs'
 
 import { DashboardPlacement, DashboardTile, QueryBasedInsightModel } from '~/types'
 
 import {
+    dashboardToSaveableTemplate,
     getDashboardTileDisplayName,
     isWidgetTileVisibleOnPlacement,
     parseURLFilters,
@@ -33,6 +35,55 @@ describe('getDashboardTileDisplayName', () => {
         }
 
         expect(getDashboardTileDisplayName(tile)).toBe('Critical errors')
+    })
+
+    it('names section header text tiles distinctly', () => {
+        const tile: DashboardTile<QueryBasedInsightModel> = {
+            id: 1,
+            text: {
+                body: buildDashboardSectionHeaderBody({ title: 'Activation', description: '' }),
+                last_modified_at: '2024-01-01T00:00:00Z',
+            },
+            transparent_background: true,
+            layouts: {},
+            color: null,
+        }
+
+        expect(getDashboardTileDisplayName(tile)).toBe('Section header')
+    })
+})
+
+describe('dashboardToSaveableTemplate', () => {
+    it('preserves section header text tile fields for templates', () => {
+        const body = buildDashboardSectionHeaderBody({ title: 'Activation', description: 'Key funnel steps' })
+
+        expect(
+            dashboardToSaveableTemplate({
+                id: 1,
+                name: 'Dashboard',
+                description: '',
+                filters: {},
+                tags: [],
+                tiles: [
+                    {
+                        id: 1,
+                        text: { body },
+                        transparent_background: true,
+                        layouts: { sm: { x: 0, y: 0, w: 12, h: 1 } },
+                        color: null,
+                    } as DashboardTile<QueryBasedInsightModel>,
+                ],
+            } as any)
+        )?.toMatchObject({
+            tiles: [
+                {
+                    type: 'TEXT',
+                    body,
+                    transparent_background: true,
+                    layouts: { sm: { x: 0, y: 0, w: 12, h: 1 } },
+                },
+            ],
+        })
     })
 })
 

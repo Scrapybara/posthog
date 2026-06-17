@@ -610,6 +610,10 @@ export const DashboardsCreateTextTileCreateBody = /* @__PURE__ */ zod.object({
         .max(dashboardsCreateTextTileCreateBodyColorMax)
         .nullish()
         .describe("Optional accent color name (e.g. 'blue', 'green', 'purple', 'black')."),
+    transparent_background: zod
+        .boolean()
+        .optional()
+        .describe('Whether the text tile should render without the standard card background.'),
 })
 
 /**
@@ -798,6 +802,10 @@ export const DashboardsUpdateTextTileCreateBody = /* @__PURE__ */ zod.object({
         .max(dashboardsUpdateTextTileCreateBodyColorMax)
         .nullish()
         .describe('New accent color name, empty string or null to clear. Omit to leave unchanged.'),
+    transparent_background: zod
+        .boolean()
+        .optional()
+        .describe('Whether the text tile should render without the standard card background. Omit to leave unchanged.'),
 })
 
 /**

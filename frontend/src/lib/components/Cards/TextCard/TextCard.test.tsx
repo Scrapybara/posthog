@@ -5,6 +5,7 @@ import { fireEvent, render } from '@testing-library/react'
 import { DashboardPlacement, DashboardTile, QueryBasedInsightModel } from '~/types'
 
 import { TextCard, TextContent } from './TextCard'
+import { buildDashboardSectionHeaderBody } from './textCardSectionHeader'
 
 const makeTextTile = (
     overrides: Partial<DashboardTile<QueryBasedInsightModel>> = {}
@@ -52,6 +53,30 @@ describe('TextCard', () => {
 
         fireEvent.mouseDown(edges[0])
         expect(onEnterEditModeFromEdge).toHaveBeenCalledTimes(1)
+    })
+
+    it('renders section headers as plain text, not arbitrary markdown', () => {
+        const { container, getByText, queryByText } = render(
+            <TextCard
+                textTile={makeTextTile({
+                    transparent_background: true,
+                    text: {
+                        body: buildDashboardSectionHeaderBody({
+                            title: 'Activation **funnel**',
+                            description: 'Signup <script>alert(1)</script>',
+                        }),
+                        last_modified_at: '2022-04-01T12:24:36',
+                    },
+                })}
+                placement={DashboardPlacement.Dashboard}
+                moreButtonOverlay={<div>more overlay</div>}
+            />
+        )
+
+        expect(container.querySelector('[data-card-kind="section-header"]')).toBeInTheDocument()
+        expect(getByText('Activation **funnel**')).toBeInTheDocument()
+        expect(getByText('Signup <script>alert(1)</script>')).toBeInTheDocument()
+        expect(queryByText('posthog-dashboard-section-header')).not.toBeInTheDocument()
     })
 
     describe('TextContent', () => {

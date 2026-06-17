@@ -13459,6 +13459,8 @@ export namespace Schemas {
          * @nullable
          */
       color?: string | null;
+      /** Whether the text tile should render without the standard card background. */
+      transparent_background?: boolean;
     }
 
     /**
@@ -47294,6 +47296,8 @@ export namespace Schemas {
          * @nullable
          */
       color?: string | null;
+      /** Whether the text tile should render without the standard card background. Omit to leave unchanged. */
+      transparent_background?: boolean;
     }
 
     /**

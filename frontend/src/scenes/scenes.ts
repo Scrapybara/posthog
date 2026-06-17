@@ -762,6 +762,7 @@ export const routes: Record<string, [Scene | string, string]> = {
     [urls.dashboardTemplateCopyToProject(':sourceTemplateId')]: [Scene.DashboardTemplateCopy, 'dashboardTemplateCopy'],
     [urls.dashboard(':id')]: [Scene.Dashboard, 'dashboard'],
     [urls.dashboardTextTile(':id', ':textTileId')]: [Scene.Dashboard, 'dashboardTextTile'],
+    [urls.dashboardSectionHeaderTile(':id', ':textTileId')]: [Scene.Dashboard, 'dashboardSectionHeaderTile'],
     [urls.dashboardButtonTile(':id', ':buttonTileId')]: [Scene.Dashboard, 'dashboardButtonTile'],
     [urls.dashboardSharing(':id')]: [Scene.Dashboard, 'dashboardSharing'],
     [urls.dashboardSubscriptions(':id')]: [Scene.Dashboard, 'dashboardSubscriptions'],

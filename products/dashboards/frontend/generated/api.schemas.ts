@@ -694,6 +694,8 @@ export interface CreateTextTileRequestApi {
      * @nullable
      */
     color?: string | null
+    /** Whether the text tile should render without the standard card background. */
+    transparent_background?: boolean
 }
 
 export type InsightVizNodeApiKind = (typeof InsightVizNodeApiKind)[keyof typeof InsightVizNodeApiKind]
@@ -7906,6 +7908,8 @@ export interface UpdateTextTileRequestApi {
      * @nullable
      */
     color?: string | null
+    /** Whether the text tile should render without the standard card background. Omit to leave unchanged. */
+    transparent_background?: boolean
 }
 
 export interface _WidgetTileLayoutBoxOpenApiApi {

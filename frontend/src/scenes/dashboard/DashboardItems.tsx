@@ -12,6 +12,7 @@ import { getDashboardWidgetFetchDisplayError } from '@posthog/products-dashboard
 
 import { InsightCard } from 'lib/components/Cards/InsightCard'
 import { EditModeEdge } from 'lib/components/Cards/InsightCard/EditModeEdgeOverlay'
+import { isDashboardSectionHeaderTile } from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
 import { DashboardEventSource, eventUsageLogic } from 'lib/utils/eventUsageLogic'
 import { dashboardLogic } from 'scenes/dashboard/dashboardLogic'
@@ -464,6 +465,7 @@ export function DashboardItems(): JSX.Element {
                             }
 
                             if (text) {
+                                const isSectionHeader = isDashboardSectionHeaderTile(tile)
                                 return (
                                     <DashboardTextItem
                                         key={tile.id}
@@ -472,7 +474,11 @@ export function DashboardItems(): JSX.Element {
                                         dashboardId={dashboard?.id}
                                         onEdit={() => {
                                             if (dashboard?.id) {
-                                                push(urls.dashboardTextTile(dashboard.id, tile.id))
+                                                push(
+                                                    isSectionHeader
+                                                        ? urls.dashboardSectionHeaderTile(dashboard.id, tile.id)
+                                                        : urls.dashboardTextTile(dashboard.id, tile.id)
+                                                )
                                             }
                                         }}
                                         onMoveToDashboard={commonTileProps.moveToDashboard}

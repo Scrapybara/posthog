@@ -45,6 +45,17 @@ const TEXT_TILE: DashboardTile<QueryBasedInsightModel> = {
     color: InsightColor.Blue,
 }
 
+const SECTION_HEADER_TILE: DashboardTile<QueryBasedInsightModel> = {
+    id: 12,
+    text: {
+        body: '<!-- posthog-dashboard-section-header -->\n## Activation\n\nKey funnel steps',
+        last_modified_at: '2021-01-01T00:00:00Z',
+    },
+    layouts: { sm: { x: 0, y: 0, w: 12, h: 1 }, xs: { x: 0, y: 0, w: 1, h: 2 } },
+    color: null,
+    transparent_background: true,
+}
+
 const WIDGET_TILE: DashboardTile<QueryBasedInsightModel> = {
     id: 7,
     widget: { id: '1', widget_type: 'error_tracking_list', config: {} },
@@ -1548,6 +1559,18 @@ describe('dashboardLogic', () => {
             const toastContent = lemonToastInfoSpy.mock.calls.at(-1)?.[0]
             const { container } = render(toastContent)
             expect(container.textContent).toBe('Text card has been removed from the dashboard')
+        })
+
+        it('labels section headers distinctly in the undo toast', async () => {
+            const { render } = await import('@testing-library/react')
+
+            await expectLogic(logic, () => {
+                logic.actions.removeTile(SECTION_HEADER_TILE)
+            }).toFinishAllListeners()
+
+            const toastContent = lemonToastInfoSpy.mock.calls.at(-1)?.[0]
+            const { container } = render(toastContent)
+            expect(container.textContent).toBe('Section header has been removed from the dashboard')
         })
 
         it('removes the tile from state optimistically before the API call resolves', () => {

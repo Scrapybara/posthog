@@ -426,6 +426,37 @@ describe('trendsChartTransforms', () => {
             expect(config.xAxis?.tickFormatter).toBeUndefined()
         })
 
+        it('keeps weekday-only hide-weekends buckets aligned through the chart transform', () => {
+            const current = makeResult({
+                id: 'current',
+                data: [1, 3, 3, 3, 12, 4],
+                days: ['2024-06-07', '2024-06-10', '2024-06-11', '2024-06-12', '2024-06-13', '2024-06-14'],
+                compare: true,
+                compare_label: 'current',
+            })
+            const previous = makeResult({
+                id: 'previous',
+                data: [2, 5, 8, 13, 21, 34],
+                days: ['2024-05-31', '2024-06-03', '2024-06-04', '2024-06-05', '2024-06-06', '2024-06-07'],
+                compare: true,
+                compare_label: 'previous',
+            })
+
+            const series = buildTrendsSeries([current, previous], { getColor: () => RED })
+            const config = buildTrendsLineTimeSeriesConfig({
+                ...baseOpts,
+                results: [current, previous],
+                interval: 'day',
+                timezone: 'UTC',
+                allDays: current.days,
+            })
+
+            expect(series.map((s) => s.data)).toEqual([current.data, previous.data])
+            expect(config.xAxis?.allDays).toEqual(current.days)
+            expect(config.xAxis?.allDays).not.toContain('2024-06-08')
+            expect(config.xAxis?.allDays).not.toContain('2024-06-09')
+        })
+
         describe('valueLabels', () => {
             it('passes through valueLabels: false unchanged', () => {
                 const config = buildTrendsLineTimeSeriesConfig({

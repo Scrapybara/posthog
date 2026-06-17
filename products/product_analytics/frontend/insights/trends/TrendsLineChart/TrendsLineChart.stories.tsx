@@ -18,6 +18,71 @@ import { TrendsLineChart } from './TrendsLineChart'
 
 type Story = StoryObj<{}>
 
+const hideWeekendsSource = {
+    kind: 'TrendsQuery',
+    dateRange: { date_from: '2024-06-07', date_to: '2024-06-14' },
+    interval: 'day',
+    series: [{ kind: 'EventsNode', event: '$pageview', name: '$pageview' }],
+    trendsFilter: { display: 'ActionsLineGraph', hideWeekends: true },
+}
+
+function makeHideWeekendsResult(hideWeekends: boolean): any {
+    const days = hideWeekends
+        ? ['2024-06-07', '2024-06-10', '2024-06-11', '2024-06-12', '2024-06-13', '2024-06-14']
+        : [
+              '2024-06-07',
+              '2024-06-08',
+              '2024-06-09',
+              '2024-06-10',
+              '2024-06-11',
+              '2024-06-12',
+              '2024-06-13',
+              '2024-06-14',
+          ]
+    const labels = hideWeekends
+        ? ['7-Jun-2024', '10-Jun-2024', '11-Jun-2024', '12-Jun-2024', '13-Jun-2024', '14-Jun-2024']
+        : [
+              '7-Jun-2024',
+              '8-Jun-2024',
+              '9-Jun-2024',
+              '10-Jun-2024',
+              '11-Jun-2024',
+              '12-Jun-2024',
+              '13-Jun-2024',
+              '14-Jun-2024',
+          ]
+    const data = hideWeekends ? [1, 3, 3, 3, 12, 4] : [1, 2, 2, 3, 3, 3, 12, 4]
+
+    return {
+        ...trendsLineFixture.result[0],
+        count: data.reduce((sum, value) => sum + value, 0),
+        data,
+        labels,
+        days,
+        action: {
+            ...trendsLineFixture.result[0].action,
+            days,
+        },
+    }
+}
+
+function makeHideWeekendsFixture(hideWeekends: boolean): any {
+    return {
+        ...trendsLineFixture,
+        id: hideWeekends ? 61782 : 61781,
+        short_id: hideWeekends ? 'hide-weekends-on' : 'hide-weekends-off',
+        derived_name: hideWeekends ? 'Hide weekend data on' : 'Hide weekend data off',
+        result: [makeHideWeekendsResult(hideWeekends)],
+        query: {
+            kind: 'InsightVizNode',
+            source: {
+                ...hideWeekendsSource,
+                trendsFilter: { ...hideWeekendsSource.trendsFilter, hideWeekends },
+            },
+        },
+    }
+}
+
 const meta: Meta = {
     title: 'Insights/TrendsLineChart',
     component: TrendsLineChart,
@@ -120,4 +185,12 @@ export const SingleSeries: Story = {
 
 export const Breakdown: Story = {
     render: () => renderTrendsLineChart(trendsLineBreakdownFixture),
+}
+
+export const HideWeekendsOff: Story = {
+    render: () => renderTrendsLineChart(makeHideWeekendsFixture(false)),
+}
+
+export const HideWeekendsOn: Story = {
+    render: () => renderTrendsLineChart(makeHideWeekendsFixture(true)),
 }

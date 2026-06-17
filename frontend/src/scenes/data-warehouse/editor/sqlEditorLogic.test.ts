@@ -266,6 +266,62 @@ describe('sqlEditorLogic', () => {
         expect(logic.values.hasFiltersPlaceholder).toBe(false)
     })
 
+    describe('active query decorations', () => {
+        beforeEach(() => {
+            jest.useFakeTimers()
+        })
+
+        afterEach(() => {
+            jest.useRealTimers()
+        })
+
+        it('debounces active query decoration refreshes after query edits', () => {
+            logic = sqlEditorLogic({
+                tabId: TAB_ID,
+                monaco: createMockMonaco(),
+                editor: createMockEditor(),
+            })
+            logic.mount()
+            const updateActiveQueryDecoration = jest.fn()
+            logic.cache.updateActiveQueryDecoration = updateActiveQueryDecoration
+
+            logic.actions.setQueryInput('SELECT 1')
+
+            expect(updateActiveQueryDecoration).not.toHaveBeenCalled()
+
+            jest.advanceTimersByTime(149)
+
+            expect(updateActiveQueryDecoration).not.toHaveBeenCalled()
+
+            jest.advanceTimersByTime(1)
+
+            expect(updateActiveQueryDecoration).toHaveBeenCalledTimes(1)
+
+            jest.advanceTimersByTime(500)
+        })
+
+        it('coalesces repeated query edits into one active query decoration refresh', () => {
+            logic = sqlEditorLogic({
+                tabId: TAB_ID,
+                monaco: createMockMonaco(),
+                editor: createMockEditor(),
+            })
+            logic.mount()
+            const updateActiveQueryDecoration = jest.fn()
+            logic.cache.updateActiveQueryDecoration = updateActiveQueryDecoration
+
+            logic.actions.setQueryInput('SELECT 1')
+            logic.actions.setQueryInput('SELECT 12')
+            logic.actions.setQueryInput('SELECT 123')
+
+            jest.advanceTimersByTime(150)
+
+            expect(updateActiveQueryDecoration).toHaveBeenCalledTimes(1)
+
+            jest.advanceTimersByTime(500)
+        })
+    })
+
     it('restores filters from the URL hash', async () => {
         const filters: HogQLFilters = {
             dateRange: {

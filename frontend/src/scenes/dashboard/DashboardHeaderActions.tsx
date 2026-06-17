@@ -68,6 +68,11 @@ export function DashboardAddTileButton(): JSX.Element | null {
                             'data-attr': 'dashboard-add-text-tile',
                         },
                         {
+                            label: 'Section header',
+                            onClick: () => push(urls.dashboardSectionHeader(dashboard.id, 'new')),
+                            'data-attr': 'dashboard-add-section-header',
+                        },
+                        {
                             label: 'Button',
                             onClick: () => push(urls.dashboardButtonTile(dashboard.id, 'new')),
                             'data-attr': 'dashboard-add-button-tile',

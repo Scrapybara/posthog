@@ -402,6 +402,7 @@ export const dashboardLogic = kea<dashboardLogicType>([
         }),
         setTextTileId: (textTileId: number | 'new' | null) => ({ textTileId }),
         setButtonTileId: (buttonTileId: number | 'new' | null) => ({ buttonTileId }),
+        setSectionHeaderId: (sectionHeaderId: number | 'new' | null) => ({ sectionHeaderId }),
         setTileOverride: (tile: DashboardTile<QueryBasedInsightModel>) => ({ tile }),
 
         /**
@@ -1166,6 +1167,19 @@ export const dashboardLogic = kea<dashboardLogicType>([
             null as number | 'new' | null,
             {
                 setButtonTileId: (_, { buttonTileId }) => buttonTileId,
+            },
+        ],
+
+        showSectionHeaderModal: [
+            false,
+            {
+                setSectionHeaderId: (_, { sectionHeaderId }) => !!sectionHeaderId,
+            },
+        ],
+        sectionHeaderId: [
+            null as number | 'new' | null,
+            {
+                setSectionHeaderId: (_, { sectionHeaderId }) => sectionHeaderId,
             },
         ],
 
@@ -3206,6 +3220,7 @@ export const dashboardLogic = kea<dashboardLogicType>([
             actions.setSubscriptionMode(true, id)
             actions.setTextTileId(null)
             actions.setButtonTileId(null)
+            actions.setSectionHeaderId(null)
             actions.setDashboardMode(null, DashboardEventSource.Browser)
         },
 
@@ -3213,6 +3228,7 @@ export const dashboardLogic = kea<dashboardLogicType>([
             actions.setSubscriptionMode(false, undefined)
             actions.setTextTileId(null)
             actions.setButtonTileId(null)
+            actions.setSectionHeaderId(null)
             if (values.dashboardMode === DashboardMode.Sharing) {
                 actions.setDashboardMode(null, DashboardEventSource.Browser)
             }
@@ -3221,20 +3237,32 @@ export const dashboardLogic = kea<dashboardLogicType>([
             actions.setSubscriptionMode(false, undefined)
             actions.setTextTileId(null)
             actions.setButtonTileId(null)
+            actions.setSectionHeaderId(null)
             actions.setDashboardMode(DashboardMode.Sharing, DashboardEventSource.Browser)
         },
         '/dashboard/:id/text-tiles/:textTileId': ({ textTileId }) => {
             actions.setSubscriptionMode(false, undefined)
             actions.setDashboardMode(null, DashboardEventSource.Browser)
             actions.setButtonTileId(null)
+            actions.setSectionHeaderId(null)
             actions.setTextTileId(textTileId === undefined ? 'new' : textTileId !== 'new' ? Number(textTileId) : 'new')
         },
         '/dashboard/:id/button-tiles/:buttonTileId': ({ buttonTileId }) => {
             actions.setSubscriptionMode(false, undefined)
             actions.setDashboardMode(null, DashboardEventSource.Browser)
             actions.setTextTileId(null)
+            actions.setSectionHeaderId(null)
             actions.setButtonTileId(
                 buttonTileId === undefined ? 'new' : buttonTileId !== 'new' ? Number(buttonTileId) : 'new'
+            )
+        },
+        '/dashboard/:id/section-headers/:sectionHeaderId': ({ sectionHeaderId }) => {
+            actions.setSubscriptionMode(false, undefined)
+            actions.setDashboardMode(null, DashboardEventSource.Browser)
+            actions.setTextTileId(null)
+            actions.setButtonTileId(null)
+            actions.setSectionHeaderId(
+                sectionHeaderId === undefined ? 'new' : sectionHeaderId !== 'new' ? Number(sectionHeaderId) : 'new'
             )
         },
     })),

@@ -15,6 +15,8 @@ interface DashboardTextItemProps extends Omit<BaseTextCardProps, 'textTile' | 'p
     tile: DashboardTile<QueryBasedInsightModel>
     placement: DashboardPlacement
     dashboardId?: number | null
+    /** When true, this text tile is a section header; the edit action label reflects that. */
+    isSectionHeader?: boolean
     onEdit: () => void
     onMoveToDashboard?: (target: Pick<DashboardType, 'id' | 'name'>) => void
     onCopyToDashboard?: (target: Pick<DashboardType, 'id' | 'name'>) => void
@@ -27,6 +29,7 @@ function DashboardTextItemInternal(
         tile,
         placement,
         dashboardId,
+        isSectionHeader,
         onEdit,
         onMoveToDashboard,
         onCopyToDashboard,
@@ -54,7 +57,7 @@ function DashboardTextItemInternal(
             moreButtonOverlay={
                 <>
                     <LemonButton fullWidth onClick={onEdit} data-attr="edit-text">
-                        Edit text
+                        {isSectionHeader ? 'Edit section header' : 'Edit text'}
                     </LemonButton>
 
                     <DashboardWidgetPlacementMenus

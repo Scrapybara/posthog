@@ -911,6 +911,8 @@ export const productUrls = {
         combineUrl(`/dashboard/${id}`, highlightInsightId ? { highlightInsightId } : {}).url,
     dashboardTextTile: (id: string | number, textTileId: string | number): string =>
         `${urls.dashboard(id)}/text-tiles/${textTileId}`,
+    dashboardSectionHeader: (id: string | number, sectionHeaderId: string | number): string =>
+        `${urls.dashboard(id)}/section-headers/${sectionHeaderId}`,
     dashboardButtonTile: (id: string | number, buttonTileId: string | number): string =>
         `${urls.dashboard(id)}/button-tiles/${buttonTileId}`,
     dashboardSharing: (id: string | number): string => `/dashboard/${id}/sharing`,

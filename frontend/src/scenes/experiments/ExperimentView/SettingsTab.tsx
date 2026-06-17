@@ -107,7 +107,7 @@ export function SettingsTab(): JSX.Element {
                     }))}
                     loading={experimentUpdateLoading}
                     disabledReason={experimentUpdateLoading ? 'Saving baseline\u2026' : undefined}
-                    onChange={(value) => {
+                    onSelect={(value) => {
                         if (value === configuredBaselineKey) {
                             return
                         }

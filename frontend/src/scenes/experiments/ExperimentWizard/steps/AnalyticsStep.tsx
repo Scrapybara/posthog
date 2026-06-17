@@ -97,7 +97,7 @@ export function AnalyticsStep(): JSX.Element {
                         value={baselineSelectValue}
                         placeholder={effectiveBaselineKey}
                         options={baselineVariants.map((v) => ({ value: v.key, label: v.key }))}
-                        onChange={(value) =>
+                        onSelect={(value) =>
                             setExperiment({
                                 ...experiment,
                                 stats_config: { ...experiment.stats_config, baseline_variant_key: value },

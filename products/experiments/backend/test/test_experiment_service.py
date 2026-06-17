@@ -3467,6 +3467,103 @@ class TestExperimentService(APIBaseTest):
 
         assert list(queryset.values_list("name", flat=True)[:3]) == expected_order
 
+    @parameterized.expand(
+        [
+            (
+                "ascending",
+                "conclusion",
+                ["Won A", "Won B", "Lost", "Inconclusive", "Stopped early", "Invalid", "No result"],
+            ),
+            (
+                "descending",
+                "-conclusion",
+                ["Invalid", "Stopped early", "Inconclusive", "Lost", "Won A", "Won B", "No result"],
+            ),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_conclusion_across_pages(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        for name, conclusion in [
+            ("Won A", "won"),
+            ("Won B", "won"),
+            ("Lost", "lost"),
+            ("Inconclusive", "inconclusive"),
+            ("Stopped early", "stopped_early"),
+            ("Invalid", "invalid"),
+            ("No result", None),
+        ]:
+            service.create_experiment(
+                name=name,
+                feature_flag_key=f"order-conclusion-{name.lower().replace(' ', '-')}",
+                conclusion=conclusion,
+            )
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+        pages = [list(queryset.values_list("name", flat=True)[offset : offset + 3]) for offset in range(0, 7, 3)]
+
+        assert pages == [expected_order[:3], expected_order[3:6], expected_order[6:]]
+
+    @parameterized.expand(
+        [
+            ("ascending", "created_by", ["Alice", "Bob", "No creator"]),
+            ("descending", "-created_by", ["Bob", "Alice", "No creator"]),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_creator_with_nulls_last(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        alice = self._create_user("alice-ordering@example.com", first_name="Alice")
+        bob = self._create_user("bob-ordering@example.com", first_name="Bob")
+        ExperimentService(team=self.team, user=bob).create_experiment(
+            name="Bob",
+            feature_flag_key="order-creator-bob",
+        )
+        no_creator = service.create_experiment(
+            name="No creator",
+            feature_flag_key="order-creator-none",
+        )
+        Experiment.objects.filter(pk=no_creator.pk).update(created_by=None)
+        ExperimentService(team=self.team, user=alice).create_experiment(
+            name="Alice",
+            feature_flag_key="order-creator-alice",
+        )
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    @parameterized.expand(
+        [
+            ("ascending", "name", ["Alpha", "Zebra"]),
+            ("descending", "-name", ["Zebra", "Alpha"]),
+        ]
+    )
+    def test_filter_experiments_queryset_preserves_existing_ordering(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        service.create_experiment(name="Zebra", feature_flag_key="order-name-zebra")
+        service.create_experiment(name="Alpha", feature_flag_key="order-name-alpha")
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
     def test_filter_experiments_queryset_validates_feature_flag_id(self) -> None:
         with self.assertRaises(ValidationError) as ctx:
             self._service().filter_experiments_queryset(
@@ -4252,6 +4349,8 @@ class TestExperimentService(APIBaseTest):
             ("-duration",),
             ("status",),
             ("-status",),
+            ("conclusion",),
+            ("-conclusion",),
         ]
     )
     def test_order_by_valid_fields_works(self, order: str):

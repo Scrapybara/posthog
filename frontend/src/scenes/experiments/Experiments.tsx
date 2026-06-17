@@ -40,7 +40,6 @@ import {
     AccessControlResourceType,
     ActivityScope,
     Experiment,
-    ExperimentConclusion,
     ExperimentStatus,
     ExperimentsTabs,
 } from '~/types'
@@ -256,9 +255,18 @@ const ExperimentsTable = ({
                 )
             },
         },
-        createdByColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>,
-        createdAtColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>,
-        atColumn('start_date', 'Started') as LemonTableColumn<Experiment, keyof Experiment | undefined>,
+        {
+            ...createdByColumn<Experiment>(),
+            sorter: true,
+        } as LemonTableColumn<Experiment, keyof Experiment | undefined>,
+        {
+            ...createdAtColumn<Experiment>(),
+            sorter: true,
+        } as LemonTableColumn<Experiment, keyof Experiment | undefined>,
+        {
+            ...atColumn('start_date', 'Started'),
+            sorter: true,
+        } as LemonTableColumn<Experiment, keyof Experiment | undefined>,
         {
             title: 'Duration',
             key: 'duration',
@@ -267,11 +275,7 @@ const ExperimentsTable = ({
 
                 return <div>{duration !== undefined ? `${duration} day${duration !== 1 ? 's' : ''}` : '—'}</div>
             },
-            sorter: (a, b) => {
-                const durationA = getExperimentDuration(a) ?? -1
-                const durationB = getExperimentDuration(b) ?? -1
-                return durationA > durationB ? 1 : -1
-            },
+            sorter: true,
             align: 'right',
         },
         {
@@ -325,18 +329,7 @@ const ExperimentsTable = ({
                 return <StatusTag status={getExperimentStatus(experiment)} />
             },
             align: 'center',
-            sorter: (a, b) => {
-                const statusA = getExperimentStatus(a)
-                const statusB = getExperimentStatus(b)
-
-                const score: Record<ExperimentStatus, number> = {
-                    [ExperimentStatus.Draft]: 1,
-                    [ExperimentStatus.Running]: 2,
-                    [ExperimentStatus.Paused]: 3,
-                    [ExperimentStatus.Stopped]: 4,
-                }
-                return score[statusA] > score[statusB] ? 1 : -1
-            },
+            sorter: true,
         },
         {
             title: 'Result',
@@ -359,18 +352,7 @@ const ExperimentsTable = ({
                 )
             },
             align: 'left',
-            sorter: (a, b) => {
-                const conclusionScore: Record<ExperimentConclusion, number> = {
-                    [ExperimentConclusion.Won]: 1,
-                    [ExperimentConclusion.Lost]: 2,
-                    [ExperimentConclusion.Inconclusive]: 3,
-                    [ExperimentConclusion.StoppedEarly]: 4,
-                    [ExperimentConclusion.Invalid]: 5,
-                }
-                const aScore = a.conclusion ? conclusionScore[a.conclusion] : 6
-                const bScore = b.conclusion ? conclusionScore[b.conclusion] : 6
-                return aScore - bScore
-            },
+            sorter: true,
         },
         {
             width: 0,

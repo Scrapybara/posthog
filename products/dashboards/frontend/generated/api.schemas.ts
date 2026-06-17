@@ -367,6 +367,7 @@ export interface DashboardCollaboratorApi {
 /**
  * * `activity_events_list` - activity_events_list
  * * `error_tracking_list` - error_tracking_list
+ * * `live_activity` - live_activity
  * * `session_replay_list` - session_replay_list
  */
 export type DashboardPatchWidgetOpenApiWidgetTypeEnumApi =
@@ -375,6 +376,7 @@ export type DashboardPatchWidgetOpenApiWidgetTypeEnumApi =
 export const DashboardPatchWidgetOpenApiWidgetTypeEnumApi = {
     ActivityEventsList: 'activity_events_list',
     ErrorTrackingList: 'error_tracking_list',
+    LiveActivity: 'live_activity',
     SessionReplayList: 'session_replay_list',
 } as const
 
@@ -534,6 +536,23 @@ export interface ErrorTrackingListWidgetConfigApi {
     assignee?: WidgetAssigneeFilterApi | null
 }
 
+export interface LiveActivityWidgetConfigApi {
+    /**
+     * Maximum number of recent events to return.
+     * @minimum 1
+     * @maximum 10
+     */
+    limit?: number
+    /** Whether to exclude test accounts. When omitted, the project default is used. */
+    filterTestAccounts?: boolean | null
+    /**
+     * Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.
+     * @minimum 15
+     * @maximum 60
+     */
+    refreshIntervalSeconds?: number
+}
+
 /**
  * Recording ranking column.
  */
@@ -583,6 +602,7 @@ export interface SessionReplayListWidgetConfigApi {
 export type DashboardWidgetConfigApi =
     | ActivityEventsListWidgetConfigApi
     | ErrorTrackingListWidgetConfigApi
+    | LiveActivityWidgetConfigApi
     | SessionReplayListWidgetConfigApi
 
 export interface DashboardPatchWidgetOpenApiApi {
@@ -592,6 +612,7 @@ export interface DashboardPatchWidgetOpenApiApi {
      *
      * * `activity_events_list` - activity_events_list
      * * `error_tracking_list` - error_tracking_list
+     * * `live_activity` - live_activity
      * * `session_replay_list` - session_replay_list */
     widget_type?: DashboardPatchWidgetOpenApiWidgetTypeEnumApi
     /** Widget-specific configuration. Shape depends on the tile's widget_type. */
@@ -7976,6 +7997,31 @@ export interface ErrorTrackingListWidgetAddRequestOpenApiApi {
     config: ErrorTrackingListWidgetConfigApi
 }
 
+export type LiveActivityWidgetAddRequestOpenApiApiWidgetType =
+    (typeof LiveActivityWidgetAddRequestOpenApiApiWidgetType)[keyof typeof LiveActivityWidgetAddRequestOpenApiApiWidgetType]
+
+export const LiveActivityWidgetAddRequestOpenApiApiWidgetType = {
+    LiveActivity: 'live_activity',
+} as const
+
+export interface LiveActivityWidgetAddRequestOpenApiApi {
+    /**
+     * Optional custom display name for the widget tile.
+     * @maxLength 400
+     * @nullable
+     */
+    name?: string | null
+    /** Optional markdown description shown when show_description is enabled. */
+    description?: string
+    /** Optional react-grid-layout positions keyed by breakpoint (sm, xs). */
+    layouts?: _WidgetTileLayoutsOpenApiApi
+    /** Whether to show the description on the dashboard tile. */
+    show_description?: boolean
+    widget_type: LiveActivityWidgetAddRequestOpenApiApiWidgetType
+    /** Configuration for the live activity widget. */
+    config: LiveActivityWidgetConfigApi
+}
+
 export type SessionReplayListWidgetAddRequestOpenApiApiWidgetType =
     (typeof SessionReplayListWidgetAddRequestOpenApiApiWidgetType)[keyof typeof SessionReplayListWidgetAddRequestOpenApiApiWidgetType]
 
@@ -8004,6 +8050,7 @@ export interface SessionReplayListWidgetAddRequestOpenApiApi {
 export type AddDashboardWidgetRequestApi =
     | ActivityEventsListWidgetAddRequestOpenApiApi
     | ErrorTrackingListWidgetAddRequestOpenApiApi
+    | LiveActivityWidgetAddRequestOpenApiApi
     | SessionReplayListWidgetAddRequestOpenApiApi
 
 /**
@@ -8011,7 +8058,7 @@ export type AddDashboardWidgetRequestApi =
  */
 export interface AddDashboardWidgetsBatchRequestOpenApiApi {
     /**
-     * Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).
+     * Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, live_activity, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).
      * @minItems 1
      * @maxItems 10
      */
@@ -8105,6 +8152,25 @@ export interface ErrorTrackingListWidgetCatalogEntryOpenApiApi {
     required_product_access?: string | null
 }
 
+export type LiveActivityWidgetCatalogEntryOpenApiApiWidgetType =
+    (typeof LiveActivityWidgetCatalogEntryOpenApiApiWidgetType)[keyof typeof LiveActivityWidgetCatalogEntryOpenApiApiWidgetType]
+
+export const LiveActivityWidgetCatalogEntryOpenApiApiWidgetType = {
+    LiveActivity: 'live_activity',
+} as const
+
+export interface LiveActivityWidgetCatalogEntryOpenApiApi {
+    widget_type: LiveActivityWidgetCatalogEntryOpenApiApiWidgetType
+    group_id: string
+    group_label: string
+    label: string
+    description: string
+    /** OpenAPI config shape for this widget type (documentation; matches batch-add/PATCH schemas). */
+    readonly config_schema: LiveActivityWidgetConfigApi
+    /** @nullable */
+    required_product_access?: string | null
+}
+
 export type SessionReplayListWidgetCatalogEntryOpenApiApiWidgetType =
     (typeof SessionReplayListWidgetCatalogEntryOpenApiApiWidgetType)[keyof typeof SessionReplayListWidgetCatalogEntryOpenApiApiWidgetType]
 
@@ -8127,6 +8193,7 @@ export interface SessionReplayListWidgetCatalogEntryOpenApiApi {
 export type WidgetCatalogEntryApi =
     | ActivityEventsListWidgetCatalogEntryOpenApiApi
     | ErrorTrackingListWidgetCatalogEntryOpenApiApi
+    | LiveActivityWidgetCatalogEntryOpenApiApi
     | SessionReplayListWidgetCatalogEntryOpenApiApi
 
 export interface WidgetCatalogResponseApi {
@@ -8183,6 +8250,16 @@ export type ErrorTrackingListWidgetTypeEnumApi =
 
 export const ErrorTrackingListWidgetTypeEnumApi = {
     ErrorTrackingList: 'error_tracking_list',
+} as const
+
+/**
+ * * `live_activity` - live_activity
+ */
+export type LiveActivityWidgetTypeEnumApi =
+    (typeof LiveActivityWidgetTypeEnumApi)[keyof typeof LiveActivityWidgetTypeEnumApi]
+
+export const LiveActivityWidgetTypeEnumApi = {
+    LiveActivity: 'live_activity',
 } as const
 
 /**

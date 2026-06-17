@@ -1,6 +1,7 @@
 import type { DashboardWidgetCatalogKey } from '../../widget_types/catalog'
 import { getDashboardWidgetCatalogEntry } from '../../widget_types/catalog'
 import { activityEventsSampleEvents } from '../../widgets/activity/activityEventsSampleData'
+import { liveActivitySampleResult } from '../../widgets/activity/liveActivitySampleData'
 
 export type WidgetOverviewDemoState = {
     title?: string
@@ -200,6 +201,15 @@ export function getWidgetOverviewDemoState(catalogKey: DashboardWidgetCatalogKey
                     totalCount: 25,
                     totalCountCapped: true,
                 },
+            }
+        case 'live_activity':
+            return {
+                title: defaultTitle,
+                description: catalogEntry.description,
+                showDescription: true,
+                config: { ...defaultConfig },
+                loading: false,
+                result: liveActivitySampleResult,
             }
         default: {
             const exhaustiveCheck: never = catalogKey

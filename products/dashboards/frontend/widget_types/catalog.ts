@@ -6,11 +6,13 @@ import { ActivityTab } from '~/types'
 import {
     activityEventsWidgetConfigSchema,
     errorTrackingWidgetConfigSchema,
+    liveActivityWidgetConfigSchema,
     sessionReplayWidgetConfigSchema,
 } from '../generated/widget-configs.zod'
 import type { DashboardWidgetProductAccess } from '../types'
 import { ActivityEventsWidgetPreview } from '../widgets/previews/ActivityEventsWidgetPreview'
 import { ErrorTrackingWidgetPreview } from '../widgets/previews/ErrorTrackingWidgetPreview'
+import { LiveActivityWidgetPreview } from '../widgets/previews/LiveActivityWidgetPreview'
 import { SessionReplayWidgetPreview } from '../widgets/previews/SessionReplayWidgetPreview'
 import type { WidgetAvailabilityConfig } from './widgetAvailability'
 
@@ -172,6 +174,20 @@ export const DASHBOARD_WIDGET_CATALOG = {
             message: 'Log in to PostHog to explore the latest events from this dashboard.',
         },
     },
+    live_activity: {
+        groupId: 'activity',
+        label: 'Live activity',
+        description: 'Active users, activity pulse, and recent events for the last 5 minutes.',
+        headerTitle: 'Live activity',
+        defaultConfig: liveActivityWidgetConfigSchema.parse({}),
+        defaultLayout: { w: 4, h: 4, minW: 3, minH: 3 },
+        headerMeta: { showDateRange: false },
+        titleHref: urls.activity(ActivityTab.LiveEvents),
+        sharedPlaceholder: {
+            title: 'Live activity',
+            message: 'Log in to PostHog to see live activity from this dashboard.',
+        },
+    },
 } as const satisfies Record<string, DashboardWidgetCatalogEntry>
 
 export type DashboardWidgetCatalogKey = keyof typeof DASHBOARD_WIDGET_CATALOG
@@ -180,6 +196,7 @@ export type DashboardWidgetCatalogKey = keyof typeof DASHBOARD_WIDGET_CATALOG
 export const DASHBOARD_WIDGET_PREVIEWS: Record<DashboardWidgetCatalogKey, () => JSX.Element> = {
     activity_events_list: ActivityEventsWidgetPreview,
     error_tracking_list: ErrorTrackingWidgetPreview,
+    live_activity: LiveActivityWidgetPreview,
     session_replay_list: SessionReplayWidgetPreview,
 }
 

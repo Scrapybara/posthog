@@ -12,6 +12,12 @@
             "formSchemaExport": "errorTrackingWidgetFormSchema",
             "formFields": ["limit", "orderBy", "orderDirection", "dateRange", "filterTestAccounts", "status"]
         },
+        "live_activity": {
+            "configSchemaExport": "liveActivityWidgetConfigSchema",
+            "configTypeExport": "LiveActivityWidgetConfig",
+            "formSchemaExport": "liveActivityWidgetFormSchema",
+            "formFields": ["limit", "refreshIntervalSeconds", "filterTestAccounts"]
+        },
         "session_replay_list": {
             "configSchemaExport": "sessionReplayWidgetConfigSchema",
             "configTypeExport": "SessionReplayWidgetConfig",

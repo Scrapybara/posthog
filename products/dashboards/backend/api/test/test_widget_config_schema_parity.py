@@ -4,15 +4,18 @@ from products.dashboards.backend.constants import (
     ACTIVITY_EVENTS_DEFAULT_LIMIT,
     ACTIVITY_EVENTS_MAX_LIMIT,
     DEFAULT_WIDGET_LIST_LIMIT,
+    LIVE_ACTIVITY_DEFAULT_LIMIT,
+    LIVE_ACTIVITY_MAX_LIMIT,
     MAX_WIDGET_RESULT_LIMIT,
 )
 from products.dashboards.backend.widget_catalog import WIDGET_CATALOG
-from products.dashboards.backend.widget_specs.configs import ACTIVITY_EVENTS_LIST_WIDGET_TYPE
+from products.dashboards.backend.widget_specs.configs import ACTIVITY_EVENTS_LIST_WIDGET_TYPE, LIVE_ACTIVITY_WIDGET_TYPE
 from products.dashboards.backend.widget_specs.registry import WIDGET_SPECS
 
 # Activity events allows a larger page than other list widgets; other types share the default bounds.
 WIDGET_LIMIT_BOUNDS = {
     ACTIVITY_EVENTS_LIST_WIDGET_TYPE: (ACTIVITY_EVENTS_MAX_LIMIT, ACTIVITY_EVENTS_DEFAULT_LIMIT),
+    LIVE_ACTIVITY_WIDGET_TYPE: (LIVE_ACTIVITY_MAX_LIMIT, LIVE_ACTIVITY_DEFAULT_LIMIT),
 }
 
 

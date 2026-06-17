@@ -428,6 +428,36 @@
                                     },
                                     {
                                         "properties": {
+                                            "filterTestAccounts": {
+                                                "anyOf": [
+                                                    {
+                                                        "type": "boolean"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ],
+                                                "description": "Whether to exclude test accounts. When omitted, the project default is used."
+                                            },
+                                            "limit": {
+                                                "default": 5,
+                                                "description": "Maximum number of recent events to return.",
+                                                "maximum": 10,
+                                                "minimum": 1,
+                                                "type": "number"
+                                            },
+                                            "refreshIntervalSeconds": {
+                                                "default": 15,
+                                                "description": "Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.",
+                                                "maximum": 60,
+                                                "minimum": 15,
+                                                "type": "number"
+                                            }
+                                        },
+                                        "type": "object"
+                                    },
+                                    {
+                                        "properties": {
                                             "dateRange": {
                                                 "anyOf": [
                                                     {
@@ -624,8 +654,13 @@
                                 "description": "Optional custom display name for the widget tile."
                             },
                             "widget_type": {
-                                "description": "Widget type identifier (cannot be changed on update).\n\n* `activity_events_list` - activity_events_list\n* `error_tracking_list` - error_tracking_list\n* `session_replay_list` - session_replay_list",
-                                "enum": ["activity_events_list", "error_tracking_list", "session_replay_list"],
+                                "description": "Widget type identifier (cannot be changed on update).\n\n* `activity_events_list` - activity_events_list\n* `error_tracking_list` - error_tracking_list\n* `live_activity` - live_activity\n* `session_replay_list` - session_replay_list",
+                                "enum": [
+                                    "activity_events_list",
+                                    "error_tracking_list",
+                                    "live_activity",
+                                    "session_replay_list"
+                                ],
                                 "type": "string"
                             }
                         },

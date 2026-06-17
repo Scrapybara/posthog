@@ -148,18 +148,30 @@ function buildBarrelImports(copiedSchemas, configModelNames) {
     const aliasLines = []
 
     const exportedComponentNames = new Set([...configModelNames, WIDGET_FILTER_ENTRY_MODEL])
+    const configImportAliases = new Map()
 
     for (const { componentName, fileName } of copiedSchemas) {
         if (!exportedComponentNames.has(componentName)) {
             continue
         }
         const importPath = `./${SCHEMAS_SUBDIR_NAME}/${fileName.replace(/\.ts$/, '')}`
-        importLines.push(`import { ${componentName} } from '${importPath}'`)
+        const friendlyTypeName = configModelNames.includes(componentName)
+            ? configModelNameToFriendlyNames(componentName).type
+            : null
+        const importName = friendlyTypeName === componentName ? `${componentName}SchemaSource` : componentName
+        configImportAliases.set(componentName, importName)
+        importLines.push(
+            importName === componentName
+                ? `import { ${componentName} } from '${importPath}'`
+                : `import { ${componentName} as ${importName} } from '${importPath}'`
+        )
     }
 
     for (const configModelName of configModelNames) {
         const { schema, orvalExport } = configModelNameToFriendlyNames(configModelName)
-        aliasLines.push(`export const ${schema} = /* @__PURE__ */ ${orvalExport}`)
+        aliasLines.push(
+            `export const ${schema} = /* @__PURE__ */ ${configImportAliases.get(orvalExport) ?? orvalExport}`
+        )
     }
 
     const filterEntryImport = copiedSchemas.find((entry) => entry.componentName === WIDGET_FILTER_ENTRY_MODEL)

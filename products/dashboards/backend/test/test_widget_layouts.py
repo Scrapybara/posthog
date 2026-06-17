@@ -1,6 +1,7 @@
 from parameterized import parameterized
 
 from products.dashboards.backend.widget_layouts import stack_widget_layout_at_bottom
+from products.dashboards.backend.widget_specs.configs import LIVE_ACTIVITY_WIDGET_TYPE
 
 
 class TestWidgetLayouts:
@@ -75,12 +76,14 @@ class TestWidgetLayouts:
         ]
 
         layouts = stack_widget_layout_at_bottom(
-            widget_type="error_tracking_list",
+            widget_type=LIVE_ACTIVITY_WIDGET_TYPE,
             existing_sm_layouts=existing,
         )
 
         placement = layouts["sm"]
         assert placement["y"] == 14
+        assert placement["w"] == 4
+        assert placement["h"] == 4
         # column span must include the tallest column (8)
         assert placement["x"] <= 8 < placement["x"] + placement["w"]
 
@@ -97,3 +100,12 @@ class TestWidgetLayouts:
 
         assert first["sm"] == {"x": 0, "y": 0, "w": 6, "h": 5}
         assert second["sm"] == {"x": 0, "y": 5, "w": 6, "h": 5}
+
+    def test_live_activity_uses_compact_default_layout(self) -> None:
+        layouts = stack_widget_layout_at_bottom(
+            widget_type=LIVE_ACTIVITY_WIDGET_TYPE,
+            existing_sm_layouts=[],
+        )
+
+        assert layouts["sm"] == {"x": 0, "y": 0, "w": 4, "h": 4}
+        assert layouts["xs"] == layouts["sm"]

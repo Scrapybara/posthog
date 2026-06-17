@@ -106,10 +106,10 @@ describe('QuestionInput', () => {
         fireEvent.change(input, { target: { value: 'Explain activation trends' } })
         await waitFor(() => expect(input).toHaveValue('Explain activation trends'))
 
-        fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+        expect(fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })).toBe(true)
         expect(onSubmit).not.toHaveBeenCalled()
 
-        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false)
         expect(onSubmit).toHaveBeenCalledTimes(1)
     })
 

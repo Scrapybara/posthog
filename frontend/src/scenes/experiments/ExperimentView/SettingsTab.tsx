@@ -19,7 +19,7 @@ import { resolveSequentialEnabled } from './sequential'
 import { StatsMethodModal } from './StatsMethodModal'
 
 export function SettingsTab(): JSX.Element {
-    const { experiment, statsMethod, variants, experimentUpdateLoading } = useValues(experimentLogic)
+    const { experiment, statsMethod, excludedVariants, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings } = useActions(experimentLogic)
     const { openStatsEngineModal, openCupedModal } = useActions(modalsLogic)
     const { experimentsConfig } = useValues(experimentsConfigLogic)
@@ -51,7 +51,9 @@ export function SettingsTab(): JSX.Element {
     // Only show alerts section for saved experiments, as the alert relies on experiment.id for filtering
     const shouldShowSignificanceAlerts = typeof experiment.id === 'number'
 
-    const experimentVariants = variants as MultivariateFlagVariant[]
+    const experimentVariants = (
+        (experiment.feature_flag?.filters?.multivariate?.variants ?? []) as MultivariateFlagVariant[]
+    ).filter((variant) => !excludedVariants.includes(variant.key))
     const variantKeys = experimentVariants.map((v) => v.key)
     const configuredBaselineKey = experiment.stats_config?.baseline_variant_key
     const effectiveBaselineKey = resolveBaselineVariantKey(variantKeys, configuredBaselineKey)
@@ -106,7 +108,7 @@ export function SettingsTab(): JSX.Element {
                     loading={experimentUpdateLoading}
                     disabledReason={experimentUpdateLoading ? 'Saving baseline\u2026' : undefined}
                     onChange={(value) => {
-                        if (value === effectiveBaselineKey) {
+                        if (value === configuredBaselineKey) {
                             return
                         }
                         updateExperimentSettings({

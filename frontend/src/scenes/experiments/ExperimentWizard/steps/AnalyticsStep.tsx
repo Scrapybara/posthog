@@ -21,6 +21,9 @@ export function AnalyticsStep(): JSX.Element {
         baselineVariantKeys,
         experiment.stats_config?.baseline_variant_key
     )
+    const baselineSelectValue = baselineVariantKeys.includes(experiment.stats_config?.baseline_variant_key ?? '')
+        ? experiment.stats_config?.baseline_variant_key
+        : undefined
 
     return (
         <div className="space-y-6">
@@ -91,7 +94,8 @@ export function AnalyticsStep(): JSX.Element {
                         All other variants are compared against this one. You can change it later in settings.
                     </p>
                     <LemonSelect
-                        value={effectiveBaselineKey}
+                        value={baselineSelectValue}
+                        placeholder={effectiveBaselineKey}
                         options={baselineVariants.map((v) => ({ value: v.key, label: v.key }))}
                         onChange={(value) =>
                             setExperiment({

@@ -232,6 +232,8 @@ def _recalc_fingerprints_for_run(experiment: Experiment, recalc: ExperimentMetri
             stats_method,
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=(experiment.stats_config or {}).get("baseline_variant_key"),
         )
         fingerprints[metric_uuid] = compute_recalc_fingerprint(config_fp, str(recalc.id))
     return fingerprints

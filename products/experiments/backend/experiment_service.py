@@ -773,6 +773,7 @@ class ExperimentService:
             only_count_matured_users = team_config.default_only_count_matured_users
 
         stats_method = "bayesian" if stats_config is None else stats_config.get("method", "bayesian")
+        baseline_variant_key = None if stats_config is None else stats_config.get("baseline_variant_key")
         if metrics is not None:
             for metric in metrics:
                 metric["fingerprint"] = compute_metric_fingerprint(
@@ -782,6 +783,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
+                    baseline_variant_key=baseline_variant_key,
                 )
         if metrics_secondary is not None:
             for metric in metrics_secondary:
@@ -792,6 +794,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=(parameters or {}).get("excluded_variants"),
+                    baseline_variant_key=baseline_variant_key,
                 )
 
         self.validate_no_duplicate_metric_uuids(metrics, metrics_secondary)
@@ -1085,6 +1088,7 @@ class ExperimentService:
     ) -> list[dict]:
         """Recompute fingerprints for a list of metrics. Returns a new list with updated fingerprints."""
         stats_method = "bayesian" if stats_config is None else stats_config.get("method", "bayesian")
+        baseline_variant_key = None if stats_config is None else stats_config.get("baseline_variant_key")
         updated = []
         for metric in metrics:
             metric_copy = deepcopy(metric)
@@ -1095,6 +1099,7 @@ class ExperimentService:
                 exposure_criteria,
                 only_count_matured_users=only_count_matured_users,
                 excluded_variants=excluded_variants,
+                baseline_variant_key=baseline_variant_key,
             )
             updated.append(metric_copy)
         return updated

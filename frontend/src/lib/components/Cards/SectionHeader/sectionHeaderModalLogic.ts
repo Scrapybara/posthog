@@ -6,6 +6,7 @@ import { lemonToast } from '@posthog/lemon-ui'
 
 import {
     composeSectionHeaderBody,
+    isSectionHeaderDescriptionInline,
     parseSectionHeaderBody,
     SECTION_HEADER_MAX_DESCRIPTION_LENGTH,
     SECTION_HEADER_MAX_TITLE_LENGTH,
@@ -34,6 +35,12 @@ export const SECTION_HEADER_DEFAULT_HEIGHT = 2
 export interface SectionHeaderLayouts {
     sm: { x: number; y: number; w: number; h: number }
     xs: { x: number; y: number; w: number; h: number }
+}
+
+/** A pending persistence, settled when the matching dashboardsModel update resolves or rejects. */
+interface PendingSave {
+    resolve: () => void
+    reject: (error: Error) => void
 }
 
 const EMPTY_FORM: SectionHeaderForm = { title: '', description: '' }
@@ -68,15 +75,35 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
     props({} as SectionHeaderModalProps),
     key((props) => `sectionHeaderModalLogic-${props.dashboard.id}-${props.sectionHeaderId}`),
     connect(() => ({ actions: [dashboardsModel, ['updateDashboard']] })),
-    listeners(({ props }) => ({
+    listeners(({ props, actions, cache }) => ({
+        // The dashboardsModel loader swallows its own errors, so bridge its success/failure back into the form's
+        // submit promise: only then does a rejected save keep the modal open and run submitSectionHeaderFailure.
+        [dashboardsModel.actionTypes.updateDashboardSuccess]: ({ dashboard }) => {
+            const pending: PendingSave | null = cache.pendingSave
+            if (pending && dashboard?.id === props.dashboard.id) {
+                cache.pendingSave = null
+                pending.resolve()
+            }
+        },
+        [dashboardsModel.actionTypes.updateDashboardFailure]: ({ error }: { error?: string }) => {
+            const pending: PendingSave | null = cache.pendingSave
+            if (pending) {
+                cache.pendingSave = null
+                pending.reject(new Error(error || 'Could not save section header'))
+            }
+        },
         submitSectionHeaderFailure: ({ error }: { error?: any }) => {
             const message =
                 (typeof error === 'string' && error) ||
+                (error instanceof Error && error.message) ||
                 (error && typeof error === 'object' && typeof error.error === 'string' && error.error) ||
                 'Unknown error'
             lemonToast.error(`Could not save section header: ${message}`)
         },
         submitSectionHeaderSuccess: ({ sectionHeader }: { sectionHeader: SectionHeaderForm }) => {
+            // Reset before closing so the keyed logic instance (shared between the closed `new` route and the
+            // next create) reopens empty instead of showing the just-submitted values as an accidental duplicate.
+            actions.resetSectionHeader()
             props?.onClose?.()
 
             posthog.capture('dashboard section header saved', {
@@ -88,7 +115,7 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
             })
         },
     })),
-    forms(({ props, actions }) => ({
+    forms(({ props, actions, cache }) => ({
         sectionHeader: {
             defaults: (props.sectionHeaderId && props.sectionHeaderId !== 'new'
                 ? getExistingSectionHeader(props.dashboard, props.sectionHeaderId)
@@ -102,13 +129,16 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
                 description:
                     description.trim().length > SECTION_HEADER_MAX_DESCRIPTION_LENGTH
                         ? `Description is too long (${SECTION_HEADER_MAX_DESCRIPTION_LENGTH} characters max)`
-                        : null,
+                        : !isSectionHeaderDescriptionInline(description)
+                          ? 'Remove block formatting (like -, >, #, or ---) from the start of the description'
+                          : null,
             }),
-            submit: (formValues) => {
+            submit: async (formValues) => {
                 const body = composeSectionHeaderBody(formValues)
 
+                let payload: Parameters<typeof actions.updateDashboard>[0] | null = null
                 if (props.sectionHeaderId === 'new') {
-                    actions.updateDashboard({
+                    payload = {
                         id: props.dashboard.id,
                         tiles: [
                             {
@@ -117,23 +147,31 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
                                 layouts: sectionHeaderDefaultLayouts(props.dashboard.tiles),
                             },
                         ],
-                    })
+                    }
+                } else {
+                    const existingTile = (props.dashboard.tiles || []).find((t) => t.id === props.sectionHeaderId)
+                    if (existingTile?.text) {
+                        payload = {
+                            id: props.dashboard.id,
+                            tiles: [
+                                {
+                                    id: existingTile.id,
+                                    text: { ...existingTile.text, body },
+                                    transparent_background: true,
+                                } as Partial<DashboardTile>,
+                            ],
+                        }
+                    }
+                }
+
+                if (!payload) {
                     return
                 }
 
-                const existingTile = (props.dashboard.tiles || []).find((t) => t.id === props.sectionHeaderId)
-                if (!existingTile?.text) {
-                    return
-                }
-                actions.updateDashboard({
-                    id: props.dashboard.id,
-                    tiles: [
-                        {
-                            id: existingTile.id,
-                            text: { ...existingTile.text, body },
-                            transparent_background: true,
-                        } as Partial<DashboardTile>,
-                    ],
+                const update = payload
+                await new Promise<void>((resolve, reject) => {
+                    cache.pendingSave = { resolve, reject } as PendingSave
+                    actions.updateDashboard(update)
                 })
             },
         },

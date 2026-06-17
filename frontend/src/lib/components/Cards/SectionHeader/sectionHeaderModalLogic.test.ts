@@ -7,7 +7,6 @@ import api from 'lib/api'
 import { composeSectionHeaderBody } from 'lib/components/Cards/SectionHeader/sectionHeaderMarkdown'
 
 import { useMocks } from '~/mocks/jest'
-import { dashboardsModel } from '~/models/dashboardsModel'
 import { initKeaTests } from '~/test/init'
 import { AccessControlLevel, DashboardTile, DashboardType, QueryBasedInsightModel } from '~/types'
 
@@ -140,19 +139,36 @@ describe('sectionHeaderModalLogic', () => {
         })
     })
 
-    it('creates a transparent, full-width section header tile with the composed body', async () => {
-        dashboardsModel.mount()
+    it('rejects a description that would become a markdown block', async () => {
         const logic = sectionHeaderModalLogic({
-            dashboard: makeDashboard([insightTile(1, 0, 5)]),
+            dashboard: makeDashboard([]),
             sectionHeaderId: 'new',
             onClose: jest.fn(),
         })
         logic.mount()
+        logic.actions.setSectionHeaderValues({ title: 'Fine', description: '- a bullet line' })
+
+        await expectLogic(logic).toMatchValues({
+            sectionHeaderValidationErrors: {
+                title: null,
+                description: 'Remove block formatting (like -, >, #, or ---) from the start of the description',
+            },
+        })
+    })
+
+    it('creates a transparent, full-width section header tile and resets the form on success', async () => {
+        const onClose = jest.fn()
+        const logic = sectionHeaderModalLogic({
+            dashboard: makeDashboard([insightTile(1, 0, 5)]),
+            sectionHeaderId: 'new',
+            onClose,
+        })
+        logic.mount()
         logic.actions.setSectionHeaderValues({ title: 'Engagement', description: 'Weekly retention' })
 
-        await expectLogic(dashboardsModel, () => {
+        await expectLogic(logic, () => {
             logic.actions.submitSectionHeader()
-        }).toDispatchActions(['updateDashboard', 'updateDashboardSuccess'])
+        }).toDispatchActions(['submitSectionHeader', 'submitSectionHeaderSuccess'])
 
         expect(api.update).toHaveBeenCalledWith(
             expect.stringContaining(`dashboards/${DASHBOARD_ID}`),
@@ -172,10 +188,12 @@ describe('sectionHeaderModalLogic', () => {
             'dashboard section header saved',
             expect.objectContaining({ dashboard_id: DASHBOARD_ID, is_new: true, has_description: true })
         )
+        expect(onClose).toHaveBeenCalledTimes(1)
+        // The keyed logic is shared with the next create, so a successful save must clear the form.
+        await expectLogic(logic).toMatchValues({ sectionHeader: { title: '', description: '' } })
     })
 
     it('updates an existing section header in place without changing its layout', async () => {
-        dashboardsModel.mount()
         const logic = sectionHeaderModalLogic({
             dashboard: makeDashboard([sectionTile(7, { title: 'Old', description: 'old desc' })]),
             sectionHeaderId: 7,
@@ -184,9 +202,9 @@ describe('sectionHeaderModalLogic', () => {
         logic.mount()
         logic.actions.setSectionHeaderValue('title', 'New title')
 
-        await expectLogic(dashboardsModel, () => {
+        await expectLogic(logic, () => {
             logic.actions.submitSectionHeader()
-        }).toDispatchActions(['updateDashboard', 'updateDashboardSuccess'])
+        }).toDispatchActions(['submitSectionHeader', 'submitSectionHeaderSuccess'])
 
         const updateCall = (api.update as jest.Mock).mock.calls.at(-1)
         const payload = updateCall?.[1] as {
@@ -199,6 +217,34 @@ describe('sectionHeaderModalLogic', () => {
             })
         )
         expect(payload.tiles[0].layouts).toBeUndefined()
+    })
+
+    it('keeps the modal open and toasts when the save fails', async () => {
+        useMocks({
+            patch: {
+                '/api/environments/:team_id/dashboards/:id/': () => [500, { detail: 'server exploded' }],
+            },
+        })
+        const onClose = jest.fn()
+        const logic = sectionHeaderModalLogic({
+            dashboard: makeDashboard([insightTile(1, 0, 5)]),
+            sectionHeaderId: 'new',
+            onClose,
+        })
+        logic.mount()
+        logic.actions.setSectionHeaderValues({ title: 'Engagement', description: 'Weekly retention' })
+
+        await expectLogic(logic, () => {
+            logic.actions.submitSectionHeader()
+        }).toDispatchActions(['submitSectionHeader', 'submitSectionHeaderFailure'])
+
+        expect(onClose).not.toHaveBeenCalled()
+        expect(lemonToast.error).toHaveBeenCalled()
+        expect(posthog.capture).not.toHaveBeenCalledWith('dashboard section header saved', expect.anything())
+        // The form keeps the user's input so they can retry without retyping.
+        await expectLogic(logic).toMatchValues({
+            sectionHeader: { title: 'Engagement', description: 'Weekly retention' },
+        })
     })
 
     it('shows a toast for unexpected submit failures', () => {

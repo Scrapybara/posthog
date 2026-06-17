@@ -5440,6 +5440,49 @@ class TestExperimentAuxiliaryEndpoints(ClickhouseTestMixin, APILicensedTest):
         self.assertIn("description", change_fields)
         self.assertNotIn("parameters", change_fields)
 
+    def test_experiment_baseline_variant_change_is_logged(self):
+        feature_flag = FeatureFlag.objects.create(
+            team=self.team,
+            created_by=self.user,
+            name="Baseline activity flag",
+            key="baseline-activity-flag",
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": 100}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "control", "name": "Control", "rollout_percentage": 50},
+                        {"key": "test", "name": "Test", "rollout_percentage": 50},
+                    ]
+                },
+            },
+        )
+        experiment = Experiment.objects.create(
+            team=self.team,
+            created_by=self.user,
+            name="Baseline activity experiment",
+            feature_flag=feature_flag,
+            stats_config={"method": "bayesian"},
+        )
+
+        update_response = self.client.patch(
+            f"/api/projects/{self.team.id}/experiments/{experiment.id}/",
+            {"stats_config": {"method": "bayesian", "baseline_variant_key": "test"}},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+
+        experiment.refresh_from_db()
+        assert experiment.stats_config is not None
+        self.assertEqual(experiment.stats_config["baseline_variant_key"], "test")
+
+        # Switching the baseline is an auditable change: it surfaces as a stats_config diff.
+        activity_log = ActivityLog.objects.filter(
+            scope="Experiment", item_id=str(experiment.id), activity="updated"
+        ).latest("created_at")
+        assert activity_log.detail is not None
+        change_fields = [change["field"] for change in activity_log.detail["changes"]]
+        self.assertIn("stats_config", change_fields)
+
     def test_experiment_saved_metric_activity_logging_shows_correct_user_for_updates(self):
         """Test that experiment saved metric activity logs show the correct user for both creation and updates."""
 

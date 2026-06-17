@@ -26,6 +26,7 @@ import { experimentLogic } from '~/scenes/experiments/experimentLogic'
 import { modalsLogic } from '~/scenes/experiments/modalsLogic'
 import { MultivariateFlagVariant } from '~/types'
 
+import { resolveBaselineVariantKey } from '../utils'
 import { HoldoutSelector } from './HoldoutSelector'
 import { VariantScreenshot } from './VariantScreenshot'
 import { VariantTag } from './VariantTag'
@@ -114,11 +115,14 @@ export function DistributionTable(): JSX.Element {
     const excludedVariantsEnabled = useFeatureFlag('EXPERIMENTS_EXCLUDED_VARIANTS')
 
     /**
-     * This is future-proofing to match the experiment query runner backend, that uses
-     * the baseline variant key to determine the baseline variant.
+     * This matches the experiment query runner backend, which uses the baseline variant
+     * key (falling back to control, then the first variant) to determine the baseline.
      */
-    const baselineKey = experiment.stats_config?.baseline_variant_key || 'control'
     const variants = experiment.feature_flag?.filters.multivariate?.variants || []
+    const baselineKey = resolveBaselineVariantKey(
+        variants.map((v) => v.key),
+        experiment.stats_config?.baseline_variant_key
+    )
 
     /**
      * We use this check to disable the toggle if there's only one test variant left.

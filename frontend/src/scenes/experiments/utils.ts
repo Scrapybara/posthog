@@ -951,3 +951,24 @@ export function getOrderedMetricsWithResults(
             metricIndex: originalIndexMap.get(metric.uuid) ?? index, // Original position for retry
         }))
 }
+
+// The conventional baseline/control variant key. Experiments default their analysis
+// baseline to this when `stats_config.baseline_variant_key` is unset.
+export const DEFAULT_BASELINE_VARIANT_KEY = 'control'
+
+/**
+ * Resolve the effective analysis baseline variant key against the variants actually present.
+ *
+ * Mirrors the backend `resolve_baseline_variant_key`: prefer the configured key, then the
+ * conventional `control` variant, then the first available variant. This keeps the UI in sync
+ * with what the query runner computes when the configured baseline was removed from the flag.
+ */
+export function resolveBaselineVariantKey(variantKeys: string[], configuredKey?: string | null): string {
+    if (configuredKey && variantKeys.includes(configuredKey)) {
+        return configuredKey
+    }
+    if (variantKeys.includes(DEFAULT_BASELINE_VARIANT_KEY)) {
+        return DEFAULT_BASELINE_VARIANT_KEY
+    }
+    return variantKeys[0] ?? DEFAULT_BASELINE_VARIANT_KEY
+}

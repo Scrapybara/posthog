@@ -12,13 +12,14 @@ import { ExperimentStatsMethod, PropertyFilterType, PropertyOperator } from '~/t
 import { DEFAULT_LOOKBACK_DAYS } from '../constants'
 import { experimentLogic } from '../experimentLogic'
 import { modalsLogic } from '../modalsLogic'
+import { resolveBaselineVariantKey } from '../utils'
 import { getCupedSelection, resolveCupedEnabled, resolveCupedLookbackDays } from './cuped'
 import { CupedModal } from './CupedModal'
 import { resolveSequentialEnabled } from './sequential'
 import { StatsMethodModal } from './StatsMethodModal'
 
 export function SettingsTab(): JSX.Element {
-    const { experiment, statsMethod, variants } = useValues(experimentLogic)
+    const { experiment, statsMethod, variants, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings } = useActions(experimentLogic)
     const { openStatsEngineModal, openCupedModal } = useActions(modalsLogic)
     const { experimentsConfig } = useValues(experimentsConfigLogic)
@@ -49,6 +50,12 @@ export function SettingsTab(): JSX.Element {
 
     // Only show alerts section for saved experiments, as the alert relies on experiment.id for filtering
     const shouldShowSignificanceAlerts = typeof experiment.id === 'number'
+
+    const variantKeys = variants.map((v) => v.key)
+    const configuredBaselineKey = experiment.stats_config?.baseline_variant_key
+    const effectiveBaselineKey = resolveBaselineVariantKey(variantKeys, configuredBaselineKey)
+    // The stored baseline can point at a variant that was since removed from the flag.
+    const baselineMissing = !!configuredBaselineKey && !variantKeys.includes(configuredBaselineKey)
 
     return (
         <div className="flex flex-col gap-8">
@@ -90,17 +97,28 @@ export function SettingsTab(): JSX.Element {
             <div>
                 <h2 className="font-semibold text-lg">Baseline variant</h2>
                 <LemonSelect
-                    value={experiment.stats_config?.baseline_variant_key ?? 'control'}
+                    value={effectiveBaselineKey}
                     options={variants.map((v) => ({
                         value: v.key,
                         label: v.key,
                     }))}
+                    loading={experimentUpdateLoading}
+                    disabledReason={experimentUpdateLoading ? 'Saving baseline\u2026' : undefined}
                     onChange={(value) => {
+                        if (value === effectiveBaselineKey) {
+                            return
+                        }
                         updateExperimentSettings({
                             stats_config: { ...experiment.stats_config, baseline_variant_key: value },
                         })
                     }}
                 />
+                {baselineMissing && (
+                    <p className="text-warning text-xs mt-1">
+                        The previously selected baseline “{configuredBaselineKey}” is no longer a variant; analysis
+                        falls back to “{effectiveBaselineKey}” until you choose another.
+                    </p>
+                )}
                 <p className="text-muted text-xs mt-1">The variant all others are compared against.</p>
             </div>
             <div>

@@ -11,6 +11,14 @@
     }
 }
 
+.QuestionInput__content {
+    max-height: calc(100dvh - var(--scene-layout-header-height, 0px) - 1rem);
+}
+
+.QuestionInput__textarea.LemonTextArea {
+    max-height: clamp(5rem, calc(100dvh - var(--scene-layout-header-height, 0px) - 6.5rem), 13.5rem);
+}
+
 .QuestionInput__QuestionSuggestion {
     opacity: 0;
     animation: QuestionInput__QuestionSuggestion__slide-in-fade-down 60ms ease-out forwards;

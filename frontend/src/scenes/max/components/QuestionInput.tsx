@@ -236,7 +236,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                 )}
             >
                 {/* Have to increase z-index to overlay ToolsDisplay */}
-                <div className="relative w-full flex flex-col z-1">
+                <div className="QuestionInput__content relative w-full flex flex-col z-1 min-h-0">
                     {children}
                     {agentMode === AgentMode.Research && threadMessageCount === 0 && (
                         <div className="flex justify-center items-center gap-1 w-full px-2 py-1.5 mb-2 bg-warning/10 text-primary text-xs rounded-lg border-primary">
@@ -244,7 +244,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                         </div>
                     )}
                     {queueingEnabled && (queuedMessages.length > 0 || queueSubmitting) && (
-                        <div className="px-3 py-2">
+                        <div className="min-h-0 overflow-y-auto px-3 py-2">
                             <div className="text-xs text-muted mb-1.5 flex items-center gap-1.5">
                                 Up next
                                 {queueSubmitting && <Spinner size="small" />}
@@ -273,7 +273,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                     <label
                         htmlFor="question-input"
                         className={cn(
-                            'input-like flex flex-col cursor-text',
+                            'input-like flex flex-col shrink-0 cursor-text',
                             'border border-primary',
                             'bg-[var(--color-bg-fill-input)]',
                             isThreadVisible ? 'border-primary m-0.5 rounded-[7px]' : 'rounded-lg',
@@ -362,7 +362,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                         minRows={1}
                                         maxRows={10}
                                         className={cn(
-                                            '!border-none !bg-transparent min-h-16 py-2 pl-2 resize-none',
+                                            'QuestionInput__textarea !border-none !bg-transparent min-h-16 py-2 pl-2 resize-none overflow-y-auto',
                                             handsFreeFlagEnabled ? 'pr-20' : 'pr-12'
                                         )}
                                         hideFocus

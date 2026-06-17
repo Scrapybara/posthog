@@ -90,6 +90,9 @@ const meta: Meta = {
     title: 'Scenes-App/HogFunctions/Status Indicator',
     parameters: {
         layout: 'padded',
+        testOptions: {
+            waitForLoadersToDisappear: false,
+        },
         viewMode: 'story',
     },
 }

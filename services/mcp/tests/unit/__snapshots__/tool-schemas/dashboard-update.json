@@ -759,9 +759,8 @@
                                 "properties": {
                                     "config": {
                                         "description": "Omit for metadata-only updates. Include widget_type to use a typed config schema.",
-                                        "maximum": 0,
-                                        "minimum": 1,
-                                        "type": "number"
+                                        "enum": [],
+                                        "type": "string"
                                     },
                                     "description": {
                                         "description": "Optional markdown description shown when show_description is enabled.",
@@ -785,9 +784,8 @@
                                     },
                                     "widget_type": {
                                         "description": "Omit for metadata-only updates. Include a supported widget_type when patching config.",
-                                        "maximum": 0,
-                                        "minimum": 1,
-                                        "type": "number"
+                                        "enum": [],
+                                        "type": "string"
                                     }
                                 },
                                 "required": ["id"],

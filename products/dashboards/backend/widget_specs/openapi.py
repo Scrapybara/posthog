@@ -75,7 +75,7 @@ class _AddDashboardWidgetTileFieldsOpenApiSerializer(serializers.Serializer):
     )
 
 
-@extend_schema_field({"type": "number", "minimum": 1, "maximum": 0})
+@extend_schema_field({"not": {}, "x-posthog-codegen-never": True})
 class _OmittedOnlyOpenApiField(serializers.Field):
     pass
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+    applyCodegenNeverSchemas,
     clampIntegerBounds,
     INT32_MAX,
     INT32_MIN,
@@ -8,6 +9,31 @@ import {
     schemaAllowsNull,
     stripNullDefaults,
 } from '../src/preprocess.mjs'
+
+describe('applyCodegenNeverSchemas', () => {
+    it('converts x-posthog-codegen-never schemas into empty enums for Orval', () => {
+        const schema = {
+            type: 'object',
+            properties: {
+                widget_type: {
+                    not: {},
+                    'x-posthog-codegen-never': true,
+                    description: 'Omit for metadata-only updates.',
+                },
+                name: { type: 'string' },
+            },
+        }
+
+        applyCodegenNeverSchemas(schema)
+
+        expect(schema.properties.widget_type).toEqual({
+            type: 'string',
+            enum: [],
+            description: 'Omit for metadata-only updates.',
+        })
+        expect(schema.properties.name).toEqual({ type: 'string' })
+    })
+})
 
 describe('clampIntegerBounds', () => {
     it('clamps i64 bounds to int32 range on a type: integer schema', () => {

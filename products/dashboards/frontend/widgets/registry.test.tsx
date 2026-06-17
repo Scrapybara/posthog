@@ -2,6 +2,7 @@ import posthog from 'posthog-js'
 
 import { ApiError } from 'lib/api-error'
 
+import type { _DashboardPatchExistingWidgetOpenApiApi } from '../generated/api.schemas'
 import {
     DASHBOARD_WIDGET_CATALOG,
     DASHBOARD_WIDGET_PREVIEWS,
@@ -20,6 +21,26 @@ jest.mock('posthog-js', () => ({
         captureException: jest.fn(),
     },
 }))
+
+const metadataOnlyWidgetPatch: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    name: 'Renamed widget',
+}
+void metadataOnlyWidgetPatch
+
+const metadataOnlyWidgetPatchWithType: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept widget_type.
+    widget_type: 'live_activity',
+}
+void metadataOnlyWidgetPatchWithType
+
+const metadataOnlyWidgetPatchWithConfig: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept config.
+    config: { limit: 5 },
+}
+void metadataOnlyWidgetPatchWithConfig
 
 describe('dashboard widget registry', () => {
     beforeEach(() => {

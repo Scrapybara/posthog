@@ -1,8 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
+import type { Schemas } from '@/api/generated'
 import { DashboardsPartialUpdateBody } from '@/generated/dashboards/api'
 import { GENERATED_TOOLS } from '@/tools/generated/dashboards'
+
+const metadataOnlyWidgetPatch: Schemas._DashboardPatchExistingWidgetOpenApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    name: 'Renamed widget',
+}
+void metadataOnlyWidgetPatch
+
+const metadataOnlyWidgetPatchWithType: Schemas._DashboardPatchExistingWidgetOpenApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept widget_type.
+    widget_type: 'live_activity',
+}
+void metadataOnlyWidgetPatchWithType
+
+const metadataOnlyWidgetPatchWithConfig: Schemas._DashboardPatchExistingWidgetOpenApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept config.
+    config: { limit: 5 },
+}
+void metadataOnlyWidgetPatchWithConfig
 
 function getSchemaShape(schema: z.ZodTypeAny): Record<string, z.ZodTypeAny> {
     if ('shape' in schema && schema.shape && typeof schema.shape === 'object') {

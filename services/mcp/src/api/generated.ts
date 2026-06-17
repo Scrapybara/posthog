@@ -13872,21 +13872,31 @@ export namespace Schemas {
       description?: string;
     }
 
+    /**
+     * Omit for metadata-only updates. Include a supported widget_type when patching config.
+     */
+    export type _DashboardPatchExistingWidgetOpenApiWidgetType = typeof _DashboardPatchExistingWidgetOpenApiWidgetType[keyof typeof _DashboardPatchExistingWidgetOpenApiWidgetType];
+
+
+    export const _DashboardPatchExistingWidgetOpenApiWidgetType = {
+    } as const;
+
+    /**
+     * Omit for metadata-only updates. Include widget_type to use a typed config schema.
+     */
+    export type _DashboardPatchExistingWidgetOpenApiConfig = typeof _DashboardPatchExistingWidgetOpenApiConfig[keyof typeof _DashboardPatchExistingWidgetOpenApiConfig];
+
+
+    export const _DashboardPatchExistingWidgetOpenApiConfig = {
+    } as const;
+
     export interface _DashboardPatchExistingWidgetOpenApi {
       /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
       id: string;
-      /**
-         * Omit for metadata-only updates. Include a supported widget_type when patching config.
-         * @minimum 1
-         * @maximum 0
-         */
-      widget_type?: number;
-      /**
-         * Omit for metadata-only updates. Include widget_type to use a typed config schema.
-         * @minimum 1
-         * @maximum 0
-         */
-      config?: number;
+      /** Omit for metadata-only updates. Include a supported widget_type when patching config. */
+      widget_type?: _DashboardPatchExistingWidgetOpenApiWidgetType;
+      /** Omit for metadata-only updates. Include widget_type to use a typed config schema. */
+      config?: _DashboardPatchExistingWidgetOpenApiConfig;
       /**
          * Optional custom display name for the widget tile.
          * @maxLength 400

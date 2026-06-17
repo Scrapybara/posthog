@@ -687,21 +687,29 @@ export interface SessionReplayListWidgetPatchRequestOpenApiApi {
     description?: string
 }
 
+/**
+ * Omit for metadata-only updates. Include a supported widget_type when patching config.
+ */
+export type _DashboardPatchExistingWidgetOpenApiApiWidgetType =
+    (typeof _DashboardPatchExistingWidgetOpenApiApiWidgetType)[keyof typeof _DashboardPatchExistingWidgetOpenApiApiWidgetType]
+
+export const _DashboardPatchExistingWidgetOpenApiApiWidgetType = {} as const
+
+/**
+ * Omit for metadata-only updates. Include widget_type to use a typed config schema.
+ */
+export type _DashboardPatchExistingWidgetOpenApiApiConfig =
+    (typeof _DashboardPatchExistingWidgetOpenApiApiConfig)[keyof typeof _DashboardPatchExistingWidgetOpenApiApiConfig]
+
+export const _DashboardPatchExistingWidgetOpenApiApiConfig = {} as const
+
 export interface _DashboardPatchExistingWidgetOpenApiApi {
     /** Existing widget row ID when updating a widget tile via dashboard PATCH. */
     id: string
-    /**
-     * Omit for metadata-only updates. Include a supported widget_type when patching config.
-     * @minimum 1
-     * @maximum 0
-     */
-    widget_type?: number
-    /**
-     * Omit for metadata-only updates. Include widget_type to use a typed config schema.
-     * @minimum 1
-     * @maximum 0
-     */
-    config?: number
+    /** Omit for metadata-only updates. Include a supported widget_type when patching config. */
+    widget_type?: _DashboardPatchExistingWidgetOpenApiApiWidgetType
+    /** Omit for metadata-only updates. Include widget_type to use a typed config schema. */
+    config?: _DashboardPatchExistingWidgetOpenApiApiConfig
     /**
      * Optional custom display name for the widget tile.
      * @maxLength 400

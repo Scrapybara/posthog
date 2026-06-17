@@ -1,8 +1,10 @@
 import {
     countConditions,
+    eventFilterResponseToFormValues,
     evaluateFilterTree,
     FilterNode,
     normalizeRootToGroup,
+    serializeEventFilterForm,
     treeHasConditions,
     treeHasEmptyValues,
     updateAtPath,
@@ -332,5 +334,101 @@ describe('treeHasEmptyValues', () => {
         ['deeply nested empty value', and(or(cond(), not(cond('event_name', 'exact', '')))), true],
     ])('%s', (_name, tree, expected) => {
         expect(treeHasEmptyValues(tree)).toBe(expected)
+    })
+})
+
+describe('serializeEventFilterForm', () => {
+    const filledTestCase = {
+        _key: 'tc1',
+        event_name: '$pageview',
+        distinct_id: 'user-1',
+        expected_result: 'drop' as const,
+    }
+
+    it('serializes a new non-empty filter and strips test case keys', () => {
+        expect(
+            serializeEventFilterForm({
+                id: null,
+                mode: 'dry_run',
+                filter_tree: or(cond('event_name', 'exact', '$pageview')),
+                test_cases: [filledTestCase],
+            })
+        ).toEqual({
+            id: null,
+            mode: 'dry_run',
+            filter_tree: or(cond('event_name', 'exact', '$pageview')),
+            test_cases: [{ event_name: '$pageview', distinct_id: 'user-1', expected_result: 'drop' }],
+        })
+    })
+
+    it('serializes an update without changing non-empty filters', () => {
+        expect(
+            serializeEventFilterForm({
+                id: 'filter-id',
+                mode: 'live',
+                filter_tree: and(cond('event_name', 'contains', 'bot'), cond('distinct_id', 'exact', 'user-1')),
+                test_cases: [filledTestCase],
+            })
+        ).toMatchObject({
+            id: 'filter-id',
+            mode: 'live',
+            filter_tree: and(cond('event_name', 'contains', 'bot'), cond('distinct_id', 'exact', 'user-1')),
+        })
+    })
+
+    it.each([
+        ['empty root group', or()],
+        ['nested empty groups', or(and(), not(or()))],
+        ['empty root after repeated save', and()],
+    ])('serializes %s as disabled with no saved filter tree', (_name, filterTree) => {
+        expect(
+            serializeEventFilterForm({
+                id: 'filter-id',
+                mode: 'dry_run',
+                filter_tree: filterTree,
+                test_cases: [filledTestCase],
+            })
+        ).toEqual({
+            id: 'filter-id',
+            mode: 'disabled',
+            filter_tree: null,
+            test_cases: [],
+        })
+    })
+
+    it('leaves partially completed non-empty conditions for inline validation', () => {
+        const filterTree = or(cond('event_name', 'exact', ''))
+
+        expect(treeHasConditions(filterTree)).toBe(true)
+        expect(treeHasEmptyValues(filterTree)).toBe(true)
+        expect(
+            serializeEventFilterForm({
+                id: 'filter-id',
+                mode: 'dry_run',
+                filter_tree: filterTree,
+                test_cases: [],
+            })
+        ).toMatchObject({
+            mode: 'dry_run',
+            filter_tree: filterTree,
+        })
+    })
+})
+
+describe('eventFilterResponseToFormValues', () => {
+    it('hydrates an empty persisted filter as a disabled empty editor tree', () => {
+        expect(
+            eventFilterResponseToFormValues({
+                id: 'filter-id',
+                mode: 'disabled',
+                filter_tree: null,
+                test_cases: [],
+            })
+        ).toMatchObject({
+            id: 'filter-id',
+            mode: 'disabled',
+            filter_tree: or(),
+            test_cases: [],
+        })
     })
 })

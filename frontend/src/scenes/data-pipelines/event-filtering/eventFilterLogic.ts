@@ -120,6 +120,20 @@ export interface EventFilterFormValues {
     test_cases: TestCase[]
 }
 
+export interface EventFilterPayload {
+    id: string | null
+    mode: EventFilterMode
+    filter_tree: FilterNode | null
+    test_cases: Omit<TestCase, '_key'>[]
+}
+
+interface EventFilterResponse {
+    id: string | null
+    mode?: EventFilterMode | null
+    filter_tree?: FilterNode | null
+    test_cases?: Omit<TestCase, '_key'>[] | null
+}
+
 const DEFAULT_FORM: EventFilterFormValues = {
     id: null,
     mode: 'disabled',
@@ -212,6 +226,36 @@ export function normalizeRootToGroup(node: FilterNode): FilterNode {
     return { type: 'or', children: [node] }
 }
 
+export function serializeEventFilterForm(formValues: EventFilterFormValues): EventFilterPayload {
+    const testCases = formValues.test_cases.map(({ _key, ...tc }) => tc)
+
+    if (!treeHasConditions(formValues.filter_tree)) {
+        return {
+            ...formValues,
+            mode: 'disabled',
+            filter_tree: null,
+            test_cases: [],
+        }
+    }
+
+    return {
+        ...formValues,
+        test_cases: testCases,
+    }
+}
+
+export function eventFilterResponseToFormValues(data: EventFilterResponse): EventFilterFormValues {
+    return {
+        id: data.id,
+        mode: data.mode ?? 'disabled',
+        filter_tree: data.filter_tree?.type ? normalizeRootToGroup(data.filter_tree) : DEFAULT_FORM.filter_tree,
+        test_cases: (data.test_cases ?? []).map((tc: Omit<TestCase, '_key'>) => ({
+            ...tc,
+            _key: nextTestCaseKey(),
+        })),
+    }
+}
+
 // --- Immutable tree updates ---
 
 /**
@@ -263,16 +307,13 @@ export const eventFilterLogic = kea<eventFilterLogicType>([
         updateTestCase: (index: number, updates: Partial<TestCase>) => ({ index, updates }),
     }),
 
-    forms(({ values }) => ({
+    forms(({ actions, values }) => ({
         filterForm: {
             defaults: DEFAULT_FORM,
             errors: ({ filter_tree, mode, test_cases }: EventFilterFormValues) => ({
                 // Validation errors go on `mode` (a string field) rather than `filter_tree`
                 // because kea-forms expects errors on object fields to be DeepPartialMap, not strings.
                 mode: (() => {
-                    if (mode !== 'disabled' && !treeHasConditions(filter_tree)) {
-                        return 'Filter must have at least one condition to be activated'
-                    }
                     if (treeHasConditions(filter_tree) && treeHasEmptyValues(filter_tree)) {
                         return 'All conditions must have a value'
                     }
@@ -290,12 +331,15 @@ export const eventFilterLogic = kea<eventFilterLogicType>([
                     formValues = { ...formValues, mode: 'dry_run' }
                 }
 
-                // Strip _key from test cases before sending to the API
-                const payload = {
-                    ...formValues,
-                    test_cases: formValues.test_cases.map(({ _key, ...tc }) => tc),
-                }
-                await api.create(`api/environments/${currentTeamId}/event_filter/`, payload)
+                const data = await api.create(
+                    `api/environments/${currentTeamId}/event_filter/`,
+                    serializeEventFilterForm(formValues)
+                )
+                const savedValues = eventFilterResponseToFormValues(data)
+                actions.setFilterFormValue('id', savedValues.id)
+                actions.setFilterFormValue('mode', savedValues.mode)
+                actions.setFilterFormValue('filter_tree', savedValues.filter_tree)
+                actions.setFilterFormValue('test_cases', savedValues.test_cases)
                 lemonToast.success('Event filter saved')
             },
         },
@@ -432,16 +476,11 @@ export const eventFilterLogic = kea<eventFilterLogicType>([
                 if (!data) {
                     return
                 }
-                actions.setFilterFormValue('id', data.id)
-                actions.setFilterFormValue('mode', data.mode ?? 'disabled')
-                if (data.filter_tree?.type) {
-                    actions.setFilterFormValue('filter_tree', normalizeRootToGroup(data.filter_tree))
-                }
-                const testCases = (data.test_cases ?? []).map((tc: Omit<TestCase, '_key'>) => ({
-                    ...tc,
-                    _key: nextTestCaseKey(),
-                }))
-                actions.setFilterFormValue('test_cases', testCases)
+                const savedValues = eventFilterResponseToFormValues(data)
+                actions.setFilterFormValue('id', savedValues.id)
+                actions.setFilterFormValue('mode', savedValues.mode)
+                actions.setFilterFormValue('filter_tree', savedValues.filter_tree)
+                actions.setFilterFormValue('test_cases', savedValues.test_cases)
             })
             .catch((error) => {
                 lemonToast.error(`Failed to load event filter config: ${error.message ?? error}`)

@@ -391,6 +391,18 @@ class TestEventFilterConfigModel(BaseTest):
         retrieved = EventFilterConfig.objects.get(pk=config.pk)
         self.assertIsNone(retrieved.filter_tree)
 
+    def test_save_empty_filter_tree_disables_and_clears_test_cases(self):
+        config = EventFilterConfig.objects.create(
+            team=self.team,
+            mode=EventFilterMode.LIVE,
+            filter_tree=_or(),
+            test_cases=[{"event_name": "$pageview", "expected_result": "drop"}],
+        )
+
+        self.assertEqual(config.mode, EventFilterMode.DISABLED)
+        self.assertIsNone(config.filter_tree)
+        self.assertEqual(config.test_cases, [])
+
     def test_save_prunes_filter_tree(self):
         # Empty and single-child nested groups are pruned, but the root stays a group.
         tree = _or(_and(_cond("event_name", "exact", "pageview")), {"type": "and", "children": []})
@@ -458,5 +470,5 @@ class TestEventFilterConfigModel(BaseTest):
         self.assertEqual(config.mode, EventFilterMode.LIVE)
 
     def test_str(self):
-        config = EventFilterConfig.objects.create(team=self.team, mode=EventFilterMode.DRY_RUN)
+        config = EventFilterConfig.objects.create(team=self.team, mode=EventFilterMode.DRY_RUN, filter_tree=_cond())
         self.assertEqual(str(config), f"EventFilterConfig(team={self.team.id}, mode=dry_run)")

@@ -1,5 +1,7 @@
 from typing import cast
 
+from django.db import transaction
+
 from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status, viewsets
@@ -21,7 +23,9 @@ from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.clickhouse.query_tagging import Feature, Product, tag_queries
 from posthog.models.event_filter_config import (
     EventFilterConfig,
+    EventFilterMode,
     run_test_cases,
+    tree_has_conditions,
     validate_filter_tree,
     validate_test_cases,
 )
@@ -62,6 +66,10 @@ class EventFilterConfigSerializer(serializers.ModelSerializer):
     def validate(self, attrs: dict) -> dict:
         filter_tree = attrs.get("filter_tree", self.instance.filter_tree if self.instance else None)
         test_cases = attrs.get("test_cases", self.instance.test_cases if self.instance else None)
+        if filter_tree is None or (filter_tree and not tree_has_conditions(filter_tree)):
+            attrs["mode"] = EventFilterMode.DISABLED
+            attrs["test_cases"] = []
+            return attrs
         if filter_tree and test_cases:
             failures = run_test_cases(filter_tree, test_cases)
             if failures:
@@ -103,13 +111,14 @@ class EventFilterConfigViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         description="Create or update the event filter config.",
     )
     def create(self, request, **kwargs):
-        config, _ = EventFilterConfig.objects.get_or_create(
-            team_id=self.team_id,
-            defaults={"filter_tree": None, "mode": "disabled", "test_cases": []},
-        )
-        serializer = self.get_serializer(config, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        with transaction.atomic():
+            config, _ = EventFilterConfig.objects.get_or_create(
+                team_id=self.team_id,
+                defaults={"filter_tree": None, "mode": "disabled", "test_cases": []},
+            )
+            serializer = self.get_serializer(config, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(serializer.data)
 
     def _get_config_id(self) -> str | None:

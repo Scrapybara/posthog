@@ -78,6 +78,9 @@ class EventFilterConfig(UUIDTModel):
         if self.filter_tree:
             self.filter_tree = prune_filter_tree(self.filter_tree)
         self.clean()
+        if not self.filter_tree:
+            self.mode = EventFilterMode.DISABLED
+            self.test_cases = []
         super().save(*args, **kwargs)
 
 

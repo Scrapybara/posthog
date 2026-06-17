@@ -176,12 +176,14 @@ export function TrendsLifecycleChart({ context, inSharedMode = false }: TrendsLi
                     interval={interval ?? undefined}
                     breakdownFilter={breakdownFilter ?? undefined}
                     dateRange={insightData?.resolved_date_range ?? undefined}
+                    compareDateRange={insightData?.resolved_compare_date_range ?? undefined}
                     trendsFilter={trendsFilter}
                     formula={formula}
                     baseCurrency={baseCurrency}
                     groupTypeLabel="Users"
                     onRowClick={onRowClick}
                     renderSeriesOverride={renderLifecycleSeriesLabel}
+                    weekStartDay={weekStartDay}
                 />
             )
         },
@@ -190,11 +192,13 @@ export function TrendsLifecycleChart({ context, inSharedMode = false }: TrendsLi
             interval,
             breakdownFilter,
             insightData?.resolved_date_range,
+            insightData?.resolved_compare_date_range,
             trendsFilter,
             formula,
             baseCurrency,
             canHandleClick,
             clickDeps,
+            weekStartDay,
         ]
     )
 

@@ -159,6 +159,7 @@ export function TrendsLineChart({ context, inSharedMode = false }: TrendsLineCha
                     interval={interval ?? undefined}
                     breakdownFilter={breakdownFilter ?? undefined}
                     dateRange={insightData?.resolved_date_range ?? undefined}
+                    compareDateRange={insightData?.resolved_compare_date_range ?? undefined}
                     trendsFilter={trendsFilter}
                     formula={formula}
                     showPercentView={isStickiness}
@@ -167,6 +168,7 @@ export function TrendsLineChart({ context, inSharedMode = false }: TrendsLineCha
                     groupTypeLabel={resolvedGroupTypeLabel}
                     formatCompareLabel={context?.formatCompareLabel}
                     onRowClick={onRowClick}
+                    weekStartDay={weekStartDay}
                 />
             )
         },
@@ -175,6 +177,7 @@ export function TrendsLineChart({ context, inSharedMode = false }: TrendsLineCha
             interval,
             breakdownFilter,
             insightData?.resolved_date_range,
+            insightData?.resolved_compare_date_range,
             trendsFilter,
             formula,
             isStickiness,
@@ -184,6 +187,7 @@ export function TrendsLineChart({ context, inSharedMode = false }: TrendsLineCha
             context?.formatCompareLabel,
             canHandleClick,
             clickDeps,
+            weekStartDay,
         ]
     )
 

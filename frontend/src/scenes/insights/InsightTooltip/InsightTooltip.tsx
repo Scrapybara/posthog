@@ -111,6 +111,7 @@ export function InsightTooltip({
     breakdownFilter,
     interval,
     dateRange,
+    compareDateRange,
     showShiftKeyHint,
     formatCompareLabel,
     onClose,
@@ -166,10 +167,18 @@ export function InsightTooltip({
     const rightTitle: ReactNode | null = altRightTitle
         ? getTooltipTitle(seriesData, altRightTitle, formattedDate)
         : null
+    const compareLabelFormatOptions = {
+        interval,
+        dateRange,
+        compareDateRange,
+        timezone,
+        weekStartDay,
+        formatCompareLabel,
+    }
 
     if (itemizeEntitiesAsColumns) {
         hideColorCol = true
-        const dataSource = invertDataSource(seriesData, breakdownFilter, formatCompareLabel)
+        const dataSource = invertDataSource(seriesData, breakdownFilter, compareLabelFormatOptions)
         const columns: LemonTableColumns<InvertedSeriesDatum> = [
             {
                 key: 'datum',

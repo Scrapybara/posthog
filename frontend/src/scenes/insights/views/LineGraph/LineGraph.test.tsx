@@ -13,6 +13,7 @@ import {
 import { ChartDisplayType, GraphDataset, GraphPointPayload } from '~/types'
 
 import { onChartClick } from './LineGraph'
+import { createTooltipData } from './tooltip-data'
 
 jest.mock('lib/components/AutoSizer', () => ({
     AutoSizer: ({ renderProp }: { renderProp: (size: { height: number; width: number }) => React.ReactNode }) =>
@@ -138,6 +139,30 @@ describe('LineGraph', () => {
     })
 
     describe('Compare to previous', () => {
+        it('carries each compared series bucket date into tooltip datum data', () => {
+            const seriesData = createTooltipData(
+                [
+                    {
+                        dataIndex: 1,
+                        datasetIndex: 0,
+                        dataset: { id: 0, data: [10, 20], days: CURRENT_DAYS, compare_label: 'current' },
+                    },
+                    {
+                        dataIndex: 1,
+                        datasetIndex: 1,
+                        dataset: { id: 1, data: [8, 15], days: PREVIOUS_DAYS, compare_label: 'previous' },
+                    },
+                ] as any,
+                undefined,
+                (tooltipItem, dataset) => dataset.days?.[tooltipItem.dataIndex]
+            )
+
+            expect(seriesData).toMatchObject([
+                { compare_label: 'current', date: '2024-06-11' },
+                { compare_label: 'previous', date: '2024-06-04' },
+            ])
+        })
+
         it('uses current period dates on x-axis for unstacked bar chart with compare', async () => {
             renderInsight({
                 query: buildTrendsQuery({

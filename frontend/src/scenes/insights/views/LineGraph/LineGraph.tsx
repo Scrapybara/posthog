@@ -36,6 +36,7 @@ import { useChart } from 'lib/hooks/useChart'
 import { useKeyHeld } from 'lib/hooks/useKeyHeld'
 import { useOnMountEffect } from 'lib/hooks/useOnMountEffect'
 import { useResizeObserver } from 'lib/hooks/useResizeObserver'
+import { alignResolvedDateRangeToInterval } from 'lib/utils/dateTimeUtils'
 import { formatAggregationAxisValue, formatPercentStackAxisValue } from 'scenes/insights/aggregationAxisFormat'
 import { insightLogic } from 'scenes/insights/insightLogic'
 import { InsightTooltip } from 'scenes/insights/InsightTooltip/InsightTooltip'
@@ -344,7 +345,7 @@ export function LineGraph_({
 
     const { aggregationLabel } = useValues(groupsModel)
     const { isDarkModeOn } = useValues(themeLogic)
-    const { baseCurrency } = useValues(teamLogic)
+    const { baseCurrency, weekStartDay } = useValues(teamLogic)
 
     const { insightProps, insight } = useValues(insightLogic)
     const { timezone, isTrends, isStickiness, isFunnels, breakdownFilter, interval, insightData } = useValues(
@@ -700,6 +701,11 @@ export function LineGraph_({
                 allDays: currentPeriodResult?.days ?? [],
                 timezone,
             })
+            const alignedDateRange = alignResolvedDateRangeToInterval(insightData?.resolved_date_range, interval)
+            const alignedCompareDateRange = alignResolvedDateRangeToInterval(
+                insightData?.resolved_compare_date_range,
+                interval
+            )
 
             const gridOptions: Partial<GridLineOptions> = {
                 color: (context) => {
@@ -849,26 +855,32 @@ export function LineGraph_({
                             if (tooltip.body) {
                                 const referenceDataPoint = tooltip.dataPoints[0]
                                 const dataset = processedDatasets[referenceDataPoint.datasetIndex]
-                                const date = dataset?.days?.[referenceDataPoint.dataIndex]
-                                const seriesData = createTooltipData(tooltip.dataPoints, (dp) => {
-                                    // For stacked bar charts when shift is pressed, show only the hovered bar
-                                    if (isHighlightBarMode) {
-                                        return dp.datasetIndex === referenceDataPoint.datasetIndex
-                                    }
+                                const date =
+                                    currentPeriodResult?.days?.[referenceDataPoint.dataIndex] ??
+                                    dataset?.days?.[referenceDataPoint.dataIndex]
+                                const seriesData = createTooltipData(
+                                    tooltip.dataPoints,
+                                    (dp) => {
+                                        // For stacked bar charts when shift is pressed, show only the hovered bar
+                                        if (isHighlightBarMode) {
+                                            return dp.datasetIndex === referenceDataPoint.datasetIndex
+                                        }
 
-                                    if (tooltipConfig?.filter) {
-                                        return tooltipConfig.filter(dp)
-                                    }
+                                        if (tooltipConfig?.filter) {
+                                            return tooltipConfig.filter(dp)
+                                        }
 
-                                    const hasDotted =
-                                        hasAnyDottedDataset &&
-                                        dp.dataIndex - processedDatasets?.[dp.datasetIndex]?.data?.length >=
-                                            incompletenessOffsetFromEnd
-                                    return (
-                                        dp.datasetIndex >= (hasDotted ? _datasets.length : 0) &&
-                                        dp.datasetIndex < (hasDotted ? _datasets.length * 2 : _datasets.length)
-                                    )
-                                })
+                                        const hasDotted =
+                                            hasAnyDottedDataset &&
+                                            dp.dataIndex - processedDatasets?.[dp.datasetIndex]?.data?.length >=
+                                                incompletenessOffsetFromEnd
+                                        return (
+                                            dp.datasetIndex >= (hasDotted ? _datasets.length : 0) &&
+                                            dp.datasetIndex < (hasDotted ? _datasets.length * 2 : _datasets.length)
+                                        )
+                                    },
+                                    (dp, pointDataset) => pointDataset.days?.[dp.dataIndex]
+                                )
                                 const referenceSeriesDatum = seriesData.find(
                                     (datum) =>
                                         datum.datasetIndex === referenceDataPoint.datasetIndex &&
@@ -893,7 +905,8 @@ export function LineGraph_({
                                         seriesData={seriesData}
                                         breakdownFilter={breakdownFilter}
                                         interval={interval}
-                                        dateRange={insightData?.resolved_date_range}
+                                        dateRange={alignedDateRange}
+                                        compareDateRange={alignedCompareDateRange}
                                         showShiftKeyHint={isBar && isStacked && !isHighlightBarMode && !inSurveyView}
                                         formatCompareLabel={tooltipConfig?.formatCompareLabel}
                                         onClose={pinTooltip ? () => unpinTooltip(tooltipId) : undefined}
@@ -915,11 +928,14 @@ export function LineGraph_({
                                                 datum.breakdown_value !== undefined && !!datum.breakdown_value
 
                                             if (hasBreakdown && !hasMultipleSeries) {
-                                                const title = getDatumTitle(
-                                                    datum,
-                                                    breakdownFilter,
-                                                    tooltipConfig?.formatCompareLabel
-                                                )
+                                                const title = getDatumTitle(datum, breakdownFilter, {
+                                                    interval,
+                                                    dateRange: alignedDateRange,
+                                                    compareDateRange: alignedCompareDateRange,
+                                                    timezone,
+                                                    weekStartDay,
+                                                    formatCompareLabel: tooltipConfig?.formatCompareLabel,
+                                                })
 
                                                 return <div className="datum-label-column">{title}</div>
                                             }
@@ -1298,6 +1314,8 @@ export function LineGraph_({
             isHighlightBarMode,
             interval,
             timezone,
+            weekStartDay,
+            insightData,
             effectiveZoomCallback,
             zoomPluginOptions,
             anomalyPoints,

@@ -10,10 +10,13 @@ import { themeLogic } from '~/layout/navigation-3000/themeLogic'
 import { ExperimentStatsMethod } from '~/types'
 
 import { experimentLogic } from '../../experimentLogic'
+import { formatStatsLevelPercent, getExperimentStatsLevel } from '../../utils'
 
 export function HowToReadTooltip(): JSX.Element {
-    const { statsMethod } = useValues(experimentLogic)
+    const { experiment, statsMethod } = useValues(experimentLogic)
     const { isDarkModeOn } = useValues(themeLogic)
+
+    const statsLevel = formatStatsLevelPercent(getExperimentStatsLevel(experiment))
 
     return (
         <>
@@ -64,8 +67,8 @@ export function HowToReadTooltip(): JSX.Element {
                         <p className="mb-3">
                             The bars show{' '}
                             {statsMethod === ExperimentStatsMethod.Bayesian
-                                ? '95% credible intervals'
-                                : '95% confidence intervals'}
+                                ? `${statsLevel} credible intervals`
+                                : `${statsLevel} confidence intervals`}
                             . When an interval doesn't cross the 0% line, the result is significant.
                         </p>
                         <img

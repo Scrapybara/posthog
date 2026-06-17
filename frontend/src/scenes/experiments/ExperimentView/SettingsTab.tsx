@@ -12,6 +12,7 @@ import { ExperimentStatsMethod, PropertyFilterType, PropertyOperator } from '~/t
 import { DEFAULT_LOOKBACK_DAYS } from '../constants'
 import { experimentLogic } from '../experimentLogic'
 import { modalsLogic } from '../modalsLogic'
+import { formatStatsLevelPercent, getExperimentStatsLevel } from '../utils'
 import { getCupedSelection, resolveCupedEnabled, resolveCupedLookbackDays } from './cuped'
 import { CupedModal } from './CupedModal'
 import { resolveSequentialEnabled } from './sequential'
@@ -25,9 +26,7 @@ export function SettingsTab(): JSX.Element {
 
     const isBayesian = statsMethod === ExperimentStatsMethod.Bayesian
 
-    const confidenceDisplay = isBayesian
-        ? `${((experiment.stats_config?.bayesian?.ci_level ?? 0.95) * 100).toFixed(0)}%`
-        : `${((1 - (experiment.stats_config?.frequentist?.alpha ?? 0.05)) * 100).toFixed(0)}%`
+    const confidenceDisplay = formatStatsLevelPercent(getExperimentStatsLevel(experiment))
 
     const teamDefaultCupedEnabled = experimentsConfig?.default_cuped_enabled ?? false
     const teamDefaultCupedLookbackDays = experimentsConfig?.default_cuped_lookback_days ?? null

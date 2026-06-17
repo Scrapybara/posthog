@@ -11,7 +11,7 @@ import { humanFriendlyNumber } from 'lib/utils'
 import { FunnelChart } from 'scenes/experiments/charts/funnel/FunnelChart'
 import { experimentLogic } from 'scenes/experiments/experimentLogic'
 import { VariantTag } from 'scenes/experiments/ExperimentView/VariantTag'
-import { getViewRecordingFilters } from 'scenes/experiments/utils'
+import { formatStatsLevelPercent, getExperimentStatsLevel, getViewRecordingFilters } from 'scenes/experiments/utils'
 
 import {
     CachedNewExperimentQueryResponse,
@@ -25,6 +25,7 @@ import {
 import {
     EntityType,
     Experiment,
+    ExperimentStatsMethod,
     FilterLogicalOperator,
     FunnelStep,
     FunnelStepWithNestedBreakdown,
@@ -178,6 +179,20 @@ export function ResultDetails({
 
     const baselineKey = result.baseline?.key
 
+    // Match the interval label and its level to the result's method so the displayed percentage
+    // reflects the experiment's configured statistics level (credible level for Bayesian, 1 - alpha
+    // for frequentist) rather than a hardcoded 95%.
+    const firstVariantResult = result.variant_results?.[0]
+    const intervalStatsMethod = firstVariantResult
+        ? isBayesianResult(firstVariantResult)
+            ? ExperimentStatsMethod.Bayesian
+            : ExperimentStatsMethod.Frequentist
+        : undefined
+    const intervalLabel = firstVariantResult ? getIntervalLabel(firstVariantResult) : 'Confidence interval'
+    const intervalColumnTitle = `${intervalLabel} (${formatStatsLevelPercent(
+        getExperimentStatsLevel(experiment, intervalStatsMethod)
+    )})`
+
     const columns: LemonTableColumns<ExperimentVariantResult & { key: string }> = [
         {
             key: 'variant',
@@ -233,9 +248,7 @@ export function ResultDetails({
         },
         {
             key: 'interval',
-            title: result.variant_results?.[0]
-                ? `${getIntervalLabel(result.variant_results[0])} (95%)`
-                : 'Confidence interval (95%)',
+            title: intervalColumnTitle,
             render: (_, item: ExperimentVariantResult & { key: string }) => {
                 if (item.key === baselineKey) {
                     return '—'

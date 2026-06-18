@@ -4,6 +4,7 @@ import posthog from 'posthog-js'
 
 import { lemonToast } from '@posthog/lemon-ui'
 
+import api from 'lib/api'
 import {
     composeSectionHeaderBody,
     isSectionHeaderDescriptionInline,
@@ -11,8 +12,11 @@ import {
     SECTION_HEADER_MAX_DESCRIPTION_LENGTH,
     SECTION_HEADER_MAX_TITLE_LENGTH,
 } from 'lib/components/Cards/SectionHeader/sectionHeaderMarkdown'
+import { teamLogic } from 'scenes/teamLogic'
 
-import { dashboardsModel } from '~/models/dashboardsModel'
+import { refreshTreeItem } from '~/layout/panel-layout/ProjectTree/projectTreeLogic'
+import { dashboardsModel, mergeTileTextUpdatesIntoDashboard } from '~/models/dashboardsModel'
+import { getQueryBasedDashboard } from '~/queries/nodes/InsightViz/utils'
 import { DashboardTile, DashboardType, QueryBasedInsightModel } from '~/types'
 
 import type { sectionHeaderModalLogicType } from './sectionHeaderModalLogicType'
@@ -35,12 +39,6 @@ export const SECTION_HEADER_DEFAULT_HEIGHT = 2
 export interface SectionHeaderLayouts {
     sm: { x: number; y: number; w: number; h: number }
     xs: { x: number; y: number; w: number; h: number }
-}
-
-/** A pending persistence, settled when the matching dashboardsModel update resolves or rejects. */
-interface PendingSave {
-    resolve: () => void
-    reject: (error: Error) => void
 }
 
 const EMPTY_FORM: SectionHeaderForm = { title: '', description: '' }
@@ -74,24 +72,8 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
     path(['scenes', 'dashboard', 'sectionHeaderModal', 'logic']),
     props({} as SectionHeaderModalProps),
     key((props) => `sectionHeaderModalLogic-${props.dashboard.id}-${props.sectionHeaderId}`),
-    connect(() => ({ actions: [dashboardsModel, ['updateDashboard']] })),
-    listeners(({ props, actions, cache }) => ({
-        // The dashboardsModel loader swallows its own errors, so bridge its success/failure back into the form's
-        // submit promise: only then does a rejected save keep the modal open and run submitSectionHeaderFailure.
-        [dashboardsModel.actionTypes.updateDashboardSuccess]: ({ dashboard }) => {
-            const pending: PendingSave | null = cache.pendingSave
-            if (pending && dashboard?.id === props.dashboard.id) {
-                cache.pendingSave = null
-                pending.resolve()
-            }
-        },
-        [dashboardsModel.actionTypes.updateDashboardFailure]: ({ error }: { error?: string }) => {
-            const pending: PendingSave | null = cache.pendingSave
-            if (pending) {
-                cache.pendingSave = null
-                pending.reject(new Error(error || 'Could not save section header'))
-            }
-        },
+    connect(() => ({ logic: [dashboardsModel] })),
+    listeners(({ props, actions }) => ({
         submitSectionHeaderFailure: ({ error }: { error?: any }) => {
             const message =
                 (typeof error === 'string' && error) ||
@@ -115,7 +97,7 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
             })
         },
     })),
-    forms(({ props, actions, cache }) => ({
+    forms(({ props }) => ({
         sectionHeader: {
             defaults: (props.sectionHeaderId && props.sectionHeaderId !== 'new'
                 ? getExistingSectionHeader(props.dashboard, props.sectionHeaderId)
@@ -136,43 +118,49 @@ export const sectionHeaderModalLogic = kea<sectionHeaderModalLogicType>([
             submit: async (formValues) => {
                 const body = composeSectionHeaderBody(formValues)
 
-                let payload: Parameters<typeof actions.updateDashboard>[0] | null = null
+                let tiles: Partial<DashboardTile>[] | null = null
                 if (props.sectionHeaderId === 'new') {
-                    payload = {
-                        id: props.dashboard.id,
-                        tiles: [
-                            {
-                                text: { body },
-                                transparent_background: true,
-                                layouts: sectionHeaderDefaultLayouts(props.dashboard.tiles),
-                            },
-                        ],
-                    }
+                    tiles = [
+                        {
+                            text: { body },
+                            transparent_background: true,
+                            layouts: sectionHeaderDefaultLayouts(props.dashboard.tiles),
+                        } as Partial<DashboardTile>,
+                    ]
                 } else {
                     const existingTile = (props.dashboard.tiles || []).find((t) => t.id === props.sectionHeaderId)
                     if (existingTile?.text) {
-                        payload = {
-                            id: props.dashboard.id,
-                            tiles: [
-                                {
-                                    id: existingTile.id,
-                                    text: { ...existingTile.text, body },
-                                    transparent_background: true,
-                                } as Partial<DashboardTile>,
-                            ],
-                        }
+                        tiles = [
+                            {
+                                id: existingTile.id,
+                                text: { ...existingTile.text, body },
+                                transparent_background: true,
+                            } as Partial<DashboardTile>,
+                        ]
                     }
                 }
 
-                if (!payload) {
+                if (!tiles) {
                     return
                 }
 
-                const update = payload
-                await new Promise<void>((resolve, reject) => {
-                    cache.pendingSave = { resolve, reject } as PendingSave
-                    actions.updateDashboard(update)
-                })
+                // Await this specific PATCH so the form lifecycle is tied to its own result. The shared
+                // dashboardsModel loader can't be awaited safely — it swallows its error and its global
+                // success/failure actions (also emitted by concurrent layout saves and the sharing toggle)
+                // carry no request identity. On failure this rejects, so kea-forms keeps the modal open and
+                // runs submitSectionHeaderFailure; on success we sync the model exactly as the loader would.
+                const response = await api.update<DashboardType>(
+                    `api/environments/${teamLogic.values.currentTeamId}/dashboards/${props.dashboard.id}`,
+                    { tiles }
+                )
+
+                const mappedDashboard = getQueryBasedDashboard(response)
+                if (mappedDashboard) {
+                    dashboardsModel.actions.updateDashboardSuccess(
+                        mergeTileTextUpdatesIntoDashboard(mappedDashboard, tiles)
+                    )
+                    refreshTreeItem('dashboard', String(props.dashboard.id))
+                }
             },
         },
     })),

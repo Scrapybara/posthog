@@ -13,7 +13,6 @@ import {
     LemonMenu,
     LemonTable,
     LemonTag,
-    LemonTagType,
     Tooltip,
 } from '@posthog/lemon-ui'
 
@@ -21,7 +20,6 @@ import { DateFilter } from 'lib/components/DateFilter/DateFilter'
 import { PropertyKeyInfo } from 'lib/components/PropertyKeyInfo'
 import { TaxonomicFilterGroupType } from 'lib/components/TaxonomicFilter/types'
 import { TZLabel } from 'lib/components/TZLabel'
-import { capitalizeFirstLetter } from 'lib/utils'
 import { InsightEmptyState } from 'scenes/insights/EmptyStates'
 import { PersonDisplay } from 'scenes/persons/PersonDisplay'
 import { urls } from 'scenes/urls'
@@ -35,6 +33,7 @@ import {
 import { hogFunctionTestLogic } from '../configuration/hogFunctionTestLogic'
 import { HogFunctionFilters } from '../filters/HogFunctionFilters'
 import { tagTypeForLevel } from '../logs/LogsViewer'
+import { HogFunctionInvocationStatus, HogFunctionInvocationStatusTag } from '../misc/HogFunctionInvocationStatusTag'
 import { CyclotronJobTestInvocationResultWithEventId, hogFunctionTestingLogic } from './hogFunctionTestingLogic'
 
 const buildGlobals = (
@@ -343,32 +342,17 @@ function TestingEventsList(): JSX.Element | null {
                     render: (_, row) => {
                         const eventId = row[0].uuid
 
-                        const getStatus = (): { text: string; type: LemonTagType } => {
+                        const getStatus = (): HogFunctionInvocationStatus => {
                             if (loadingRetries.includes(eventId)) {
-                                return {
-                                    text: 'Running',
-                                    type: 'warning',
-                                }
+                                return 'running'
                             } else if (row[3].length === 0) {
-                                return {
-                                    text: 'Not tested',
-                                    type: 'muted',
-                                }
+                                return 'not tested'
                             } else if (row[3][row[3].length - 1].status === 'error') {
-                                return {
-                                    text: 'Failure',
-                                    type: 'danger',
-                                }
+                                return 'failure'
                             } else if (row[3][row[3].length - 1].status === 'success') {
-                                return {
-                                    text: 'Success',
-                                    type: 'success',
-                                }
+                                return 'success'
                             }
-                            return {
-                                text: 'Unknown',
-                                type: 'muted',
-                            }
+                            return 'unknown'
                         }
 
                         return (
@@ -386,7 +370,7 @@ function TestingEventsList(): JSX.Element | null {
                                     />
                                 ) : null}
 
-                                <LemonTag type={getStatus().type}>{capitalizeFirstLetter(getStatus().text)}</LemonTag>
+                                <HogFunctionInvocationStatusTag status={getStatus()} />
 
                                 <LemonMenu
                                     items={[

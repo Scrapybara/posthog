@@ -118,6 +118,27 @@ class TestPropertyDefinitionAPI(APIBaseTest):
         assert response.json()["count"] == 5
         assert [event["name"] for event in response.json()["results"]] == ["event_2", "event_3"]
 
+    def test_list_events_using_property_includes_project_scoped_event_properties(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        other_team = Team.objects.create(organization=self.organization, project=self.project)
+        event_definition = EventDefinition.objects.create(
+            team=other_team, project=self.project, name="other_environment_event"
+        )
+        EventProperty.objects.create(
+            team=other_team, project=self.project, event="other_environment_event", property="first_visit"
+        )
+
+        response = self.client.get(
+            f"/api/projects/{self.project.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert {
+            "id": str(event_definition.id),
+            "name": "other_environment_event",
+            "last_seen_at": None,
+        } in response.json()["results"]
+
     def test_list_property_definitions(self):
         response = self.client.get(f"/api/projects/{self.team.pk}/property_definitions/")
         assert response.status_code == status.HTTP_200_OK

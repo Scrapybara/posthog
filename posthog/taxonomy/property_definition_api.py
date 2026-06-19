@@ -959,12 +959,12 @@ class PropertyDefinitionViewSet(
         query.is_valid(raise_exception=True)
         limit = query.validated_data["limit"]
         offset = query.validated_data["offset"]
+        project_filter = models.Q(project_id=self.project_id) | models.Q(
+            project_id__isnull=True, team_id=self.project_id
+        )
 
         event_names_queryset = (
-            EventProperty.objects.alias(
-                effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
-            )
-            .filter(effective_project_id=self.project_id, property=property_definition.name)
+            EventProperty.objects.filter(project_filter, property=property_definition.name)
             .values_list("event", flat=True)
             .distinct()
             .order_by("event")
@@ -972,9 +972,7 @@ class PropertyDefinitionViewSet(
         count = event_names_queryset.count()
         event_names = list(event_names_queryset[offset : offset + limit])
 
-        event_definitions = EventDefinition.objects.alias(
-            effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
-        ).filter(effective_project_id=self.project_id, name__in=event_names)
+        event_definitions = EventDefinition.objects.filter(project_filter, name__in=event_names)
         event_definition_by_name = {event_definition.name: event_definition for event_definition in event_definitions}
 
         results = [

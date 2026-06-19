@@ -42,7 +42,7 @@ export const definitionLogic = kea<definitionLogicType>([
     props({} as DefinitionLogicProps),
     key((props) => props.id || 'new'),
     connect(() => ({
-        values: [teamLogic, ['currentTeamIdStrict']],
+        values: [teamLogic, ['currentProjectId']],
     })),
     actions({
         setDefinition: (definition: Partial<Definition>, options: SetDefinitionProps = {}) => ({ definition, options }),
@@ -140,7 +140,7 @@ export const definitionLogic = kea<definitionLogicType>([
                         return { count: 0, results: [] }
                     }
 
-                    return await propertyDefinitionsEventsRetrieve(String(values.currentTeamIdStrict), String(id), {
+return await propertyDefinitionsEventsRetrieve(String(values.currentProjectId), String(id), {
                         limit: PROPERTY_USAGE_EVENTS_PER_PAGE,
                         offset: (page - 1) * PROPERTY_USAGE_EVENTS_PER_PAGE,
                     })

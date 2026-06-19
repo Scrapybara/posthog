@@ -1,4 +1,4 @@
-import { actions, afterMount, kea, key, listeners, path, props, reducers, selectors } from 'kea'
+import { actions, afterMount, connect, kea, key, listeners, path, props, reducers, selectors } from 'kea'
 import { loaders } from 'kea-loaders'
 import { router } from 'kea-router'
 
@@ -6,8 +6,11 @@ import api from 'lib/api'
 import { TaxonomicFilterGroupType } from 'lib/components/TaxonomicFilter/types'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { Scene } from 'scenes/sceneTypes'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
+import { propertyDefinitionsEventsRetrieve } from '~/generated/core/api'
+import type { PropertyDefinitionEventUsageResponseApi } from '~/generated/core/api.schemas'
 import { updatePropertyDefinitions } from '~/models/propertyDefinitionsModel'
 import { getFilterLabel } from '~/taxonomy/helpers'
 import { Breadcrumb, Definition, EventDefinitionMetrics, ObjectMediaPreview, PropertyDefinition } from '~/types'
@@ -36,10 +39,14 @@ export const definitionLogic = kea<definitionLogicType>([
     path(['scenes', 'data-management', 'definition', 'definitionViewLogic']),
     props({} as DefinitionLogicProps),
     key((props) => props.id || 'new'),
+    connect(() => ({
+        values: [teamLogic, ['currentTeamIdStrict']],
+    })),
     actions({
         setDefinition: (definition: Partial<Definition>, options: SetDefinitionProps = {}) => ({ definition, options }),
         loadDefinition: (id: Definition['id']) => ({ id }),
         loadMetrics: (id: Definition['id']) => ({ id }),
+        loadPropertyUsageEvents: (id: Definition['id']) => ({ id }),
         setDefinitionMissing: true,
         loadPreviews: true,
         createMediaPreview: (uploadedMediaId: string, metadata?: Record<string, any>) => ({
@@ -116,6 +123,18 @@ export const definitionLogic = kea<definitionLogicType>([
                 },
             },
         ],
+        propertyUsageEvents: [
+            { count: 0, results: [] } as PropertyDefinitionEventUsageResponseApi,
+            {
+                loadPropertyUsageEvents: async ({ id }) => {
+                    if (values.isEvent || !id || id === 'new') {
+                        return { count: 0, results: [] }
+                    }
+
+                    return await propertyDefinitionsEventsRetrieve(String(values.currentTeamIdStrict), String(id))
+                },
+            },
+        ],
         previews: [
             [] as ObjectMediaPreview[],
             {
@@ -186,6 +205,8 @@ export const definitionLogic = kea<definitionLogicType>([
         loadDefinitionSuccess: () => {
             if (values.isEvent && values.definition.id && values.definition.id !== 'new') {
                 actions.loadPreviews()
+            } else if (values.isProperty && values.definition.id && values.definition.id !== 'new') {
+                actions.loadPropertyUsageEvents(values.definition.id)
             }
         },
         createMediaPreviewSuccess: () => {

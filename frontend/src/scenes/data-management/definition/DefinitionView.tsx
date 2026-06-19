@@ -17,6 +17,8 @@ import ViewRecordingsPlaylistButton from 'lib/components/ViewRecordingButton/Vie
 import { FEATURE_FLAGS } from 'lib/constants'
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { LemonDialog } from 'lib/lemon-ui/LemonDialog'
+import { LemonTable, LemonTableColumns } from 'lib/lemon-ui/LemonTable'
+import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
 import { SpinnerOverlay } from 'lib/lemon-ui/Spinner/Spinner'
 import { getPrimaryPropertyForEvent } from 'lib/utils/primaryEventProperty'
 import { DefinitionLogicProps, definitionLogic } from 'scenes/data-management/definition/definitionLogic'
@@ -28,6 +30,7 @@ import { LinkedHogFunctions } from 'scenes/hog-functions/list/LinkedHogFunctions
 import { SceneExport } from 'scenes/sceneTypes'
 import { urls } from 'scenes/urls'
 
+import type { PropertyDefinitionEventUsageApi } from '~/generated/core/api.schemas'
 import { SceneContent } from '~/layout/scenes/components/SceneContent'
 import { SceneDivider } from '~/layout/scenes/components/SceneDivider'
 import { SceneSection } from '~/layout/scenes/components/SceneSection'
@@ -122,10 +125,75 @@ function PrimaryPropertyDetail({ definition }: { definition: EventDefinition }):
     )
 }
 
+function PropertyDefinitionUsageEvents({
+    events,
+    loading,
+}: {
+    events: PropertyDefinitionEventUsageApi[]
+    loading: boolean
+}): JSX.Element {
+    const columns: LemonTableColumns<PropertyDefinitionEventUsageApi> = [
+        {
+            title: 'Event',
+            key: 'name',
+            render: function renderName(_, event) {
+                const title = getFilterLabel(event.name, TaxonomicFilterGroupType.Events) || event.name
+
+                return event.id ? (
+                    <LemonTableLink to={urls.eventDefinition(event.id)} title={title} description={event.name} />
+                ) : (
+                    <span>{title}</span>
+                )
+            },
+        },
+        {
+            title: 'Last seen',
+            key: 'last_seen_at',
+            render: function renderLastSeen(_, event) {
+                return event.last_seen_at ? (
+                    <div className="whitespace-nowrap">
+                        <TZLabel time={event.last_seen_at} />
+                    </div>
+                ) : (
+                    <span className="text-secondary">—</span>
+                )
+            },
+        },
+    ]
+
+    return (
+        <SceneSection
+            title="Events using this property"
+            description="Events where PostHog has seen this event property."
+        >
+            <LemonTable
+                id="property-definition-events-table"
+                data-attr="property-definition-events-table"
+                columns={columns}
+                dataSource={events}
+                loading={loading}
+                rowKey="name"
+                nouns={['event', 'events']}
+                emptyState="No events use this property yet"
+            />
+        </SceneSection>
+    )
+}
+
 export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
     const logic = definitionLogic(props)
-    const { definition, definitionLoading, definitionMissing, singular, isEvent, isProperty, metrics, metricsLoading } =
-        useValues(logic)
+    const {
+        definition,
+        definitionLoading,
+        definitionMissing,
+        singular,
+        isEvent,
+        isProperty,
+        metrics,
+        metricsLoading,
+        propertyUsageEvents,
+        propertyUsageEventsLoading,
+    } = useValues(logic)
     const { deleteDefinition } = useActions(logic)
 
     const memoizedQuery = useMemo(() => {
@@ -432,6 +500,15 @@ export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
                     >
                         <Query query={memoizedQuery} />
                     </SceneSection>
+                </>
+            )}
+
+            {isProperty && definition.id !== 'new' && (
+                <>
+                    <PropertyDefinitionUsageEvents
+                        events={propertyUsageEvents.results}
+                        loading={propertyUsageEventsLoading}
+                    />
                 </>
             )}
         </SceneContent>

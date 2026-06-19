@@ -3066,6 +3066,28 @@ export interface PatchedEnterprisePropertyDefinitionApi {
     hidden?: boolean | null
 }
 
+export interface PropertyDefinitionEventUsageApi {
+    /**
+     * Event definition ID, when the matching event definition exists.
+     * @nullable
+     */
+    id: string | null
+    /** Event name that has used this property. */
+    name: string
+    /**
+     * When this event was last seen, when available.
+     * @nullable
+     */
+    last_seen_at: string | null
+}
+
+export interface PropertyDefinitionEventUsageResponseApi {
+    /** Number of events that have used this property. */
+    count: number
+    /** Events that have used this property. */
+    results: PropertyDefinitionEventUsageApi[]
+}
+
 /**
  * * `add` - add
  * * `remove` - remove

@@ -66,6 +66,43 @@ class TestPropertyDefinitionAPI(APIBaseTest):
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["property_type"] == "DateTime"
 
+    def test_list_events_using_property(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        event_definition = EventDefinition.objects.create(team=self.team, name="missing_event_definition")
+        EventProperty.objects.create(team=self.team, event="missing_event_definition", property="first_visit")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 3
+        assert response.json()["results"] == [
+            {
+                "id": str(EventDefinition.objects.get(team=self.team, name="$pageview").id),
+                "name": "$pageview",
+                "last_seen_at": None,
+            },
+            {"id": None, "name": "another_event", "last_seen_at": None},
+            {
+                "id": str(event_definition.id),
+                "name": "missing_event_definition",
+                "last_seen_at": None,
+            },
+        ]
+
+    def test_list_events_using_property_is_project_scoped(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        other_team = Team.objects.create(organization=self.organization)
+        EventProperty.objects.create(team=other_team, event="other_team_event", property="first_visit")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "other_team_event" not in [event["name"] for event in response.json()["results"]]
+
     def test_list_property_definitions(self):
         response = self.client.get(f"/api/projects/{self.team.pk}/property_definitions/")
         assert response.status_code == status.HTTP_200_OK

@@ -20,7 +20,7 @@ from posthog.api.utils import action
 from posthog.constants import GROUP_TYPES_LIMIT
 from posthog.event_usage import report_user_action
 from posthog.filters import TermSearchFilterBackend, term_search_filter_sql
-from posthog.models import EventProperty, PropertyDefinition, User
+from posthog.models import EventDefinition, EventProperty, PropertyDefinition, User
 from posthog.models.activity_logging.activity_log import Detail, log_activity
 from posthog.models.utils import UUIDT
 from posthog.settings import EE_AVAILABLE
@@ -41,6 +41,26 @@ EXCLUDED_EVENT_CORE_PROPERTIES = [
 class SeenTogetherQuerySerializer(serializers.Serializer):
     event_names: serializers.ListField = serializers.ListField(child=serializers.CharField(), required=True)
     property_name: serializers.CharField = serializers.CharField(required=True)
+
+
+class PropertyDefinitionEventUsageSerializer(serializers.Serializer):
+    id = serializers.UUIDField(
+        help_text="Event definition ID, when the matching event definition exists.",
+        allow_null=True,
+    )
+    name = serializers.CharField(help_text="Event name that has used this property.")
+    last_seen_at = serializers.DateTimeField(
+        help_text="When this event was last seen, when available.",
+        allow_null=True,
+    )
+
+
+class PropertyDefinitionEventUsageResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(help_text="Number of events that have used this property.")
+    results = PropertyDefinitionEventUsageSerializer(
+        many=True,
+        help_text="Events that have used this property.",
+    )
 
 
 class PropertyDefinitionQuerySerializer(serializers.Serializer):
@@ -911,6 +931,37 @@ class PropertyDefinitionViewSet(
         results = {event_name: event_name in seen_events for event_name in event_names}
 
         return response.Response(results)
+
+    @extend_schema(responses=PropertyDefinitionEventUsageResponseSerializer)
+    @action(methods=["GET"], detail=True, required_scopes=["property_definition:read"])
+    def events(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
+        property_definition: PropertyDefinition = self.get_object()
+        event_names = list(
+            EventProperty.objects.alias(
+                effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
+            )
+            .filter(effective_project_id=self.project_id, property=property_definition.name)
+            .values_list("event", flat=True)
+            .distinct()
+            .order_by("event")
+        )
+
+        event_definitions = EventDefinition.objects.alias(
+            effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
+        ).filter(effective_project_id=self.project_id, name__in=event_names)
+        event_definition_by_name = {event_definition.name: event_definition for event_definition in event_definitions}
+
+        results = [
+            {
+                "id": event_definition.id if event_definition else None,
+                "name": event_name,
+                "last_seen_at": event_definition.last_seen_at if event_definition else None,
+            }
+            for event_name in event_names
+            for event_definition in [event_definition_by_name.get(event_name)]
+        ]
+
+        return response.Response({"count": len(results), "results": results})
 
     def destroy(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
         instance: PropertyDefinition = self.get_object()

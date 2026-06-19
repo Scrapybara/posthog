@@ -5,7 +5,7 @@ from django.utils.timezone import now
 from dateutil.relativedelta import relativedelta
 
 from posthog.constants import TREND_FILTER_TYPE_ACTIONS
-from posthog.models import EventDefinition, Person, PropertyDefinition
+from posthog.models import EventDefinition, EventProperty, Person, PropertyDefinition
 
 from products.actions.backend.models.action import Action
 from products.dashboards.backend.models.dashboard import Dashboard
@@ -24,6 +24,8 @@ class AppDataGenerator(DataGenerator):
         EventDefinition.objects.get_or_create(team=self.team, name="rated_app")
         PropertyDefinition.objects.get_or_create(team=self.team, name="is_first_movie")
         PropertyDefinition.objects.get_or_create(team=self.team, name="app_rating", is_numerical=True)
+        EventProperty.objects.get_or_create(team=self.team, event="watched_movie", property="is_first_movie")
+        EventProperty.objects.get_or_create(team=self.team, event="rated_app", property="app_rating")
 
     def create_actions_dashboards(self):
         installed_app_action = Action.objects.create(

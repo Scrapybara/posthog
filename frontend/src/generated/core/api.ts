@@ -70,6 +70,7 @@ import type {
     ProjectSecretAPIKeyApi,
     ProjectSecretApiKeysListParams,
     PromotedProductIntentApi,
+    PropertyDefinitionEventUsageResponseApi,
     PropertyDefinitionsListParams,
     SharingConfigurationApi,
     UserApi,
@@ -2862,6 +2863,21 @@ export const propertyDefinitionsDestroy = async (
     return apiMutator<void>(getPropertyDefinitionsDestroyUrl(projectId, id), {
         ...options,
         method: 'DELETE',
+    })
+}
+
+export const getPropertyDefinitionsEventsRetrieveUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/property_definitions/${id}/events/`
+}
+
+export const propertyDefinitionsEventsRetrieve = async (
+    projectId: string,
+    id: string,
+    options?: RequestInit
+): Promise<PropertyDefinitionEventUsageResponseApi> => {
+    return apiMutator<PropertyDefinitionEventUsageResponseApi>(getPropertyDefinitionsEventsRetrieveUrl(projectId, id), {
+        ...options,
+        method: 'GET',
     })
 }
 

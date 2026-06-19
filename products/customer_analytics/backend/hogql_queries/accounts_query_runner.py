@@ -300,10 +300,7 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
         health_by_external_id: dict[str, object] = {}
         if self._health_requested:
             # Batch only the current page's external ids — no per-row (N+1) health queries.
-            external_ids = [
-                cast(str | None, cast(Sequence[object], row[real_name_index])[1])
-                for row in rows
-            ]
+            external_ids = [cast(str | None, cast(Sequence[object], row[real_name_index])[1]) for row in rows]
             try:
                 health_by_external_id = self._health_scorer.score_external_ids(external_ids)
             except Exception as error:

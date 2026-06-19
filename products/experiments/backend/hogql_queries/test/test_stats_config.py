@@ -370,6 +370,7 @@ class TestStatsConfig(APIBaseTest):
         [
             ("stats_config_none", None, "control"),
             ("stats_config_empty", {}, "control"),
+            ("stats_config_null_baseline", {"baseline_variant_key": None}, "control"),
             ("stats_config_custom_baseline", {"baseline_variant_key": "test"}, "test"),
         ]
     )

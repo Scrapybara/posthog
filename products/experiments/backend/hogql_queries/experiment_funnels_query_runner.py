@@ -52,7 +52,7 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
         stats_config = self.experiment.stats_config or {}
-        self.baseline_variant_key = stats_config.get("baseline_variant_key", CONTROL_VARIANT_KEY)
+        self.baseline_variant_key = stats_config.get("baseline_variant_key") or CONTROL_VARIANT_KEY
 
         self.prepared_funnels_query = self._prepare_funnel_query()
         self.funnels_query_runner = FunnelsQueryRunner(

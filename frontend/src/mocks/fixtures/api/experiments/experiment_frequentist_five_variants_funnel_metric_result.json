@@ -24,46 +24,53 @@
     "timezone": "UTC",
     "variant_results": [
         {
+            "confidence_interval": [
+                -0.3194458396982118,
+                0.2289645562757519
+            ],
             "key": "control",
+            "method": "frequentist",
             "number_of_samples": 660,
+            "p_value": 0.7462428557191743,
+            "significant": false,
             "sum": 79.0,
             "sum_squares": 79.0
         },
         {
             "confidence_interval": [
-                -0.32664160293090333,
-                0.2427953597535722
+                -0.35199939978481265,
+                0.18146513103143994
             ],
             "key": "test-1",
             "method": "frequentist",
             "number_of_samples": 654,
-            "p_value": 0.7727344039571313,
+            "p_value": 0.5306892004774055,
             "significant": false,
             "sum": 75.0,
             "sum_squares": 75.0
         },
         {
             "confidence_interval": [
-                -0.36928387310192495,
-                0.17097786932502407
+                -0.39306123133072324,
+                0.1132454349974191
             ],
             "key": "test-3",
             "method": "frequentist",
             "number_of_samples": 677,
-            "p_value": 0.4716076357323562,
+            "p_value": 0.2784838659844888,
             "significant": false,
             "sum": 73.0,
             "sum_squares": 73.0
         },
         {
             "confidence_interval": [
-                -0.24380565365903328,
-                0.375172144240116
+                -0.2722028498636957,
+                0.30714495268907815
             ],
             "key": "test-4",
             "method": "frequentist",
             "number_of_samples": 635,
-            "p_value": 0.6772180225948241,
+            "p_value": 0.905831712196401,
             "significant": false,
             "sum": 81.0,
             "sum_squares": 81.0

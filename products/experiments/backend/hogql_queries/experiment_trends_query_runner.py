@@ -69,7 +69,7 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
         stats_config = self.experiment.stats_config or {}
-        self.baseline_variant_key = stats_config.get("baseline_variant_key", CONTROL_VARIANT_KEY)
+        self.baseline_variant_key = stats_config.get("baseline_variant_key") or CONTROL_VARIANT_KEY
         self.breakdown_key = f"$feature/{self.feature_flag_key}"
 
         self._fix_math_aggregation()

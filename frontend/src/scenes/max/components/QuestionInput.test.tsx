@@ -76,4 +76,8 @@ describe('QuestionInput slash command autocomplete', () => {
         fireEvent.change(input, { target: { value: '/' } })
         await waitFor(() => expect(slashCommandItem()).toBeInTheDocument())
     })
+
+    it('renders the input with constrained scrolling styles', () => {
+        expect(screen.getByRole('textbox')).toHaveClass('QuestionInput__textarea')
+    })
 })

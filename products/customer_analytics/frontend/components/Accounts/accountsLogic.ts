@@ -20,6 +20,7 @@ import type {
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY, CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS } from '../../constants'
 import {
+    ACCOUNTS_HEALTH_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
     accountsColumnConfigLogic,
@@ -53,7 +54,7 @@ function clearSortIfColumnRemoved(values: SortLikeValues, actions: SortLikeActio
     if (!sort) {
         return
     }
-    if (!values.visibleColumnNames.includes(sort.column)) {
+    if (sort.column === ACCOUNTS_HEALTH_COLUMN || !values.visibleColumnNames.includes(sort.column)) {
         actions.setSortOrder(null)
     }
 }
@@ -298,7 +299,7 @@ export const accountsLogic = kea<accountsLogicType>([
                 if (assignedToFilter.length > 0) {
                     state.assignedTo = assignedToFilter
                 }
-                if (sortOrder) {
+                if (sortOrder && sortOrder.column !== ACCOUNTS_HEALTH_COLUMN) {
                     state.sort = sortOrder
                 }
                 if (!objectsEqual(selectColumns, ACCOUNTS_HOGQL_DEFAULT_SELECT)) {
@@ -429,6 +430,9 @@ export const accountsLogic = kea<accountsLogicType>([
             }
         },
         toggleSort: ({ column }) => {
+            if (column === ACCOUNTS_HEALTH_COLUMN) {
+                return
+            }
             const current = values.sortOrder
             let next: AccountSortOrder
             if (!current || current.column !== column) {
@@ -598,7 +602,7 @@ export const accountsLogic = kea<accountsLogicType>([
                 actions.setAssignedToFilter(nextAssignedTo)
             }
 
-            const sort = view.sort ?? null
+            const sort = view.sort?.column === ACCOUNTS_HEALTH_COLUMN ? null : (view.sort ?? null)
             if (!objectsEqual(sort, values.sortOrder)) {
                 actions.setSortOrder(sort)
             }

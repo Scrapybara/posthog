@@ -22,8 +22,15 @@ import { AccountsEvents } from './constants'
 // row identity (id) and copy-able external_id ride along with the display name.
 export const ACCOUNTS_NAME_COLUMN = 'name'
 
+// Synthetic, mandatory column. The backend computes an explainable AccountHealthScore per row from
+// the team's usage-metric definitions; it isn't a real `system.accounts` field. We force-keep it
+// directly after `name` so it's the first signal a user sees and survives older saved column
+// configs / shared view hashes that predate it.
+export const ACCOUNTS_HEALTH_COLUMN = 'health_score'
+
 export const ACCOUNTS_HOGQL_DEFAULT_SELECT: string[] = [
     ACCOUNTS_NAME_COLUMN,
+    ACCOUNTS_HEALTH_COLUMN,
     'accounts.tags.names AS tag_names',
     'accounts.notebooks.count AS notebook_count',
     'csm',
@@ -33,6 +40,21 @@ export const ACCOUNTS_HOGQL_DEFAULT_SELECT: string[] = [
 
 function ensureNameColumn(columns: string[]): string[] {
     return columns.includes(ACCOUNTS_NAME_COLUMN) ? columns : [ACCOUNTS_NAME_COLUMN, ...columns]
+}
+
+// Pin the synthetic health column immediately after the (mandatory) name column. Idempotent, so it
+// upgrades legacy column lists in place without duplicating or reordering anything else.
+function ensureHealthColumn(columns: string[]): string[] {
+    // Drop any user expression that aliases itself to the reserved synthetic column. Keeping both
+    // would create duplicate display keys and make the detail view read the wrong cell.
+    const withoutHealth = columns.filter((column) => extractDisplayLabel(column) !== ACCOUNTS_HEALTH_COLUMN)
+    const nameIndex = withoutHealth.indexOf(ACCOUNTS_NAME_COLUMN)
+    const insertAt = nameIndex >= 0 ? nameIndex + 1 : 0
+    return [...withoutHealth.slice(0, insertAt), ACCOUNTS_HEALTH_COLUMN, ...withoutHealth.slice(insertAt)]
+}
+
+export function ensureMandatoryColumns(columns: string[]): string[] {
+    return ensureHealthColumn(ensureNameColumn(columns))
 }
 
 export function diffColumnConfiguration(
@@ -209,10 +231,13 @@ export const accountsColumnConfigLogic = kea<accountsColumnConfigLogicType>([
         selectColumns: [
             [...ACCOUNTS_HOGQL_DEFAULT_SELECT],
             {
-                setSelectColumns: (_, { columns }) => ensureNameColumn(columns),
-                selectColumn: (state, { column }) => (state.includes(column) ? state : [...state, column]),
+                setSelectColumns: (_, { columns }) => ensureMandatoryColumns(columns),
+                selectColumn: (state, { column }) =>
+                    ensureMandatoryColumns(state.includes(column) ? state : [...state, column]),
                 unselectColumn: (state, { column }) =>
-                    column === ACCOUNTS_NAME_COLUMN ? state : state.filter((c) => c !== column),
+                    column === ACCOUNTS_NAME_COLUMN || column === ACCOUNTS_HEALTH_COLUMN
+                        ? state
+                        : ensureMandatoryColumns(state.filter((c) => c !== column)),
                 moveColumn: (state, { oldIndex, newIndex }) => {
                     if (oldIndex === newIndex || oldIndex < 0 || oldIndex >= state.length) {
                         return state
@@ -220,7 +245,7 @@ export const accountsColumnConfigLogic = kea<accountsColumnConfigLogicType>([
                     const next = [...state]
                     const [removed] = next.splice(oldIndex, 1)
                     next.splice(newIndex, 0, removed)
-                    return next
+                    return ensureMandatoryColumns(next)
                 },
                 resetColumns: () => [...ACCOUNTS_HOGQL_DEFAULT_SELECT],
             },

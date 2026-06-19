@@ -14,6 +14,7 @@ import { accountsPartialUpdate, accountsRetrieve } from 'products/customer_analy
 import type { AccountApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import {
+    ACCOUNTS_HEALTH_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
     accountsColumnConfigLogic,
@@ -252,6 +253,12 @@ describe('accountsLogic', () => {
             logic.actions.toggleSort('name')
             expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['name DESC'])
         })
+
+        it('ignores attempts to sort by the synthetic health column', () => {
+            logic.actions.toggleSort(ACCOUNTS_HEALTH_COLUMN)
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
+        })
     })
 
     describe('selectColumns', () => {
@@ -273,16 +280,32 @@ describe('accountsLogic', () => {
             expect(config?.values.selectColumns).toContain(ACCOUNTS_NAME_COLUMN)
         })
 
-        it('re-inserts the name column when setSelectColumns omits it', () => {
+        it('re-inserts the name and health columns when setSelectColumns omits them', () => {
             const config = accountsColumnConfigLogic.findMounted()
             config?.actions.setSelectColumns(['csm', 'account_executive'])
-            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'csm', 'account_executive'])
+            expect(config?.values.selectColumns).toEqual([
+                ACCOUNTS_NAME_COLUMN,
+                ACCOUNTS_HEALTH_COLUMN,
+                'csm',
+                'account_executive',
+            ])
         })
 
-        it('keeps user ordering when setSelectColumns already contains name', () => {
+        it('keeps user ordering but pins health right after name', () => {
             const config = accountsColumnConfigLogic.findMounted()
             config?.actions.setSelectColumns(['csm', ACCOUNTS_NAME_COLUMN, 'account_executive'])
-            expect(config?.values.selectColumns).toEqual(['csm', ACCOUNTS_NAME_COLUMN, 'account_executive'])
+            expect(config?.values.selectColumns).toEqual([
+                'csm',
+                ACCOUNTS_NAME_COLUMN,
+                ACCOUNTS_HEALTH_COLUMN,
+                'account_executive',
+            ])
+        })
+
+        it('refuses to remove the synthetic health column via unselectColumn', () => {
+            const config = accountsColumnConfigLogic.findMounted()
+            config?.actions.unselectColumn(ACCOUNTS_HEALTH_COLUMN)
+            expect(config?.values.selectColumns).toContain(ACCOUNTS_HEALTH_COLUMN)
         })
     })
 
@@ -332,6 +355,18 @@ describe('accountsLogic', () => {
             expect(logic.values.tileFilter).toEqual(tileFilter)
         })
 
+        it('drops a legacy sort that collides with the synthetic health column', async () => {
+            router.actions.push(
+                urls.customerAnalyticsAccounts(),
+                {},
+                { view: { sort: { column: ACCOUNTS_HEALTH_COLUMN, direction: 'desc' } } }
+            )
+            await expectLogic(logic).toFinishAllListeners()
+
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
+        })
+
         it('coerces a malformed scalar assignedTo from the view hash into an array', async () => {
             // normalizeRoleFilter defends the array-shaped filter against a stray
             // scalar in the hash (hand-edited or stale link) so .length/.map stay safe.
@@ -341,7 +376,7 @@ describe('accountsLogic', () => {
             expect(logic.values.assignedToFilter).toEqual([7])
         })
 
-        it('restores columns and shields them from a late saved column config', async () => {
+        it('restores columns (upgrading legacy hashes to include health) and shields them from a late saved config', async () => {
             router.actions.push(
                 urls.customerAnalyticsAccounts(),
                 {},
@@ -352,7 +387,8 @@ describe('accountsLogic', () => {
             await expectLogic(logic).toFinishAllListeners()
 
             const config = accountsColumnConfigLogic.findMounted()
-            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'csm'])
+            // A share hash that predates the health column is upgraded in place.
+            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_COLUMN, 'csm'])
 
             // A saved config arriving after the URL was applied must not clobber the shared view.
             config?.actions.loadSavedColumnConfigurationSuccess({
@@ -360,10 +396,10 @@ describe('accountsLogic', () => {
                 columns: [ACCOUNTS_NAME_COLUMN, 'account_owner'],
             })
             await expectLogic(config!).toFinishAllListeners()
-            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'csm'])
+            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_COLUMN, 'csm'])
         })
 
-        it('applies the saved column config when the URL has no columns', async () => {
+        it('applies the saved column config when the URL has no columns, upgrading it to include health', async () => {
             router.actions.push(urls.customerAnalyticsAccounts(), {}, {})
             await expectLogic(logic).toFinishAllListeners()
 
@@ -373,7 +409,11 @@ describe('accountsLogic', () => {
                 columns: [ACCOUNTS_NAME_COLUMN, 'account_owner'],
             })
             await expectLogic(config!).toFinishAllListeners()
-            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'account_owner'])
+            expect(config?.values.selectColumns).toEqual([
+                ACCOUNTS_NAME_COLUMN,
+                ACCOUNTS_HEALTH_COLUMN,
+                'account_owner',
+            ])
         })
     })
 

@@ -18,6 +18,68 @@
             ],
             "type": "string"
         },
+        "AccountHealthFactor": {
+            "additionalProperties": false,
+            "description": "One usage metric's contribution to an account's health score.",
+            "properties": {
+                "change_pct": {
+                    "description": "Percentage change current vs previous, or null when previous is zero.",
+                    "type": ["number", "null"]
+                },
+                "current": {
+                    "description": "Total in the current period.",
+                    "type": "number"
+                },
+                "factor_score": {
+                    "description": "0–100 retained-usage score, or null when there is no signal (both periods zero).",
+                    "type": ["number", "null"]
+                },
+                "interval": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Lookback window in days for both the current and the immediately preceding period."
+                },
+                "metric_id": {
+                    "description": "The GroupUsageMetric id this factor was derived from.",
+                    "type": "string"
+                },
+                "metric_name": {
+                    "type": "string"
+                },
+                "previous": {
+                    "description": "Total in the immediately preceding equal-length period.",
+                    "type": "number"
+                }
+            },
+            "required": ["metric_id", "metric_name", "interval", "current", "previous", "factor_score", "change_pct"],
+            "type": "object"
+        },
+        "AccountHealthScore": {
+            "additionalProperties": false,
+            "description": "Explainable account health score derived from the team's usage-metric definitions.",
+            "properties": {
+                "factors": {
+                    "description": "Per-metric breakdown that explains the overall score.",
+                    "items": {
+                        "$ref": "#/definitions/AccountHealthFactor"
+                    },
+                    "type": "array"
+                },
+                "score": {
+                    "description": "0–100 overall score (rounded mean of non-null factor scores), or null when no_data.",
+                    "type": ["number", "null"]
+                },
+                "status": {
+                    "$ref": "#/definitions/AccountHealthStatus"
+                }
+            },
+            "required": ["score", "status", "factors"],
+            "type": "object"
+        },
+        "AccountHealthStatus": {
+            "description": "Health bucket an account falls into. `no_data` means we could not score it (no external id, no usage-metric config, no defined metrics, or no usable signal).",
+            "enum": ["healthy", "needs_attention", "at_risk", "no_data"],
+            "type": "string"
+        },
         "AccountsQuery": {
             "additionalProperties": false,
             "properties": {
@@ -69,6 +131,7 @@
                     "type": "string"
                 },
                 "select": {
+                    "description": "Columns to return. Most are HogQL expressions resolved against `system.accounts`, but the synthetic `health_score` column is computed by the runner from the team's usage-metric definitions and returned as an `AccountHealthScore` object per row. Callers that omit it do zero health work.",
                     "items": {
                         "$ref": "#/definitions/HogQLExpression"
                     },

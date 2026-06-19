@@ -1,15 +1,19 @@
 from io import StringIO
 
 from posthog.test.base import BaseTest
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from posthog.models import Group, OrganizationMembership, User
+from posthog.models.group_usage_metric import GroupUsageMetric
 
 from products.customer_analytics.backend.models.account import Account
 from products.customer_analytics.backend.models.team_customer_analytics_config import TeamCustomerAnalyticsConfig
 from products.notebooks.backend.models import Notebook, ResourceNotebook
+
+SEED_MODULE = "products.customer_analytics.backend.management.commands.seed_customer_analytics_accounts"
 
 
 class TestSeedCustomerAnalyticsAccounts(BaseTest):
@@ -98,3 +102,82 @@ class TestSeedCustomerAnalyticsAccounts(BaseTest):
     def test_errors_when_no_groups(self):
         with self.assertRaises(CommandError):
             self._run()
+
+    def test_default_run_seeds_no_usage_metrics_or_events(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+
+        with patch(f"{SEED_MODULE}.create_event") as create_event:
+            self._run(users=2, accounts_with_notes=0)
+
+        # The default (health demo off) stays event-free, Kafka-free, and defines no usage metrics.
+        create_event.assert_not_called()
+        assert GroupUsageMetric.objects.filter(team=self.team).count() == 0
+
+    def test_health_demo_creates_two_metrics_and_queues_62_events(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+        self._make_group("initech-id", "Initech")
+
+        with (
+            patch(f"{SEED_MODULE}.create_event") as create_event,
+            patch(f"{SEED_MODULE}.sync_execute") as sync_execute,
+        ):
+            self._run(users=2, accounts_with_notes=0, with_health_demo=True)
+
+        metrics = GroupUsageMetric.objects.filter(team=self.team).order_by("name")
+        assert [m.name for m in metrics] == [
+            "Customer analytics demo: Active users",
+            "Customer analytics demo: Events ingested",
+        ]
+        assert all(m.interval == 7 and m.math == GroupUsageMetric.Math.COUNT for m in metrics)
+        sync_execute.assert_called_once()
+
+        # Two metrics × first two external-id accounts: (9+10)+(2+10) totals = 31 per metric → 62.
+        assert create_event.call_count == 62
+
+    def test_health_demo_is_idempotent_on_metrics(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+
+        with patch(f"{SEED_MODULE}.create_event"), patch(f"{SEED_MODULE}.sync_execute") as sync_execute:
+            self._run(users=2, accounts_with_notes=0, with_health_demo=True)
+            self._run(users=2, accounts_with_notes=0, with_health_demo=True)
+
+        assert GroupUsageMetric.objects.filter(team=self.team).count() == 2
+        assert sync_execute.call_count == 2
+
+    def test_health_demo_does_not_overwrite_existing_metrics(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+        existing = GroupUsageMetric.objects.create(
+            team=self.team,
+            group_type_index=0,
+            name="Events ingested",
+            interval=30,
+            math=GroupUsageMetric.Math.SUM,
+            math_property="bytes",
+            filters={"events": [{"id": "real_event", "type": "events", "order": 0}]},
+        )
+
+        with patch(f"{SEED_MODULE}.create_event"), patch(f"{SEED_MODULE}.sync_execute"):
+            self._run(users=2, accounts_with_notes=0, with_health_demo=True)
+
+        existing.refresh_from_db()
+        assert existing.interval == 30
+        assert existing.math == GroupUsageMetric.Math.SUM
+        assert GroupUsageMetric.objects.filter(team=self.team).count() == 3
+
+    def test_health_demo_dry_run_describes_optional_work_and_writes_nothing(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+
+        with patch(f"{SEED_MODULE}.create_event") as create_event:
+            output = self._run(dry_run=True, with_health_demo=True)
+
+        assert "Dry run" in output
+        assert "62 event(s)" in output
+        assert "demo usage metric(s)" in output
+        create_event.assert_not_called()
+        assert GroupUsageMetric.objects.filter(team=self.team).count() == 0
+        assert Account.objects.for_team(self.team.pk).count() == 0

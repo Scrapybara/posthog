@@ -1,4 +1,9 @@
-from posthog.test.base import ClickhouseTestMixin, NonAtomicBaseTest
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from freezegun import freeze_time
+from posthog.test.base import ClickhouseTestMixin, NonAtomicBaseTest, _create_event, flush_persons_and_events
+from unittest.mock import patch
 
 from django.test import override_settings
 from django.utils import timezone
@@ -12,10 +17,13 @@ from posthog.hogql.errors import ExposedHogQLError
 from posthog.api.tagged_item import set_tags_on_object
 from posthog.constants import AvailableFeature
 from posthog.models import Tag, User
+from posthog.models.group_usage_metric import GroupUsageMetric
 from posthog.models.team import Team
 from posthog.rbac.user_access_control import UserAccessControlError
+from posthog.test.test_utils import create_group_type_mapping_without_created_at
 
 from products.customer_analytics.backend.hogql_queries.accounts_query_runner import AccountsQueryRunner
+from products.customer_analytics.backend.services.account_health import AccountHealthScorer
 from products.customer_analytics.backend.test.factories import create_account
 from products.notebooks.backend.models import Notebook, ResourceNotebook
 
@@ -510,3 +518,286 @@ class TestAccountsQueryRunner(ClickhouseTestMixin, NonAtomicBaseTest):
 
         runner = AccountsQueryRunner(query=AccountsQuery(), team=self.team)
         self.assertRaises(UserAccessControlError, runner.validate_query_runner_access, self.user)
+
+
+@override_settings(IN_UNIT_TESTING=True)
+class TestAccountsQueryRunnerHealth(ClickhouseTestMixin, NonAtomicBaseTest):
+    GROUP_TYPE_INDEX = 0
+    NOW = datetime(2025, 10, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+    CURRENT_TS = NOW - timedelta(days=3)
+    PREVIOUS_TS = NOW - timedelta(days=10)
+
+    def setUp(self):
+        super().setUp()
+        # customer_analytics_config is a cached_property on the class-shared team object; drop any
+        # value a prior test cached so each test reads the (per-test truncated) DB state fresh.
+        self.team.__dict__.pop("customer_analytics_config", None)
+        create_group_type_mapping_without_created_at(
+            team=self.team,
+            project_id=self.team.project_id,
+            group_type="organization",
+            group_type_index=self.GROUP_TYPE_INDEX,
+        )
+
+    def _configure(self, index: int | None = GROUP_TYPE_INDEX) -> None:
+        config = self.team.customer_analytics_config
+        config.account_group_type_index = index
+        config.save()
+
+    def _metric(
+        self,
+        name: str,
+        event_name: str,
+        *,
+        math: str = GroupUsageMetric.Math.COUNT,
+        math_property: str | None = None,
+        interval: int = 7,
+    ) -> GroupUsageMetric:
+        return GroupUsageMetric.objects.create(
+            team=self.team,
+            group_type_index=self.GROUP_TYPE_INDEX,
+            name=name,
+            interval=interval,
+            math=math,
+            math_property=math_property,
+            format=GroupUsageMetric.Format.NUMERIC,
+            display=GroupUsageMetric.Display.NUMBER,
+            filters={"events": [{"id": event_name, "type": "events", "order": 0}]},
+        )
+
+    def _emit(self, group_key: str, event_name: str, count: int, when, properties: dict | None = None) -> None:
+        for _ in range(count):
+            _create_event(
+                event=event_name,
+                team=self.team,
+                distinct_id=f"d-{group_key}",
+                properties={"$group_0": group_key, **(properties or {})},
+                timestamp=when,
+            )
+
+    def _health_by_external_id(self, **query_kwargs) -> dict:
+        runner = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"], **query_kwargs), team=self.team, user=self.user
+        )
+        response = runner.calculate()
+        name_idx = runner.columns.index("name")
+        health_idx = runner.columns.index("health_score")
+        return {row[name_idx]["external_id"]: row[health_idx] for row in response.results}
+
+    def test_healthy_at_risk_and_no_data(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+        self._metric("Active users", "ev_b")
+        create_account(team_id=self.team.id, name="Acme", external_id="acme")
+        create_account(team_id=self.team.id, name="Globex", external_id="globex")
+        create_account(team_id=self.team.id, name="Hooli", external_id="hooli")
+
+        with freeze_time(self.NOW):
+            for event_name in ("ev_a", "ev_b"):
+                self._emit("acme", event_name, 9, self.CURRENT_TS)
+                self._emit("acme", event_name, 10, self.PREVIOUS_TS)
+                self._emit("globex", event_name, 2, self.CURRENT_TS)
+                self._emit("globex", event_name, 10, self.PREVIOUS_TS)
+            flush_persons_and_events()
+            health = self._health_by_external_id()
+
+        assert health["acme"]["score"] == 90
+        assert health["acme"]["status"] == "healthy"
+        assert len(health["acme"]["factors"]) == 2
+        # Factors are explainable: current/previous totals and the per-factor score ride along.
+        events_factor = next(f for f in health["acme"]["factors"] if f["metric_name"] == "Events ingested")
+        assert events_factor["current"] == 9.0
+        assert events_factor["previous"] == 10.0
+        assert events_factor["factor_score"] == 90
+
+        assert health["globex"]["score"] == 20
+        assert health["globex"]["status"] == "at_risk"
+
+        # Account has an external id and metrics exist, but no signal at all → no_data.
+        assert health["hooli"]["score"] is None
+        assert health["hooli"]["status"] == "no_data"
+
+    def test_sum_metric_scores_on_retained_value(self):
+        self._configure()
+        self._metric("Revenue", "purchase", math=GroupUsageMetric.Math.SUM, math_property="amount")
+        create_account(team_id=self.team.id, name="Acme", external_id="acme")
+
+        with freeze_time(self.NOW):
+            self._emit("acme", "purchase", 1, self.CURRENT_TS, properties={"amount": 80})
+            self._emit("acme", "purchase", 1, self.PREVIOUS_TS, properties={"amount": 100})
+            flush_persons_and_events()
+            health = self._health_by_external_id()
+
+        factor = health["acme"]["factors"][0]
+        assert factor["current"] == 80.0
+        assert factor["previous"] == 100.0
+        assert factor["factor_score"] == 80
+        assert health["acme"]["status"] == "healthy"
+
+    def test_missing_external_id_is_no_data(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+        create_account(team_id=self.team.id, name="No external id")
+
+        health = self._health_by_external_id()
+        assert health[None]["status"] == "no_data"
+        assert health[None]["factors"] == []
+
+    def test_no_config_is_no_data(self):
+        # A team whose account_group_type_index is unset has nothing to join accounts to, so every
+        # account is no_data. Use a fresh team so the (class-shared) configured team can't leak in.
+        team = Team.objects.create(organization=self.organization)
+        GroupUsageMetric.objects.create(
+            team=team,
+            group_type_index=self.GROUP_TYPE_INDEX,
+            name="Events ingested",
+            interval=7,
+            math=GroupUsageMetric.Math.COUNT,
+            format=GroupUsageMetric.Format.NUMERIC,
+            display=GroupUsageMetric.Display.NUMBER,
+            filters={"events": [{"id": "ev_a", "type": "events", "order": 0}]},
+        )
+        create_account(team_id=team.id, name="Acme", external_id="acme")
+
+        runner = AccountsQueryRunner(query=AccountsQuery(select=["name", "health_score"]), team=team, user=self.user)
+        response = runner.calculate()
+        name_idx = runner.columns.index("name")
+        health_idx = runner.columns.index("health_score")
+        health = {row[name_idx]["external_id"]: row[health_idx] for row in response.results}
+
+        assert health["acme"]["status"] == "no_data"
+
+    def test_no_metrics_is_no_data(self):
+        self._configure()
+        create_account(team_id=self.team.id, name="Acme", external_id="acme")
+
+        health = self._health_by_external_id()
+        assert health["acme"]["status"] == "no_data"
+        assert health["acme"]["factors"] == []
+
+    def test_health_batches_only_current_page_external_ids(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+        with timezone.override("UTC"):
+            create_account(team_id=self.team.id, name="Old", external_id="old")
+            create_account(team_id=self.team.id, name="Mid", external_id="mid")
+            create_account(team_id=self.team.id, name="New", external_id="new")
+
+        with patch.object(AccountHealthScorer, "score_external_ids", autospec=True, return_value={}) as scorer:
+            runner = AccountsQueryRunner(
+                query=AccountsQuery(select=["name", "health_score"], limit=2), team=self.team, user=self.user
+            )
+            runner.calculate()
+
+        # Default order is created_at DESC → only the two newest accounts are on page one.
+        scored_ids = set(scorer.call_args.args[1])
+        assert scored_ids == {"new", "mid"}
+        assert "old" not in scored_ids
+
+    def test_health_isolates_team_data(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+        other_team = Team.objects.create(organization=self.organization)
+        create_account(team_id=self.team.id, name="Mine", external_id="shared")
+        create_account(team_id=other_team.id, name="Theirs", external_id="shared")
+
+        with freeze_time(self.NOW):
+            # Events belong to the *other* team's group with the same key — they must not leak in.
+            for _ in range(9):
+                _create_event(
+                    event="ev_a",
+                    team=other_team,
+                    distinct_id="d-other",
+                    properties={"$group_0": "shared"},
+                    timestamp=self.CURRENT_TS,
+                )
+            flush_persons_and_events()
+            health = self._health_by_external_id()
+
+        assert set(health) == {"shared"}
+        assert health["shared"]["status"] == "no_data"
+
+    def test_health_omitted_does_no_usage_metric_work(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+        create_account(team_id=self.team.id, name="Acme", external_id="acme")
+
+        with patch.object(AccountHealthScorer, "score_external_ids", autospec=True) as scorer:
+            runner = AccountsQueryRunner(query=AccountsQuery(select=["name"]), team=self.team, user=self.user)
+            runner.calculate()
+            scorer.assert_not_called()
+
+        # No health request → no usage-metric fingerprints in the cache key either.
+        runner = AccountsQueryRunner(query=AccountsQuery(select=["name"]), team=self.team, user=self.user)
+        assert "account_health" not in runner.get_cache_payload()
+
+    @patch("products.customer_analytics.backend.hogql_queries.accounts_query_runner.capture_exception")
+    def test_health_failure_does_not_take_down_accounts_list(self, capture_exception_mock):
+        account = create_account(team_id=self.team.id, name="Acme", external_id="acme")
+        with patch.object(AccountHealthScorer, "score_external_ids", side_effect=ValueError("bad usage metric")):
+            runner = AccountsQueryRunner(
+                query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+            )
+            response = runner.calculate()
+
+        name_idx = runner.columns.index("name")
+        health_idx = runner.columns.index("health_score")
+        assert response.results[0][name_idx]["id"] == str(account.id)
+        assert response.results[0][health_idx]["status"] == "no_data"
+        capture_exception_mock.assert_called_once()
+
+    def test_cache_payload_includes_health_fingerprints_only_when_selected(self):
+        self._configure()
+        self._metric("Events ingested", "ev_a")
+
+        with_health = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        )
+        payload = with_health.get_cache_payload()
+        assert "account_health" in payload
+        assert payload["account_health"]["account_group_type_index"] == self.GROUP_TYPE_INDEX
+
+    def test_cache_key_changes_when_usage_metric_changes(self):
+        self._configure()
+        metric = self._metric("Events ingested", "ev_a")
+        key_before = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+
+        metric.interval = 30
+        metric.save(update_fields=["interval"])
+
+        key_after = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+        assert key_before != key_after
+
+    def test_cache_key_changes_when_usage_metric_is_renamed(self):
+        self._configure()
+        metric = self._metric("Events ingested", "ev_a")
+        key_before = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+
+        metric.name = "Renamed events"
+        metric.save(update_fields=["name"])
+
+        key_after = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+        assert key_before != key_after
+
+    def test_ordering_by_synthetic_health_column_falls_back_to_default(self):
+        older = create_account(team_id=self.team.id, name="Older")
+        newer = create_account(team_id=self.team.id, name="Newer")
+
+        runner = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"], orderBy=["health_score DESC"]),
+            team=self.team,
+            user=self.user,
+        )
+        response = runner.calculate()
+        name_idx = runner.columns.index("name")
+        ids = [row[name_idx]["id"] for row in response.results]
+
+        assert ids == [str(newer.id), str(older.id)]

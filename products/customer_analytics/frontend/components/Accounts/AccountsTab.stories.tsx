@@ -16,12 +16,34 @@ const INSIGHTS_ENDPOINT = 'api/environments/:team_id/insights/'
 
 type AccountNameCell = { name: string; external_id: string | null; id: string }
 type AccountRoleCell = [number, string] | null
-type AccountRow = [AccountNameCell, string[], number, AccountRoleCell, AccountRoleCell, AccountRoleCell]
+type AccountHealthFactorCell = {
+    metric_id: string
+    metric_name: string
+    interval: number
+    current: number
+    previous: number
+    factor_score: number | null
+    change_pct: number | null
+}
+type AccountHealthCell = {
+    score: number | null
+    status: 'healthy' | 'needs_attention' | 'at_risk' | 'no_data'
+    factors: AccountHealthFactorCell[]
+}
+type AccountRow = [
+    AccountNameCell,
+    AccountHealthCell,
+    string[],
+    number,
+    AccountRoleCell,
+    AccountRoleCell,
+    AccountRoleCell,
+]
 
 function buildAccountsQueryResponse(rows: AccountRow[]): Record<string, unknown> {
     return {
         kind: 'AccountsQuery',
-        columns: ['name', 'tag_names', 'notebook_count', 'csm', 'account_executive', 'account_owner'],
+        columns: ['name', 'health_score', 'tag_names', 'notebook_count', 'csm', 'account_executive', 'account_owner'],
         results: rows,
         types: [],
         hogql: '',
@@ -33,18 +55,71 @@ function buildAccountsQueryResponse(rows: AccountRow[]): Record<string, unknown>
     }
 }
 
+// Deterministic health cells matching the AccountHealthScore shape the backend injects per row.
+const ACME_HEALTH: AccountHealthCell = {
+    score: 91,
+    status: 'healthy',
+    factors: [
+        {
+            metric_id: 'm-events',
+            metric_name: 'Events ingested',
+            interval: 7,
+            current: 920,
+            previous: 1000,
+            factor_score: 92,
+            change_pct: -8,
+        },
+        {
+            metric_id: 'm-users',
+            metric_name: 'Active users',
+            interval: 7,
+            current: 90,
+            previous: 100,
+            factor_score: 90,
+            change_pct: -10,
+        },
+    ],
+}
+const GLOBEX_HEALTH: AccountHealthCell = {
+    score: 32,
+    status: 'at_risk',
+    factors: [
+        {
+            metric_id: 'm-events',
+            metric_name: 'Events ingested',
+            interval: 7,
+            current: 30,
+            previous: 100,
+            factor_score: 30,
+            change_pct: -70,
+        },
+        {
+            metric_id: 'm-users',
+            metric_name: 'Active users',
+            interval: 7,
+            current: 34,
+            previous: 100,
+            factor_score: 34,
+            change_pct: -66,
+        },
+    ],
+}
+const NO_HEALTH_DATA: AccountHealthCell = { score: null, status: 'no_data', factors: [] }
+
 const SAMPLE_ROWS: AccountRow[] = [
     [
         { name: 'Acme Inc', external_id: 'cust_acme_001', id: 'acc-1' },
+        ACME_HEALTH,
         ['enterprise', 'priority'],
         0,
         [1, 'alice@posthog.com'],
         [2, 'bob@posthog.com'],
         null,
     ],
-    [{ name: 'Globex', external_id: 'cust_globex_002', id: 'acc-2' }, [], 0, null, null, null],
+    [{ name: 'Globex', external_id: 'cust_globex_002', id: 'acc-2' }, GLOBEX_HEALTH, [], 0, null, null, null],
     [
         { name: 'Hooli', external_id: null, id: 'acc-3' },
+        NO_HEALTH_DATA,
         ['scaleup'],
         0,
         [1, 'alice@posthog.com'],
@@ -56,6 +131,7 @@ const SAMPLE_ROWS: AccountRow[] = [
 const SINGLE_ROW: AccountRow[] = [
     [
         { name: 'Acme Inc', external_id: 'cust_acme_001', id: 'acc-1' },
+        ACME_HEALTH,
         ['enterprise', 'priority'],
         1,
         [1, 'alice@posthog.com'],
@@ -177,16 +253,15 @@ function billingTabDecorators(
     ]
 }
 
-// Expanding a row mounts UsefulLinks (loads the account async) and the notes table
-// (loads notebooks async). Both start as skeletons and resolve later, which changes
-// the expansion's width and height. Awaiting the settled content here keeps the
-// snapshot deterministic — otherwise it races the loads and the Useful links sidebar
-// is sometimes absent, sometimes present (the flaky ~7% height/width diff).
+// Rows now expand to the Health tab by default, so the notes-focused stories click the Notes tab
+// after expanding. Awaiting the settled sidebar + notes content keeps the snapshot deterministic —
+// otherwise it races the async loads (the flaky ~7% height/width diff).
 async function expandFirstRow(canvasElement: HTMLElement, notesLoadedText: string): Promise<void> {
     const canvas = within(canvasElement)
     await userEvent.click(await canvas.findByTitle('Show more'))
     await canvas.findByText('Useful links')
     await canvas.findByText('Organization')
+    await userEvent.click(await canvas.findByRole('tab', { name: 'Notes' }))
     await canvas.findByText(notesLoadedText)
 }
 
@@ -372,5 +447,33 @@ export const RowExpandedUsagePopulated: Story = {
     ),
     play: async ({ canvasElement }) => {
         await expandAndOpenTab(canvasElement, 'Usage')
+    },
+}
+
+// Clicking a Health cell expands the row straight to the Health tab (no manual expand/tab click)
+// and surfaces the factor breakdown — without fetching notes.
+export const HealthCellOpensDetail: Story = {
+    render: () => <App />,
+    decorators: [
+        mswDecorator({
+            get: {
+                [ACCOUNT_RETRIEVE_ENDPOINT]: ACCOUNT_WITH_LINKS,
+                [ACCOUNT_NOTEBOOKS_ENDPOINT]: { count: 0, next: null, previous: null, results: [] },
+            },
+            post: {
+                [QUERY_ENDPOINT]: mockAccountsQuery(SAMPLE_ROWS),
+            },
+        }),
+    ],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement)
+        // The list shows the score for the healthy account; clicking it opens the Health tab.
+        await userEvent.click(await canvas.findByText('91/100'))
+        await canvas.findByText('Useful links')
+        await canvas.findByText('Account health')
+        // Factor names and the overall score render in the Health detail.
+        await canvas.findByText('Events ingested')
+        await canvas.findByText('Active users')
+        await canvas.findByText('91')
     },
 }

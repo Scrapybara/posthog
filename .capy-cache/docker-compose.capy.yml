@@ -1,0 +1,19 @@
+services:
+  clickhouse:
+    mem_limit: !reset null
+    cpus: !reset null
+  proxy:
+    extra_hosts: !override
+      - 'plugins:host-gateway'
+      - 'capture:host-gateway'
+      - 'capture-ai:host-gateway'
+      - 'capture-logs:host-gateway'
+      - 'replay-capture:host-gateway'
+      - 'feature-flags:host-gateway'
+      - 'hypercache-server:host-gateway'
+  web:
+    image: caddy:latest
+    entrypoint: socat
+    command: ['TCP-LISTEN:8000,fork,reuseaddr', 'TCP:host.docker.internal:8011']
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'

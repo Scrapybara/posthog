@@ -16,6 +16,7 @@ import { Tooltip } from 'lib/lemon-ui/Tooltip'
 import { extractDisplayLabel } from '~/queries/nodes/DataTable/utils'
 
 import {
+    ACCOUNTS_HEALTH_COLUMN,
     ACCOUNTS_NAME_COLUMN,
     AccountColumnGroup,
     AccountColumnGroupKey,
@@ -140,9 +141,14 @@ function SelectedAccountColumn({
 }): JSX.Element {
     const { setNodeRef, attributes, transform, transition, listeners } = useSortable({ id: column })
     const label = extractDisplayLabel(column)
-    // `name` carries the row identity (account id) and external_id for the
-    // Account cell — removing it would break row expansion and role updates.
-    const isMandatory = column === ACCOUNTS_NAME_COLUMN
+    // `name` carries the row identity (account id) and external_id for the Account cell — removing
+    // it would break row expansion and role updates. `health_score` is synthetic and always shown:
+    // it's the at-a-glance health summary the list is built around, so it can't be removed either.
+    const isMandatory = column === ACCOUNTS_NAME_COLUMN || column === ACCOUNTS_HEALTH_COLUMN
+    const mandatoryReason =
+        column === ACCOUNTS_HEALTH_COLUMN
+            ? 'Health is always shown — it summarizes each account from your usage metrics'
+            : 'This column is required'
 
     return (
         <div
@@ -166,12 +172,12 @@ function SelectedAccountColumn({
                         </LemonButton>
                     </Tooltip>
                 )}
-                <Tooltip title={isMandatory ? 'This column is required' : 'Remove'}>
+                <Tooltip title={isMandatory ? mandatoryReason : 'Remove'}>
                     <LemonButton
                         onClick={() => onRemove(column)}
                         status="danger"
                         size="small"
-                        disabledReason={isMandatory ? 'This column is required' : undefined}
+                        disabledReason={isMandatory ? mandatoryReason : undefined}
                     >
                         <IconX data-attr="column-display-item-remove-icon" />
                     </LemonButton>

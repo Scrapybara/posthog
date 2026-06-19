@@ -223,6 +223,7 @@ describe('sqlEditorLogic', () => {
         editorRootLogic = undefined
         logic?.unmount()
         databaseLogic?.unmount()
+        jest.useRealTimers()
     })
 
     it('keeps configured filters when the filters placeholder is removed from the query text', () => {
@@ -251,6 +252,28 @@ describe('sqlEditorLogic', () => {
         expect((logic.values.sourceQuery.source as HogQLQuery).filters).toEqual({
             filterTestAccounts: true,
         })
+    })
+
+    it('debounces active query decoration updates while typing', async () => {
+        jest.useFakeTimers()
+        logic = sqlEditorLogic({
+            tabId: TAB_ID,
+            monaco: createMockMonaco(),
+            editor: createMockEditor(),
+        })
+        logic.mount()
+        const updateActiveQueryDecoration = jest.fn()
+        logic.cache.updateActiveQueryDecoration = updateActiveQueryDecoration
+
+        logic.actions.setQueryInput('SELECT 1')
+        logic.actions.setQueryInput('SELECT 12')
+        logic.actions.setQueryInput('SELECT 123')
+
+        await jest.advanceTimersByTimeAsync(149)
+        expect(updateActiveQueryDecoration).not.toHaveBeenCalled()
+
+        await jest.advanceTimersByTimeAsync(1)
+        expect(updateActiveQueryDecoration).toHaveBeenCalledTimes(1)
     })
 
     it('does not count a commented filters placeholder as active', () => {

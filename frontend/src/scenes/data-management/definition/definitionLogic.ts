@@ -20,6 +20,8 @@ import { eventDefinitionsTableLogic } from '../events/eventDefinitionsTableLogic
 import { propertyDefinitionsTableLogic } from '../properties/propertyDefinitionsTableLogic'
 import type { definitionLogicType } from './definitionLogicType'
 
+export const PROPERTY_USAGE_EVENTS_PER_PAGE = 100
+
 export const createNewDefinition = (isEvent: boolean): Definition => ({
     id: 'new',
     name: `New ${isEvent ? 'Event' : 'Event property'}`,
@@ -46,7 +48,8 @@ export const definitionLogic = kea<definitionLogicType>([
         setDefinition: (definition: Partial<Definition>, options: SetDefinitionProps = {}) => ({ definition, options }),
         loadDefinition: (id: Definition['id']) => ({ id }),
         loadMetrics: (id: Definition['id']) => ({ id }),
-        loadPropertyUsageEvents: (id: Definition['id']) => ({ id }),
+        loadPropertyUsageEvents: (id: Definition['id'], page = 1) => ({ id, page }),
+        setPropertyUsageEventsPage: (page: number) => ({ page }),
         setDefinitionMissing: true,
         loadPreviews: true,
         createMediaPreview: (uploadedMediaId: string, metadata?: Record<string, any>) => ({
@@ -60,6 +63,12 @@ export const definitionLogic = kea<definitionLogicType>([
             false,
             {
                 setDefinitionMissing: () => true,
+            },
+        ],
+        propertyUsageEventsPage: [
+            1,
+            {
+                setPropertyUsageEventsPage: (_, { page }) => page,
             },
         ],
     })),
@@ -126,12 +135,15 @@ export const definitionLogic = kea<definitionLogicType>([
         propertyUsageEvents: [
             { count: 0, results: [] } as PropertyDefinitionEventUsageResponseApi,
             {
-                loadPropertyUsageEvents: async ({ id }) => {
+                loadPropertyUsageEvents: async ({ id, page }) => {
                     if (values.isEvent || !id || id === 'new') {
                         return { count: 0, results: [] }
                     }
 
-                    return await propertyDefinitionsEventsRetrieve(String(values.currentTeamIdStrict), String(id))
+                    return await propertyDefinitionsEventsRetrieve(String(values.currentTeamIdStrict), String(id), {
+                        limit: PROPERTY_USAGE_EVENTS_PER_PAGE,
+                        offset: (page - 1) * PROPERTY_USAGE_EVENTS_PER_PAGE,
+                    })
                 },
             },
         ],
@@ -206,7 +218,12 @@ export const definitionLogic = kea<definitionLogicType>([
             if (values.isEvent && values.definition.id && values.definition.id !== 'new') {
                 actions.loadPreviews()
             } else if (values.isProperty && values.definition.id && values.definition.id !== 'new') {
-                actions.loadPropertyUsageEvents(values.definition.id)
+                actions.setPropertyUsageEventsPage(1)
+            }
+        },
+        setPropertyUsageEventsPage: ({ page }) => {
+            if (values.isProperty && values.definition.id && values.definition.id !== 'new') {
+                actions.loadPropertyUsageEvents(values.definition.id, page)
             }
         },
         createMediaPreviewSuccess: () => {

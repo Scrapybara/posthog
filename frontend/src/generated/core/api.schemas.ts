@@ -3998,6 +3998,20 @@ export const PropertyDefinitionsListType = {
     Session: 'session',
 } as const
 
+export type PropertyDefinitionsEventsRetrieveParams = {
+    /**
+     * Maximum number of events to return.
+     * @minimum 1
+     * @maximum 1000
+     */
+    limit?: number
+    /**
+     * Number of events to skip before returning results.
+     * @minimum 0
+     */
+    offset?: number
+}
+
 export type UsersListParams = {
     email?: string
     is_staff?: boolean

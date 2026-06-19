@@ -63,6 +63,22 @@ class PropertyDefinitionEventUsageResponseSerializer(serializers.Serializer):
     )
 
 
+class PropertyDefinitionEventUsageQuerySerializer(serializers.Serializer):
+    limit = serializers.IntegerField(
+        help_text="Maximum number of events to return.",
+        required=False,
+        default=100,
+        min_value=1,
+        max_value=1000,
+    )
+    offset = serializers.IntegerField(
+        help_text="Number of events to skip before returning results.",
+        required=False,
+        default=0,
+        min_value=0,
+    )
+
+
 class PropertyDefinitionQuerySerializer(serializers.Serializer):
     search = serializers.CharField(
         help_text="Searches properties by name",
@@ -932,11 +948,19 @@ class PropertyDefinitionViewSet(
 
         return response.Response(results)
 
-    @extend_schema(responses=PropertyDefinitionEventUsageResponseSerializer)
+    @extend_schema(
+        parameters=[PropertyDefinitionEventUsageQuerySerializer],
+        responses=PropertyDefinitionEventUsageResponseSerializer,
+    )
     @action(methods=["GET"], detail=True, required_scopes=["property_definition:read"])
     def events(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
         property_definition: PropertyDefinition = self.get_object()
-        event_names = list(
+        query = PropertyDefinitionEventUsageQuerySerializer(data=request.GET)
+        query.is_valid(raise_exception=True)
+        limit = query.validated_data["limit"]
+        offset = query.validated_data["offset"]
+
+        event_names_queryset = (
             EventProperty.objects.alias(
                 effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
             )
@@ -945,6 +969,8 @@ class PropertyDefinitionViewSet(
             .distinct()
             .order_by("event")
         )
+        count = event_names_queryset.count()
+        event_names = list(event_names_queryset[offset : offset + limit])
 
         event_definitions = EventDefinition.objects.alias(
             effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
@@ -961,7 +987,7 @@ class PropertyDefinitionViewSet(
             for event_definition in [event_definition_by_name.get(event_name)]
         ]
 
-        return response.Response({"count": len(results), "results": results})
+        return response.Response({"count": count, "results": results})
 
     def destroy(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
         instance: PropertyDefinition = self.get_object()

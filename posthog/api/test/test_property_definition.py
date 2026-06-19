@@ -103,6 +103,21 @@ class TestPropertyDefinitionAPI(APIBaseTest):
         assert response.status_code == status.HTTP_200_OK
         assert "other_team_event" not in [event["name"] for event in response.json()["results"]]
 
+    def test_list_events_using_property_paginates_before_loading_event_definitions(self):
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="high_cardinality_property")
+        for index in range(5):
+            event_name = f"event_{index}"
+            EventDefinition.objects.create(team=self.team, name=event_name)
+            EventProperty.objects.create(team=self.team, event=event_name, property=property_definition.name)
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/?limit=2&offset=2"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 5
+        assert [event["name"] for event in response.json()["results"]] == ["event_2", "event_3"]
+
     def test_list_property_definitions(self):
         response = self.client.get(f"/api/projects/{self.team.pk}/property_definitions/")
         assert response.status_code == status.HTTP_200_OK

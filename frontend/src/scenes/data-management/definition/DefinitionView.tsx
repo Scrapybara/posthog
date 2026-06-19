@@ -21,7 +21,11 @@ import { LemonTable, LemonTableColumns } from 'lib/lemon-ui/LemonTable'
 import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
 import { SpinnerOverlay } from 'lib/lemon-ui/Spinner/Spinner'
 import { getPrimaryPropertyForEvent } from 'lib/utils/primaryEventProperty'
-import { DefinitionLogicProps, definitionLogic } from 'scenes/data-management/definition/definitionLogic'
+import {
+    DefinitionLogicProps,
+    PROPERTY_USAGE_EVENTS_PER_PAGE,
+    definitionLogic,
+} from 'scenes/data-management/definition/definitionLogic'
 import { EventDefinitionExperiments } from 'scenes/data-management/events/EventDefinitionExperiments'
 import { EventDefinitionInsights } from 'scenes/data-management/events/EventDefinitionInsights'
 import { EventDefinitionProperties } from 'scenes/data-management/events/EventDefinitionProperties'
@@ -127,10 +131,16 @@ function PrimaryPropertyDetail({ definition }: { definition: EventDefinition }):
 
 function PropertyDefinitionUsageEvents({
     events,
+    eventCount,
+    page,
     loading,
+    onPageChange,
 }: {
     events: PropertyDefinitionEventUsageApi[]
+    eventCount: number
+    page: number
     loading: boolean
+    onPageChange: (page: number) => void
 }): JSX.Element {
     const columns: LemonTableColumns<PropertyDefinitionEventUsageApi> = [
         {
@@ -172,6 +182,15 @@ function PropertyDefinitionUsageEvents({
                 columns={columns}
                 dataSource={events}
                 loading={loading}
+                pagination={{
+                    controlled: true,
+                    currentPage: page,
+                    entryCount: eventCount,
+                    pageSize: PROPERTY_USAGE_EVENTS_PER_PAGE,
+                    onForward:
+                        page * PROPERTY_USAGE_EVENTS_PER_PAGE < eventCount ? () => onPageChange(page + 1) : undefined,
+                    onBackward: page > 1 ? () => onPageChange(page - 1) : undefined,
+                }}
                 rowKey="name"
                 nouns={['event', 'events']}
                 emptyState="No events use this property yet"
@@ -193,8 +212,9 @@ export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
         metricsLoading,
         propertyUsageEvents,
         propertyUsageEventsLoading,
+        propertyUsageEventsPage,
     } = useValues(logic)
-    const { deleteDefinition } = useActions(logic)
+    const { deleteDefinition, setPropertyUsageEventsPage } = useActions(logic)
 
     const memoizedQuery = useMemo(() => {
         const columnsToUse =
@@ -507,7 +527,10 @@ export function DefinitionView(props: DefinitionLogicProps): JSX.Element {
                 <>
                     <PropertyDefinitionUsageEvents
                         events={propertyUsageEvents.results}
+                        eventCount={propertyUsageEvents.count}
+                        page={propertyUsageEventsPage}
                         loading={propertyUsageEventsLoading}
+                        onPageChange={setPropertyUsageEventsPage}
                     />
                 </>
             )}

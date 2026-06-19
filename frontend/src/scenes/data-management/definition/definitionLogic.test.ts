@@ -61,6 +61,7 @@ describe('definitionLogic', () => {
                 .toDispatchActions([
                     'loadDefinition',
                     'loadDefinitionSuccess',
+                    'setPropertyUsageEventsPage',
                     'loadPropertyUsageEvents',
                     'loadPropertyUsageEventsSuccess',
                 ])
@@ -72,6 +73,7 @@ describe('definitionLogic', () => {
                             { id: mockEventDefinitions[0].id, name: mockEventDefinitions[0].name, last_seen_at: null },
                         ],
                     },
+                    propertyUsageEventsPage: 1,
                 })
         })
 

@@ -6,7 +6,7 @@ from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.http import StreamingHttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 
 import pydantic
@@ -20,6 +20,7 @@ from rest_framework import exceptions, serializers, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import Throttled
 from rest_framework.mixins import DestroyModelMixin, ListModelMixin, RetrieveModelMixin
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
@@ -37,6 +38,8 @@ from posthog.rate_limit import (
     AISustainedRateThrottle,
     is_team_exempt_from_ai_rate_limit,
 )
+from posthog.storage import object_storage
+from posthog.storage.object_storage import ObjectStorageError
 from posthog.temporal.ai.chat_agent import (
     CHAT_AGENT_STREAM_MAX_LENGTH,
     CHAT_AGENT_WORKFLOW_TIMEOUT,
@@ -50,7 +53,14 @@ from posthog.temporal.ai.research_agent import (
     ResearchAgentWorkflowInputs,
 )
 
-from products.posthog_ai.backend.models.assistant import Conversation
+from products.posthog_ai.backend.attachments import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    InvalidConversationAttachment,
+    attachment_to_ref,
+    process_conversation_attachment,
+    save_conversation_attachment,
+)
+from products.posthog_ai.backend.models.assistant import Conversation, ConversationAttachment
 
 from ee.billing.quota_limiting import QuotaLimitingCaches, QuotaResource, is_team_limited
 from ee.hogai.api.serializers import ConversationMinimalSerializer, ConversationSerializer
@@ -95,6 +105,7 @@ class MessageSerializer(MessageMinimalSerializer):
     content = serializers.CharField(
         required=True,
         allow_null=True,  # Null content means we're resuming streaming or continuing previous generation
+        allow_blank=True,
         max_length=40000,  # Roughly 10k tokens
     )
     conversation = serializers.UUIDField(
@@ -108,14 +119,51 @@ class MessageSerializer(MessageMinimalSerializer):
     agent_mode = serializers.ChoiceField(required=False, choices=[mode.value for mode in AgentMode])
     is_sandbox = serializers.BooleanField(required=False, default=False)
     resume_payload = serializers.JSONField(required=False, allow_null=True)
+    attachments = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
+        help_text="IDs of private PNG or JPEG attachments uploaded for this exact conversation.",
+    )
 
     def validate(self, attrs):
         data = attrs
+        attachment_ids = data.get("attachments") or []
+        if len(set(attachment_ids)) != len(attachment_ids):
+            raise serializers.ValidationError({"attachments": "Attachment IDs must be unique."})
+        if attachment_ids and data["content"] is None:
+            raise serializers.ValidationError({"attachments": "Attachments cannot be used while resuming a stream."})
+        if attachment_ids and (
+            data.get("agent_mode") == AgentMode.RESEARCH.value or data.get("agent_mode") == AgentMode.RESEARCH
+        ):
+            raise serializers.ValidationError({"attachments": "Attachments are not supported in Research mode."})
+        if attachment_ids and (data.get("is_sandbox") or data.get("agent_mode") == AgentMode.SANDBOX.value):
+            raise serializers.ValidationError({"attachments": "Attachments are not supported in Sandbox mode."})
+        if data["content"] == "" and not attachment_ids:
+            raise serializers.ValidationError({"content": "A message or attachment is required."})
+
+        attachment_refs: list[dict[str, str | int]] = []
+        if attachment_ids:
+            team = self.context["team"]
+            user = self.context["user"]
+            conversation_id = data["conversation"]
+            attachments = ConversationAttachment.objects.for_team(team.id).filter(
+                id__in=attachment_ids,
+                team=team,
+                creator=user,
+                conversation_id=conversation_id,
+            )
+            attachments_by_id = {attachment.id: attachment for attachment in attachments}
+            if len(attachments_by_id) != len(attachment_ids):
+                raise serializers.ValidationError({"attachments": "One or more attachments were not found."})
+            attachment_refs = [attachment_to_ref(attachments_by_id[attachment_id]) for attachment_id in attachment_ids]
+
         if data["content"] is not None:
             try:
                 message = HumanMessage.model_validate(
                     {
                         "content": data["content"],
+                        "attachments": attachment_refs or None,
                         "ui_context": data.get("ui_context"),
                         "trace_id": str(data["trace_id"]) if data.get("trace_id") else None,
                     }
@@ -152,9 +200,17 @@ class QueueMessageSerializer(serializers.Serializer):
     ui_context = serializers.JSONField(required=False)
     billing_context = serializers.JSONField(required=False)
     agent_mode = serializers.ChoiceField(required=False, choices=[mode.value for mode in AgentMode])
+    attachments = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
+        help_text="Attachment IDs. Attachments are not supported for queued messages.",
+    )
 
     def validate(self, attrs):
         data = attrs
+        if data.get("attachments"):
+            raise serializers.ValidationError({"attachments": "Attachments are not supported for queued messages."})
         try:
             HumanMessage.model_validate(
                 {
@@ -185,6 +241,26 @@ class QueueMessageSerializer(serializers.Serializer):
 
 class QueueMessageUpdateSerializer(serializers.Serializer):
     content = serializers.CharField(required=True, allow_blank=False, max_length=40000)
+
+
+class ConversationAttachmentUploadSerializer(serializers.Serializer):
+    image = serializers.FileField(
+        required=True,
+        help_text="A PNG or JPEG image no larger than 4 MiB.",
+    )
+
+
+class ConversationAttachmentSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True, help_text="Attachment identifier.")
+    file_name = serializers.CharField(read_only=True, help_text="Sanitized display filename.")
+    content_type = serializers.ChoiceField(
+        read_only=True,
+        choices=["image/png", "image/jpeg"],
+        help_text="Verified and re-encoded image content type.",
+    )
+    size = serializers.IntegerField(read_only=True, help_text="Sanitized image size in bytes.")
+    width = serializers.IntegerField(read_only=True, help_text="Decoded image width in pixels.")
+    height = serializers.IntegerField(read_only=True, help_text="Decoded image height in pixels.")
 
 
 @extend_schema(tags=["max"])
@@ -313,6 +389,34 @@ class ConversationViewSet(
         if self.action == "list":
             return ConversationMinimalSerializer
         return super().get_serializer_class()
+
+    def _owned_conversation_exists(self, request: Request, conversation_id: str) -> bool:
+        return Conversation.objects.filter(
+            id=conversation_id,
+            team=self.team,
+            user=request.user,
+            deleted=False,
+        ).exists()
+
+    def _conversation_id_is_available_to_user(self, request: Request, conversation_id: str) -> bool:
+        conversation = Conversation.objects.filter(id=conversation_id).only("team_id", "user_id", "deleted").first()
+        return conversation is None or (
+            not conversation.deleted
+            and conversation.team_id == self.team.id
+            and conversation.user_id == request.user.id
+        )
+
+    def _get_scoped_attachment(self, request: Request, attachment_id: str) -> ConversationAttachment:
+        conversation_id = self._queue_conversation_id()
+        try:
+            return ConversationAttachment.objects.for_team(self.team.id).get(
+                id=attachment_id,
+                team=self.team,
+                creator=request.user,
+                conversation_id=conversation_id,
+            )
+        except (ConversationAttachment.DoesNotExist, ValidationError, ValueError):
+            raise exceptions.NotFound("Attachment not found.")
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -497,6 +601,90 @@ class ConversationViewSet(
             ),
             content_type="text/event-stream",
         )
+
+    @extend_schema(
+        request=ConversationAttachmentUploadSerializer,
+        responses={201: ConversationAttachmentSerializer},
+        description="Upload and sanitize a private PNG or JPEG attachment for this conversation.",
+    )
+    @action(
+        detail=True,
+        methods=["POST"],
+        url_path="attachments",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_attachment(self, request: Request, *args, **kwargs) -> Response:
+        conversation_id = self._queue_conversation_id()
+        if not self._conversation_id_is_available_to_user(request, conversation_id):
+            raise exceptions.NotFound("Conversation not found.")
+
+        serializer = ConversationAttachmentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            processed = process_conversation_attachment(serializer.validated_data["image"])
+            attachment = save_conversation_attachment(
+                processed=processed,
+                team_id=self.team.id,
+                creator=cast(User, request.user),
+                conversation_id=uuid.UUID(conversation_id),
+            )
+        except InvalidConversationAttachment as error:
+            raise exceptions.ValidationError({"image": str(error)})
+        except (ObjectStorageError, ValueError):
+            logger.exception("Failed to save conversation attachment", conversation_id=conversation_id)
+            raise exceptions.APIException("Could not save attachment.")
+
+        return Response(attachment_to_ref(attachment), status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        parameters=[OpenApiParameter("attachment_id", OpenApiTypes.UUID, OpenApiParameter.PATH)],
+        responses={(200, "image/png"): OpenApiTypes.BINARY, (200, "image/jpeg"): OpenApiTypes.BINARY},
+        description="Read private attachment content scoped to the authenticated user, team, and conversation.",
+    )
+    @action(
+        detail=True,
+        methods=["GET"],
+        url_path=r"attachments/(?P<attachment_id>[^/.]+)/content",
+    )
+    def attachment_content(self, request: Request, attachment_id: str, *args, **kwargs) -> HttpResponse:
+        attachment = self._get_scoped_attachment(request, attachment_id)
+        try:
+            content = object_storage.read_bytes(attachment.object_path)
+        except ObjectStorageError:
+            logger.exception("Failed to read conversation attachment", attachment_id=attachment_id)
+            raise exceptions.NotFound("Attachment content not found.")
+        if content is None:
+            raise exceptions.NotFound("Attachment content not found.")
+
+        return HttpResponse(
+            content,
+            content_type=attachment.content_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "Content-Disposition": f'inline; filename="{attachment.file_name}"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @extend_schema(
+        parameters=[OpenApiParameter("attachment_id", OpenApiTypes.UUID, OpenApiParameter.PATH)],
+        responses={204: None},
+        description="Delete a private conversation attachment.",
+    )
+    @action(
+        detail=True,
+        methods=["DELETE"],
+        url_path=r"attachments/(?P<attachment_id>[^/.]+)",
+    )
+    def delete_attachment(self, request: Request, attachment_id: str, *args, **kwargs) -> Response:
+        attachment = self._get_scoped_attachment(request, attachment_id)
+        try:
+            object_storage.delete(attachment.object_path)
+        except ObjectStorageError:
+            logger.exception("Failed to delete conversation attachment", attachment_id=attachment_id)
+            raise exceptions.APIException("Could not delete attachment.")
+        attachment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["GET", "POST"], url_path="queue")
     def queue(self, request: Request, *args, **kwargs):

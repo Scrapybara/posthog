@@ -18,6 +18,7 @@ import * as zod from 'zod'
 export const conversationsCreateBodyContentMax = 40000
 
 export const conversationsCreateBodyIsSandboxDefault = false
+export const conversationsCreateBodyAttachmentsMax = 4
 
 export const ConversationsCreateBody = /* @__PURE__ */ zod
     .object({
@@ -50,6 +51,11 @@ export const ConversationsCreateBody = /* @__PURE__ */ zod
             ),
         is_sandbox: zod.boolean().default(conversationsCreateBodyIsSandboxDefault),
         resume_payload: zod.unknown().optional(),
+        attachments: zod
+            .array(zod.uuid())
+            .max(conversationsCreateBodyAttachmentsMax)
+            .optional()
+            .describe('IDs of private PNG or JPEG attachments uploaded for this exact conversation.'),
     })
     .describe('Serializer for appending a message to an existing conversation without triggering AI processing.')
 
@@ -65,6 +71,13 @@ export const ConversationsAppendMessageCreateBody = /* @__PURE__ */ zod
         content: zod.string().max(conversationsAppendMessageCreateBodyContentMax),
     })
     .describe('Serializer for appending a message to an existing conversation without triggering AI processing.')
+
+/**
+ * Upload and sanitize a private PNG or JPEG attachment for this conversation.
+ */
+export const ConversationsAttachmentsCreateBody = /* @__PURE__ */ zod.object({
+    image: zod.url().describe('A PNG or JPEG image no larger than 4 MiB.'),
+})
 
 export const ConversationsCancelPartialUpdateBody = /* @__PURE__ */ zod.looseObject({})
 

@@ -1,14 +1,17 @@
 import uuid
 import datetime
+from io import BytesIO
 from typing import Any, cast
 
 from posthog.test.base import APIBaseTest
 from unittest.mock import AsyncMock, patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import StreamingHttpResponse
 from django.test import override_settings
 from django.utils import timezone
 
+from PIL import Image
 from rest_framework import status
 
 from posthog.schema import (
@@ -30,7 +33,7 @@ from posthog.models.user import User
 from posthog.temporal.ai.chat_agent import ChatAgentWorkflow, ChatAgentWorkflowInputs
 from posthog.temporal.ai.research_agent import ResearchAgentWorkflow, ResearchAgentWorkflowInputs
 
-from products.posthog_ai.backend.models.assistant import Conversation
+from products.posthog_ai.backend.models.assistant import Conversation, ConversationAttachment
 
 from ee.api.conversation import ConversationViewSet
 
@@ -104,6 +107,181 @@ class TestConversation(APIBaseTest):
         mock_response = StreamingHttpResponse([content], content_type="text/event-stream")
         cast(Any, mock_response).streaming_content = [content]
         return mock_response
+
+    def _image_upload(
+        self, image_format: str = "PNG", *, size: tuple[int, int] = (4, 3), name: str | None = None
+    ) -> SimpleUploadedFile:
+        output = BytesIO()
+        Image.new("RGB", size, color=(200, 10, 20)).save(output, format=image_format)
+        content_type = "image/png" if image_format == "PNG" else "image/jpeg"
+        return SimpleUploadedFile(name or f"image.{image_format.lower()}", output.getvalue(), content_type=content_type)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    @patch("products.posthog_ai.backend.attachments.object_storage.write")
+    def test_upload_png_and_send_reference_only_workflow_payload(self, mock_write):
+        conversation_id = str(uuid.uuid4())
+        upload_response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/{conversation_id}/attachments/",
+            {"image": self._image_upload("PNG", name="../../unsafe\nname.png")},
+            format="multipart",
+        )
+        self.assertEqual(upload_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(upload_response.json()["content_type"], "image/png")
+        self.assertEqual(upload_response.json()["file_name"], "unsafename.png")
+        self.assertEqual(upload_response.json()["width"], 4)
+        stored_bytes = mock_write.call_args.args[1]
+        with Image.open(BytesIO(stored_bytes)) as stored_image:
+            self.assertEqual(stored_image.format, "PNG")
+            self.assertNotIn("exif", stored_image.info)
+
+        with (
+            patch("ee.hogai.core.executor.AgentExecutor.astream", return_value=_async_generator()) as mock_stream,
+            patch("ee.api.conversation.StreamingHttpResponse", side_effect=self._create_mock_streaming_response),
+        ):
+            response = self.client.post(
+                f"/api/environments/{self.team.id}/conversations/",
+                {
+                    "content": "",
+                    "trace_id": str(uuid.uuid4()),
+                    "conversation": conversation_id,
+                    "attachments": [upload_response.json()["id"]],
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        workflow_inputs = mock_stream.call_args.args[1]
+        attachment_ref = workflow_inputs.message["attachments"][0]
+        self.assertEqual(attachment_ref["id"], upload_response.json()["id"])
+        self.assertNotIn("data", attachment_ref)
+        self.assertNotIn("object_path", attachment_ref)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    @patch("products.posthog_ai.backend.attachments.object_storage.write")
+    def test_upload_jpeg_reencodes_without_metadata(self, mock_write):
+        conversation_id = str(uuid.uuid4())
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/{conversation_id}/attachments/",
+            {"image": self._image_upload("JPEG")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["content_type"], "image/jpeg")
+        with Image.open(BytesIO(mock_write.call_args.args[1])) as stored_image:
+            self.assertEqual(stored_image.format, "JPEG")
+            self.assertNotIn("exif", stored_image.info)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    @patch("products.posthog_ai.backend.attachments.object_storage.write")
+    def test_upload_rejects_spoofed_mime_invalid_svg_size_and_pixel_cap(self, mock_write):
+        conversation_id = str(uuid.uuid4())
+        cases = [
+            SimpleUploadedFile("spoof.jpg", self._image_upload("PNG").read(), content_type="image/jpeg"),
+            SimpleUploadedFile("invalid.png", b"not an image", content_type="image/png"),
+            SimpleUploadedFile("image.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>", content_type="image/svg+xml"),
+            SimpleUploadedFile("large.png", b"x" * (4 * 1024 * 1024 + 1), content_type="image/png"),
+            self._image_upload("PNG", size=(5001, 5000), name="too-many-pixels.png"),
+        ]
+        for image in cases:
+            with self.subTest(image=image.name):
+                response = self.client.post(
+                    f"/api/environments/{self.team.id}/conversations/{conversation_id}/attachments/",
+                    {"image": image},
+                    format="multipart",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_write.assert_not_called()
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    def test_attachment_content_is_authenticated_and_exactly_scoped(self):
+        conversation_id = uuid.uuid4()
+        attachment = ConversationAttachment.objects.for_team(self.team.id).create(
+            team=self.team,
+            creator=self.user,
+            conversation_id=conversation_id,
+            file_name="private.png",
+            content_type="image/png",
+            size=3,
+            width=1,
+            height=1,
+            object_path="private/random",
+        )
+        content_url = (
+            f"/api/environments/{self.team.id}/conversations/{conversation_id}/attachments/{attachment.id}/content/"
+        )
+        with patch("ee.api.conversation.object_storage.read_bytes", return_value=b"png"):
+            response = self.client.get(content_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.content, b"png")
+        self.assertEqual(response["Cache-Control"], "private, max-age=3600")
+        self.assertEqual(response["X-Content-Type-Options"], "nosniff")
+
+        self.client.logout()
+        self.assertEqual(self.client.get(content_url).status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.force_login(self.other_user)
+        self.assertEqual(self.client.get(content_url).status_code, status.HTTP_404_NOT_FOUND)
+
+        self.client.force_login(self.user)
+        other_team_url = content_url.replace(str(self.team.id), str(self.other_team.id), 1)
+        self.assertEqual(self.client.get(other_team_url).status_code, status.HTTP_404_NOT_FOUND)
+        wrong_conversation_url = content_url.replace(str(conversation_id), str(uuid.uuid4()), 1)
+        self.assertEqual(self.client.get(wrong_conversation_url).status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    @patch("products.posthog_ai.backend.attachments.object_storage.write")
+    def test_upload_rejects_conversation_owned_by_another_user(self, _mock_write):
+        conversation = Conversation.objects.create(user=self.other_user, team=self.team)
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/{conversation.id}/attachments/",
+            {"image": self._image_upload()},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(OBJECT_STORAGE_ENABLED=True)
+    def test_attachments_are_rejected_for_research_sandbox_and_queue(self):
+        conversation = Conversation.objects.create(user=self.user, team=self.team)
+        attachment = ConversationAttachment.objects.for_team(self.team.id).create(
+            team=self.team,
+            creator=self.user,
+            conversation_id=conversation.id,
+            file_name="private.png",
+            content_type="image/png",
+            size=3,
+            width=1,
+            height=1,
+            object_path="private/random",
+        )
+        for payload in [
+            {
+                "content": "research",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation.id),
+                "agent_mode": AgentMode.RESEARCH.value,
+                "attachments": [str(attachment.id)],
+            },
+            {
+                "content": "sandbox",
+                "trace_id": str(uuid.uuid4()),
+                "conversation": str(conversation.id),
+                "is_sandbox": True,
+                "attachments": [str(attachment.id)],
+            },
+        ]:
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    f"/api/environments/{self.team.id}/conversations/",
+                    payload,
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        queue_response = self.client.post(
+            f"/api/environments/{self.team.id}/conversations/{conversation.id}/queue/",
+            {"content": "queue", "attachments": [str(attachment.id)]},
+            format="json",
+        )
+        self.assertEqual(queue_response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_create_conversation(self):
         conversation_id = str(uuid.uuid4())

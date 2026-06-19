@@ -242,8 +242,10 @@ import type {
     HogFlowTemplate,
 } from 'products/workflows/frontend/Workflows/hogflows/types'
 
-import { AgentMode } from '../queries/schema'
+import { AgentMode, HumanMessage } from '../queries/schema'
 import type { MaxUIContext } from '../scenes/max/maxTypes'
+
+export type ConversationAttachment = NonNullable<HumanMessage['attachments']>[number]
 import { AlertSimulationResult, AlertType, AlertTypeWrite } from './components/Alerts/types'
 import {
     ErrorTrackingFingerprint,
@@ -6484,6 +6486,25 @@ const api = {
     },
 
     conversations: {
+        attachments: {
+            upload(conversationId: string, image: File): Promise<ConversationAttachment> {
+                const data = new FormData()
+                data.append('image', image)
+                return new ApiRequest().conversation(conversationId).withAction('attachments').create({ data })
+            },
+
+            delete(conversationId: string, attachmentId: string): Promise<void> {
+                return new ApiRequest().conversation(conversationId).withAction(`attachments/${attachmentId}`).delete()
+            },
+
+            contentUrl(conversationId: string, attachmentId: string): string {
+                return new ApiRequest()
+                    .conversation(conversationId)
+                    .withAction(`attachments/${attachmentId}/content`)
+                    .assembleFullUrl()
+            },
+        },
+
         async stream(
             data: {
                 /** The user message. Null content means we're resuming streaming or continuing previous generation. */
@@ -6494,6 +6515,7 @@ const api = {
                 conversation?: string | null
                 trace_id: string
                 agent_mode?: AgentMode | null
+                attachments?: string[]
                 resume_payload?: {
                     action: 'approve' | 'reject'
                     proposal_id: string

@@ -997,6 +997,33 @@ describe('maxThreadLogic', () => {
             otherLogic.unmount()
         })
 
+        it('preserves attachment metadata in the optimistic human message', async () => {
+            const streamSpy = mockStream()
+            const attachments = [
+                {
+                    id: 'attachment-id',
+                    file_name: 'chart.png',
+                    content_type: 'image/png' as const,
+                    size: 3,
+                    width: 1,
+                    height: 1,
+                },
+            ]
+
+            await expectLogic(logic, () => {
+                logic.actions.askMax('', true, undefined, attachments)
+            })
+
+            expect(streamSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    content: '',
+                    attachments: ['attachment-id'],
+                }),
+                expect.any(Object)
+            )
+            expect((logic.values.threadRaw[0] as HumanMessage).attachments).toEqual(attachments)
+        })
+
         it('switches which thread processes askMax when activeThreadKey changes', async () => {
             const streamSpy = mockStream()
 

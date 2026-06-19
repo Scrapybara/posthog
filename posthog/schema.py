@@ -56,6 +56,7 @@ from posthog.schema_enums import (
     ChartDisplayType as ChartDisplayType,
     ColorMode as ColorMode,
     Compare as Compare,
+    ContentType as ContentType,
     ConversionRateInputType as ConversionRateInputType,
     CoreEventCategory as CoreEventCategory,
     CorrelationType as CorrelationType,
@@ -1499,6 +1500,18 @@ class HogQueryResponse(BaseModel):
     coloredBytecode: list | None = None
     results: Any
     stdout: str | None = None
+
+
+class HumanMessageAttachment(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    content_type: ContentType
+    file_name: str
+    height: float
+    id: str
+    size: float
+    width: float
 
 
 class InsightsThresholdBounds(BaseModel):
@@ -25499,6 +25512,7 @@ class HumanMessage(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    attachments: list[HumanMessageAttachment] | None = None
     content: str
     id: str | None = None
     parent_tool_call_id: str | None = None

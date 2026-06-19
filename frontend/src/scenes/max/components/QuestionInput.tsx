@@ -5,7 +5,7 @@ import { useActions, useValues } from 'kea'
 import posthog from 'posthog-js'
 import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 
-import { IconArrowRight, IconCheck, IconPencil, IconStopFilled, IconTrash, IconX } from '@posthog/icons'
+import { IconArrowRight, IconCheck, IconImage, IconPencil, IconStopFilled, IconTrash, IconX } from '@posthog/icons'
 import { LemonButton, LemonSwitch, LemonTextArea, Spinner } from '@posthog/lemon-ui'
 
 import { useFeatureFlag } from 'lib/hooks/useFeatureFlag'
@@ -163,9 +163,19 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
         queueingEnabled,
         queuedMessages,
         queueSubmitting,
+        pendingAttachments,
+        attachmentInputError,
     } = useValues(maxThreadLogic)
-    const { askMax, stopGeneration, completeThreadGeneration, setSupportOverrideEnabled, updateQueuedMessage } =
-        useActions(maxThreadLogic)
+    const {
+        askMax,
+        stopGeneration,
+        completeThreadGeneration,
+        setSupportOverrideEnabled,
+        updateQueuedMessage,
+        addPendingAttachments,
+        removePendingAttachment,
+        setAttachmentInputError,
+    } = useActions(maxThreadLogic)
     const { isActive: handsFreeActive } = useValues(handsFreeLogic({ panelId: maxPanelId }))
     // Only the hands-free row needs bottom-aligned pills — it has the mic + submit pair
     // pinned to the bottom and pills sitting in normal flow look misaligned next to them.
@@ -180,8 +190,12 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
     // user keeps typing a message that still starts with "/". "/" + Esc is a valid path.
     const [autocompleteDismissed, setAutocompleteDismissed] = useState(false)
     const [editingQueueId, setEditingQueueId] = useState<string | null>(null)
+    const [isDraggingImages, setIsDraggingImages] = useState(false)
+    const fileInputRef = useRef<HTMLInputElement | null>(null)
     const displayQueuedMessages = useMemo(() => [...queuedMessages].reverse(), [queuedMessages])
     const hasQuestion = question.trim().length > 0
+    const hasReadyAttachment = pendingAttachments.some((attachment) => attachment.status === 'ready')
+    const hasInput = hasQuestion || hasReadyAttachment
     const isQueueingSubmission = queueingEnabled && threadLoading && hasQuestion
     const showStopButton = threadLoading && !isQueueingSubmission
 
@@ -280,7 +294,76 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             '[--input-ring-size:2px]',
                             !streamingActive && '[--input-ring-color:var(--color-ai)]'
                         )}
+                        onDragEnter={(event) => {
+                            if (event.dataTransfer.types.includes('Files')) {
+                                event.preventDefault()
+                                setIsDraggingImages(true)
+                            }
+                        }}
+                        onDragOver={(event) => {
+                            if (event.dataTransfer.types.includes('Files')) {
+                                event.preventDefault()
+                            }
+                        }}
+                        onDragLeave={(event) => {
+                            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                                setIsDraggingImages(false)
+                            }
+                        }}
+                        onDrop={(event) => {
+                            event.preventDefault()
+                            setIsDraggingImages(false)
+                            addPendingAttachments(Array.from(event.dataTransfer.files))
+                        }}
                     >
+                        {isDraggingImages && (
+                            <div className="m-2 rounded border border-dashed border-ai bg-ai/5 p-3 text-center text-sm">
+                                Drop PNG or JPEG images here
+                            </div>
+                        )}
+                        {pendingAttachments.length > 0 && (
+                            <div className="flex flex-wrap gap-2 px-2 pt-2" aria-label="Image attachments">
+                                {pendingAttachments.map((attachment) => (
+                                    <div
+                                        key={attachment.localId}
+                                        className="relative size-16 overflow-hidden rounded border bg-surface-primary"
+                                    >
+                                        <img
+                                            src={attachment.previewUrl}
+                                            alt={attachment.fileName}
+                                            className={cn(
+                                                'size-full object-cover',
+                                                attachment.status === 'uploading' && 'opacity-50'
+                                            )}
+                                        />
+                                        {attachment.status === 'uploading' && (
+                                            <Spinner className="absolute inset-0 m-auto" size="small" />
+                                        )}
+                                        <LemonButton
+                                            type="tertiary"
+                                            size="xsmall"
+                                            icon={<IconX />}
+                                            aria-label={`Remove ${attachment.fileName}`}
+                                            className="absolute right-0 top-0 bg-surface-primary"
+                                            onClick={(event) => {
+                                                event.preventDefault()
+                                                removePendingAttachment(attachment.localId)
+                                            }}
+                                        />
+                                        {attachment.status === 'error' && (
+                                            <span className="absolute bottom-0 left-0 right-0 bg-danger px-1 text-center text-xs text-white">
+                                                Failed
+                                            </span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {attachmentInputError && (
+                            <div className="px-3 pt-2 text-xs text-danger" role="alert">
+                                {attachmentInputError}
+                            </div>
+                        )}
                         {handsFreeActive ? (
                             <HandsFreeSurface panelId={maxPanelId} />
                         ) : (
@@ -291,7 +374,20 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                     setAutocompleteDismissed(true)
                                 }}
                             >
-                                <div className="relative w-full">
+                                <div
+                                    className="relative w-full"
+                                    onPaste={(event: React.ClipboardEvent<HTMLDivElement>) => {
+                                        const imageFiles = Array.from(event.clipboardData.items)
+                                            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+                                            .flatMap((item) => {
+                                                const file = item.getAsFile()
+                                                return file ? [file] : []
+                                            })
+                                        if (imageFiles.length > 0) {
+                                            addPendingAttachments(imageFiles)
+                                        }
+                                    }}
+                                >
                                     {!question && (
                                         <div
                                             id="textarea-hint"
@@ -329,7 +425,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                         onChange={(value) => setQuestion(value)}
                                         onPressEnter={() => {
                                             if (
-                                                hasQuestion &&
+                                                hasInput &&
                                                 !submissionDisabledReason &&
                                                 (!threadLoading || queueingEnabled)
                                             ) {
@@ -411,6 +507,34 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             isThreadVisible ? 'bottom-[9px] right-[9px]' : 'bottom-[7px] right-[7px]'
                         )}
                     >
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg"
+                            multiple
+                            className="sr-only"
+                            aria-label="Choose PNG or JPEG images"
+                            onChange={(event) => {
+                                addPendingAttachments(Array.from(event.target.files ?? []))
+                                event.target.value = ''
+                            }}
+                        />
+                        {!handsFreeActive && (
+                            <LemonButton
+                                type="tertiary"
+                                size="xsmall"
+                                icon={<IconImage />}
+                                tooltip="Attach PNG or JPEG images"
+                                aria-label="Attach images"
+                                onClick={() => {
+                                    setAttachmentInputError(null)
+                                    fileInputRef.current?.click()
+                                }}
+                                disabledReason={
+                                    pendingAttachments.length >= 4 ? 'You can attach up to 4 images' : undefined
+                                }
+                            />
+                        )}
                         <HandsFreeButton panelId={maxPanelId} />
                         {!handsFreeActive && (
                             <AIConsentPopoverWrapper
@@ -428,7 +552,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             >
                                 <LemonButton
                                     data-attr={showStopButton ? 'max-stop-generation' : 'max-send-message'}
-                                    type={(isThreadVisible && !hasQuestion) || showStopButton ? 'secondary' : 'primary'}
+                                    type={(isThreadVisible && !hasInput) || showStopButton ? 'secondary' : 'primary'}
                                     onClick={() => {
                                         if (threadLoading) {
                                             if (isQueueingSubmission) {

@@ -16,6 +16,8 @@ import type {
     ComposeTicketApi,
     ComposeTicketResponseApi,
     ConversationApi,
+    ConversationAttachmentApi,
+    ConversationAttachmentUploadApi,
     ConversationsListParams,
     ConversationsTicketsListParams,
     ConversationsTicketsMessagesListParams,
@@ -155,6 +157,75 @@ export const conversationsAppendMessageCreate = async (
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
         body: JSON.stringify(messageMinimalApi),
+    })
+}
+
+export const getConversationsAttachmentsCreateUrl = (projectId: string, conversation: string) => {
+    return `/api/projects/${projectId}/conversations/${conversation}/attachments/`
+}
+
+/**
+ * Upload and sanitize a private PNG or JPEG attachment for this conversation.
+ */
+export const conversationsAttachmentsCreate = async (
+    projectId: string,
+    conversation: string,
+    conversationAttachmentUploadApi: ConversationAttachmentUploadApi,
+    options?: RequestInit
+): Promise<ConversationAttachmentApi> => {
+    const formData = new FormData()
+    formData.append(`image`, conversationAttachmentUploadApi.image)
+
+    return apiMutator<ConversationAttachmentApi>(getConversationsAttachmentsCreateUrl(projectId, conversation), {
+        ...options,
+        method: 'POST',
+        body: formData,
+    })
+}
+
+export const getConversationsAttachmentsDestroyUrl = (
+    projectId: string,
+    conversation: string,
+    attachmentId: string
+) => {
+    return `/api/projects/${projectId}/conversations/${conversation}/attachments/${attachmentId}/`
+}
+
+/**
+ * Delete a private conversation attachment.
+ */
+export const conversationsAttachmentsDestroy = async (
+    projectId: string,
+    conversation: string,
+    attachmentId: string,
+    options?: RequestInit
+): Promise<void> => {
+    return apiMutator<void>(getConversationsAttachmentsDestroyUrl(projectId, conversation, attachmentId), {
+        ...options,
+        method: 'DELETE',
+    })
+}
+
+export const getConversationsAttachmentsContentRetrieveUrl = (
+    projectId: string,
+    conversation: string,
+    attachmentId: string
+) => {
+    return `/api/projects/${projectId}/conversations/${conversation}/attachments/${attachmentId}/content/`
+}
+
+/**
+ * Read private attachment content scoped to the authenticated user, team, and conversation.
+ */
+export const conversationsAttachmentsContentRetrieve = async (
+    projectId: string,
+    conversation: string,
+    attachmentId: string,
+    options?: RequestInit
+): Promise<Blob> => {
+    return apiMutator<Blob>(getConversationsAttachmentsContentRetrieveUrl(projectId, conversation, attachmentId), {
+        ...options,
+        method: 'GET',
     })
 }
 

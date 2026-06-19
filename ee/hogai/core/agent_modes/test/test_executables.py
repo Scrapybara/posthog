@@ -183,6 +183,29 @@ class TestAgentNode(ClickhouseTestMixin, BaseTest):
             ],
         )
 
+    def test_node_reconstructs_multimodal_human_message_at_model_boundary(self):
+        node = _create_agent_node(self.team, self.user)
+        message = HumanMessage(content="Describe this")
+        image_block = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "cG5n"},
+        }
+        result = node._construct_messages(
+            [message],
+            attachment_blocks={id(message): [image_block]},
+        )
+        self.assertEqual(
+            result,
+            [
+                LangchainHumanMessage(
+                    content=[
+                        image_block,
+                        {"type": "text", "text": "Describe this", "cache_control": {"type": "ephemeral"}},
+                    ]
+                )
+            ],
+        )
+
     @patch(
         "ee.hogai.core.agent_modes.executables.AgentExecutable._get_model",
         return_value=FakeChatAnthropic(responses=[]),

@@ -84,6 +84,7 @@ rules:
                               |Cohort
                               |Comment
                               |Conversation
+                              |ConversationAttachment
                               |ConversationRestoreToken
                               |CoreMemory
                               |CustomerJourney
@@ -339,6 +340,7 @@ rules:
                         |Cohort
                         |Comment
                         |Conversation
+                        |ConversationAttachment
                         |ConversationRestoreToken
                         |CoreMemory
                         |CustomerJourney

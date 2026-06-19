@@ -18,7 +18,7 @@ import { router } from 'kea-router'
 import { subscriptions } from 'kea-subscriptions'
 import posthog from 'posthog-js'
 
-import api, { ApiError } from 'lib/api'
+import api, { ApiError, ConversationAttachment } from 'lib/api'
 import { JSONContent } from 'lib/components/RichContentEditor/types'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { dayjs } from 'lib/dayjs'
@@ -94,11 +94,23 @@ export const PENDING_AI_PROMPT_KEY = 'posthog_ai_pending_prompt'
 // dashboard context is included. Bounded so a stuck/failed load never blocks sending.
 export const MAX_DASHBOARD_CONTEXT_WAIT_MS = 8000
 const DASHBOARD_CONTEXT_POLL_INTERVAL_MS = 100
+export const MAX_CONVERSATION_ATTACHMENTS = 4
+export const MAX_CONVERSATION_ATTACHMENT_BYTES = 4 * 1024 * 1024
+export const ACCEPTED_CONVERSATION_ATTACHMENT_TYPES = ['image/png', 'image/jpeg'] as const
 
 export type MessageStatus = 'loading' | 'completed' | 'error'
 
 export type ThreadMessage = RootAssistantMessage & {
     status: MessageStatus
+}
+
+export type PendingConversationAttachment = {
+    localId: string
+    fileName: string
+    previewUrl: string
+    status: 'uploading' | 'ready' | 'error'
+    attachment?: ConversationAttachment
+    error?: string
 }
 
 const FAILURE_MESSAGE: FailureMessage & ThreadMessage = {
@@ -198,6 +210,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 contextual_tools?: Record<string, any>
                 ui_context?: any
                 resume_payload?: ResumePayload | null
+                attachments?: ConversationAttachment[]
             },
             generationAttempt: number,
             addToThread: boolean = true
@@ -281,6 +294,21 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         }),
         addPendingApprovalData: (approval: PendingApproval) => ({ approval }),
         loadPendingApprovalsData: (approvals: PendingApproval[]) => ({ approvals }),
+        addPendingAttachments: (files: File[]) => ({ files }),
+        startPendingAttachmentUpload: (attachment: PendingConversationAttachment, file: File) => ({
+            attachment,
+            file,
+        }),
+        pendingAttachmentUploadSuccess: (localId: string, attachment: ConversationAttachment) => ({
+            localId,
+            attachment,
+        }),
+        pendingAttachmentUploadFailure: (localId: string, error: string) => ({ localId, error }),
+        removePendingAttachment: (localId: string) => ({ localId }),
+        pendingAttachmentRemoved: (localId: string) => ({ localId }),
+        clearPendingAttachments: true,
+        pendingAttachmentsCleared: true,
+        setAttachmentInputError: (error: string | null) => ({ error }),
     }),
 
     reducers(({ props }) => ({
@@ -577,6 +605,30 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 resetThread: () => [],
             },
         ],
+        pendingAttachments: [
+            [] as PendingConversationAttachment[],
+            {
+                startPendingAttachmentUpload: (state, { attachment }) => [...state, attachment],
+                pendingAttachmentUploadSuccess: (state, { localId, attachment }) =>
+                    state.map((item) =>
+                        item.localId === localId ? { ...item, status: 'ready' as const, attachment } : item
+                    ),
+                pendingAttachmentUploadFailure: (state, { localId, error }) =>
+                    state.map((item) =>
+                        item.localId === localId ? { ...item, status: 'error' as const, error } : item
+                    ),
+                pendingAttachmentRemoved: (state, { localId }) => state.filter((item) => item.localId !== localId),
+                pendingAttachmentsCleared: () => [],
+            },
+        ],
+        attachmentInputError: [
+            null as string | null,
+            {
+                setAttachmentInputError: (_, { error }) => error,
+                addPendingAttachments: () => null,
+                pendingAttachmentsCleared: () => null,
+            },
+        ],
     })),
 
     loaders(({ values }) => ({
@@ -624,10 +676,16 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
             const traceId = uuid()
             actions.setTraceId(traceId)
 
-            if (generationAttempt === 0 && streamData.content && addToThread) {
+            if (
+                generationAttempt === 0 &&
+                streamData.content !== null &&
+                (streamData.content.length > 0 || (streamData.attachments?.length ?? 0) > 0) &&
+                addToThread
+            ) {
                 const message: ThreadMessage = {
                     type: AssistantMessageType.Human,
                     content: streamData.content,
+                    ...(streamData.attachments?.length ? { attachments: streamData.attachments } : {}),
                     status: 'completed',
                     trace_id: traceId,
                 }
@@ -643,6 +701,9 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 // Ensure we have valid data for the API call
                 const apiData: any = { ...streamData }
                 apiData.trace_id = traceId
+                if (streamData.attachments) {
+                    apiData.attachments = streamData.attachments.map((attachment) => attachment.id)
+                }
 
                 if (values.billingContext && values.featureFlags[FEATURE_FLAGS.MAX_BILLING_CONTEXT]) {
                     apiData.billing_context = values.billingContext
@@ -1003,7 +1064,88 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 actions.clearQueuedMessages()
             }
         },
-        askMax: async ({ prompt, addToThread = true, uiContext }, breakpoint) => {
+        addPendingAttachments: ({ files }) => {
+            if (values.agentMode === AgentMode.Research) {
+                actions.setAttachmentInputError('Images are not supported in Research mode.')
+                return
+            }
+            if (values.isSandboxMode) {
+                actions.setAttachmentInputError('Images are not supported in Sandbox mode.')
+                return
+            }
+
+            let availableSlots = MAX_CONVERSATION_ATTACHMENTS - values.pendingAttachments.length
+            if (files.length > availableSlots) {
+                actions.setAttachmentInputError(`You can attach up to ${MAX_CONVERSATION_ATTACHMENTS} images.`)
+            }
+            for (const file of files) {
+                if (availableSlots <= 0) {
+                    break
+                }
+                if (!ACCEPTED_CONVERSATION_ATTACHMENT_TYPES.includes(file.type as 'image/png' | 'image/jpeg')) {
+                    actions.setAttachmentInputError('Only PNG and JPEG images are supported.')
+                    continue
+                }
+                if (file.size > MAX_CONVERSATION_ATTACHMENT_BYTES) {
+                    actions.setAttachmentInputError('Images must be 4 MiB or smaller.')
+                    continue
+                }
+                const localId = uuid()
+                const previewUrl = URL.createObjectURL(file)
+                cache.disposables.add(() => () => URL.revokeObjectURL(previewUrl), `attachment-preview-${localId}`, {
+                    pauseOnPageHidden: false,
+                })
+                actions.startPendingAttachmentUpload(
+                    {
+                        localId,
+                        fileName: file.name,
+                        previewUrl,
+                        status: 'uploading',
+                    },
+                    file
+                )
+                availableSlots -= 1
+            }
+        },
+        startPendingAttachmentUpload: async ({ attachment, file }) => {
+            try {
+                const uploadedAttachment = await api.conversations.attachments.upload(values.conversationId, file)
+                if (!values.pendingAttachments.some((item) => item.localId === attachment.localId)) {
+                    await api.conversations.attachments.delete(values.conversationId, uploadedAttachment.id)
+                    return
+                }
+                actions.pendingAttachmentUploadSuccess(attachment.localId, uploadedAttachment)
+            } catch (error: any) {
+                posthog.captureException(error)
+                actions.pendingAttachmentUploadFailure(
+                    attachment.localId,
+                    error?.data?.image?.[0] || error?.data?.detail || 'Failed to upload image.'
+                )
+            }
+        },
+        removePendingAttachment: async ({ localId }) => {
+            const pendingAttachment = values.pendingAttachments.find((item) => item.localId === localId)
+            if (!pendingAttachment) {
+                return
+            }
+            cache.disposables.dispose(`attachment-preview-${localId}`)
+            actions.pendingAttachmentRemoved(localId)
+            if (pendingAttachment.attachment) {
+                try {
+                    await api.conversations.attachments.delete(values.conversationId, pendingAttachment.attachment.id)
+                } catch (error) {
+                    posthog.captureException(error)
+                    lemonToast.error('Failed to delete image attachment.')
+                }
+            }
+        },
+        clearPendingAttachments: () => {
+            for (const attachment of values.pendingAttachments) {
+                cache.disposables.dispose(`attachment-preview-${attachment.localId}`)
+            }
+            actions.pendingAttachmentsCleared()
+        },
+        askMax: async ({ prompt, addToThread = true, uiContext, attachments: retryAttachments }, breakpoint) => {
             // Only process if this thread is the currently active one
             if (values.conversationId !== values.activeThreadKey) {
                 return
@@ -1059,20 +1201,45 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                 values.billingContext && values.featureFlags[FEATURE_FLAGS.MAX_BILLING_CONTEXT]
                     ? values.billingContext
                     : undefined
+            const attachments =
+                retryAttachments ??
+                values.pendingAttachments.flatMap((item) =>
+                    item.status === 'ready' && item.attachment ? [item.attachment] : []
+                )
+
+            if (values.pendingAttachments.some((item) => item.status === 'uploading')) {
+                actions.setAttachmentInputError('Wait for images to finish uploading.')
+                return
+            }
+            if (values.pendingAttachments.some((item) => item.status === 'error')) {
+                actions.setAttachmentInputError('Remove failed images before sending.')
+                return
+            }
+            if (attachments.length > 0 && values.agentMode === AgentMode.Research) {
+                actions.setAttachmentInputError('Images are not supported in Research mode.')
+                return
+            }
+            if (attachments.length > 0 && values.isSandboxMode) {
+                actions.setAttachmentInputError('Images are not supported in Sandbox mode.')
+                return
+            }
 
             if (
                 values.queueingEnabled &&
                 values.threadLoading &&
                 addToThread &&
-                typeof prompt === 'string' &&
-                prompt.trim() !== ''
+                ((typeof prompt === 'string' && prompt.trim() !== '') || attachments.length > 0)
             ) {
+                if (attachments.length > 0) {
+                    actions.setAttachmentInputError('Images cannot be added to queued messages.')
+                    return
+                }
                 if (values.queueIsFull) {
                     lemonToast.error('You can only queue two messages at a time.')
                     return
                 }
                 actions.enqueueQueuedMessage({
-                    content: prompt,
+                    content: prompt ?? '',
                     contextualTools,
                     uiContext: mergedUiContext,
                     billingContext,
@@ -1129,6 +1296,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
 
             // Clear the question
             actions.setQuestion('')
+            actions.clearPendingAttachments()
             // Drop #panel=max:… options so reload doesn't re-run auto-send from the hash
             if (props.panelId === SIDE_PANEL_PANEL_ID && sidePanelStateLogic.isMounted()) {
                 sidePanelStateLogic.actions.setSidePanelOptions(null)
@@ -1159,6 +1327,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
                     conversation: values.conversation?.id || values.conversationId,
                     // Include auto-rejection payload if there was a pending approval
                     resume_payload: autoRejectPayload,
+                    attachments,
                 },
                 0,
                 addToThread
@@ -1211,7 +1380,7 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         retryLastMessage: () => {
             const lastMessage = values.threadRaw.filter(isHumanMessage).pop() as HumanMessage | undefined
             if (lastMessage) {
-                actions.askMax(lastMessage.content)
+                actions.askMax(lastMessage.content, true, undefined, lastMessage.attachments)
             }
         },
 
@@ -1720,14 +1889,44 @@ export const maxThreadLogic = kea<maxThreadLogicType>([
         ],
 
         submissionDisabledReason: [
-            (s) => [s.contextDisabledReason, s.question, s.queueDisabledReason],
-            (contextDisabledReason, question, queueDisabledReason): string | undefined => {
+            (s) => [
+                s.contextDisabledReason,
+                s.question,
+                s.queueDisabledReason,
+                s.pendingAttachments,
+                s.agentMode,
+                s.isSandboxMode,
+            ],
+            (
+                contextDisabledReason,
+                question,
+                queueDisabledReason,
+                pendingAttachments,
+                agentMode,
+                isSandboxMode
+            ): string | undefined => {
                 // Context-related reasons take precedence (form pending, streaming, etc.)
                 if (contextDisabledReason) {
                     return contextDisabledReason
                 }
 
-                if (!question) {
+                if (pendingAttachments.some((attachment) => attachment.status === 'uploading')) {
+                    return 'Wait for images to finish uploading'
+                }
+
+                if (pendingAttachments.some((attachment) => attachment.status === 'error')) {
+                    return 'Remove failed images before sending'
+                }
+
+                if (pendingAttachments.length > 0 && agentMode === AgentMode.Research) {
+                    return 'Images are not supported in Research mode'
+                }
+
+                if (pendingAttachments.length > 0 && isSandboxMode) {
+                    return 'Images are not supported in Sandbox mode'
+                }
+
+                if (!question && pendingAttachments.length === 0) {
                     return 'I need some input first'
                 }
 

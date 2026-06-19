@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeVar, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from django.conf import settings
 
@@ -34,6 +34,8 @@ from posthog.schema import (
 from posthog.event_usage import groups
 from posthog.models import Team, User
 from posthog.sync import database_sync_to_async
+
+from products.posthog_ai.backend.attachments import load_attachment_blocks
 
 from ee.hogai.core.agent_modes.prompt_builder import AgentPromptBuilder
 from ee.hogai.core.agent_modes.prompts import (
@@ -145,8 +147,27 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
             messages_to_replace = updated_messages
 
         # Calculate the initial window.
+        conversation_messages = messages_to_replace or state.messages
+        configurable = config.get("configurable") or {}
+        conversation_id = configurable.get("thread_id")
+        human_messages_with_attachments = [
+            message for message in conversation_messages if isinstance(message, HumanMessage) and message.attachments
+        ]
+        attachment_blocks = {}
+        if human_messages_with_attachments:
+            if not conversation_id:
+                raise ValueError("Conversation ID is required to hydrate attachments.")
+            attachment_blocks = await load_attachment_blocks(
+                human_messages_with_attachments,
+                team_id=self._team.id,
+                creator_id=self._user.id,
+                conversation_id=UUID(str(conversation_id)),
+            )
         langchain_messages = self._construct_messages(
-            messages_to_replace or state.messages, state.root_conversation_start_id, state.root_tool_calls_count
+            conversation_messages,
+            state.root_conversation_start_id,
+            state.root_tool_calls_count,
+            attachment_blocks=attachment_blocks,
         )
         window_id = state.root_conversation_start_id
         start_id = state.start_id
@@ -181,7 +202,22 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
             messages_to_replace = insertion_result.messages
 
             # Update the window
-            langchain_messages = self._construct_messages(messages_to_replace, window_id, state.root_tool_calls_count)
+            attachment_blocks = await load_attachment_blocks(
+                [
+                    message
+                    for message in messages_to_replace
+                    if isinstance(message, HumanMessage) and message.attachments
+                ],
+                team_id=self._team.id,
+                creator_id=self._user.id,
+                conversation_id=UUID(str(conversation_id)),
+            )
+            langchain_messages = self._construct_messages(
+                messages_to_replace,
+                window_id,
+                state.root_tool_calls_count,
+                attachment_blocks=attachment_blocks,
+            )
 
         system_prompts = cast(list[BaseMessage], system_prompts)
         assert len(system_prompts) > 0
@@ -314,6 +350,7 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
         messages: Sequence[AssistantMessageUnion],
         window_start_id: str | None = None,
         tool_calls_count: int | None = None,
+        attachment_blocks: Mapping[int, list[dict[str, Any]]] | None = None,
     ) -> list[BaseMessage]:
         conversation_window = self._window_manager.get_messages_in_window(messages, window_start_id)
 
@@ -321,7 +358,9 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
         tool_result_messages = self._get_tool_map(conversation_window)
 
         # Convert to Anthropic messages
-        history = self._convert_to_langchain_messages(conversation_window, tool_result_messages)
+        history = self._convert_to_langchain_messages(
+            conversation_window, tool_result_messages, attachment_blocks=attachment_blocks
+        )
 
         # Force the agent to stop if the tool call limit is reached.
         history = self._add_limit_message_if_reached(history, tool_calls_count)
@@ -359,9 +398,10 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
         self,
         messages: Sequence[AssistantMessageUnion],
         tool_result_messages: Mapping[str, AssistantToolCallMessage],
+        attachment_blocks: Mapping[int, list[dict[str, Any]]] | None = None,
     ) -> list[BaseMessage]:
         """Convert a conversation window to a list of Langchain messages."""
-        return convert_to_anthropic_messages(messages, tool_result_messages)
+        return convert_to_anthropic_messages(messages, tool_result_messages, attachment_blocks)
 
     def _add_cache_control_to_last_message(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """Add cache control to the last message."""

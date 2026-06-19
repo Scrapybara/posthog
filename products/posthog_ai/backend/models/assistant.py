@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.db import IntegrityError, models
 from django.utils import timezone
 
+from posthog.models.scoping.root_mixin import TeamScopedRootMixin
 from posthog.models.team.team import Team
 from posthog.models.user import User
 from posthog.models.utils import CreatedMetaFields, DeletedMetaFields, UpdatedMetaFields, UUIDModel, UUIDTModel
@@ -116,6 +117,24 @@ class Conversation(UUIDTModel, DeletedMetaFields):
         blank=True,
         help_text="Permanent link to current TaskRun for sandbox conversations.",
     )
+
+
+class ConversationAttachment(TeamScopedRootMixin, UUIDTModel):
+    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    creator = models.ForeignKey(User, on_delete=models.CASCADE)
+    conversation_id = models.UUIDField()
+    file_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=32)
+    size = models.PositiveIntegerField()
+    width = models.PositiveIntegerField()
+    height = models.PositiveIntegerField()
+    object_path = models.CharField(max_length=255, unique=True)
+
+    class Meta:
+        db_table = "ee_conversationattachment"
+        indexes = [
+            models.Index(fields=["team", "creator", "conversation_id"]),
+        ]
 
 
 class ConversationCheckpoint(UUIDTModel):

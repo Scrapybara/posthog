@@ -140,7 +140,7 @@ export const definitionLogic = kea<definitionLogicType>([
                         return { count: 0, results: [] }
                     }
 
-return await propertyDefinitionsEventsRetrieve(String(values.currentProjectId), String(id), {
+                    return await propertyDefinitionsEventsRetrieve(String(values.currentProjectId), String(id), {
                         limit: PROPERTY_USAGE_EVENTS_PER_PAGE,
                         offset: (page - 1) * PROPERTY_USAGE_EVENTS_PER_PAGE,
                     })

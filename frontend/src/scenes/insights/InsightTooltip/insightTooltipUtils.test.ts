@@ -1,4 +1,4 @@
-import { getFormattedDate } from 'scenes/insights/InsightTooltip/insightTooltipUtils'
+import { formatCompareLabelWithDate, getFormattedDate } from 'scenes/insights/InsightTooltip/insightTooltipUtils'
 
 import { IntervalType } from '~/types'
 
@@ -155,5 +155,15 @@ describe('getFormattedDate', () => {
         it('expects undefined string if no inputs', () => {
             expect(getFormattedDate()).toEqual('undefined')
         })
+    })
+})
+
+describe('formatCompareLabelWithDate', () => {
+    it('appends the actual period date when present', () => {
+        expect(formatCompareLabelWithDate('previous', '3 Jun 2024')).toBe('Previous (3 Jun 2024)')
+    })
+
+    it('keeps the existing label when no date is available', () => {
+        expect(formatCompareLabelWithDate('previous')).toBe('Previous')
     })
 })

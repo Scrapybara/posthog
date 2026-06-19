@@ -1,11 +1,20 @@
 import { TooltipItem } from 'lib/Chart'
-import { SeriesDatum } from 'scenes/insights/InsightTooltip/insightTooltipUtils'
+import { getFormattedDate, SeriesDatum } from 'scenes/insights/InsightTooltip/insightTooltipUtils'
 
-import { GraphDataset } from '~/types'
+import { DateRange } from '~/queries/schema/schema-general'
+import { GraphDataset, IntervalType } from '~/types'
+
+export interface TooltipDataOptions {
+    interval?: IntervalType | null
+    dateRange?: DateRange | null
+    timezone?: string
+    weekStartDay?: number
+}
 
 export function createTooltipData(
     tooltipDataPoints: TooltipItem<any>[],
-    filterFn?: (s: SeriesDatum) => boolean
+    filterFn?: (s: SeriesDatum) => boolean,
+    options?: TooltipDataOptions
 ): SeriesDatum[] {
     if (!tooltipDataPoints) {
         return []
@@ -13,6 +22,16 @@ export function createTooltipData(
     let data = tooltipDataPoints
         .map((dp, idx) => {
             const pointDataset = (dp?.dataset ?? {}) as GraphDataset
+            const date = pointDataset?.days?.[dp.dataIndex]
+            const dateLabel =
+                typeof date === 'string'
+                    ? getFormattedDate(date, {
+                          interval: options?.interval,
+                          dateRange: options?.dateRange,
+                          timezone: options?.timezone,
+                          weekStartDay: options?.weekStartDay,
+                      })
+                    : (pointDataset?.labels?.[dp.dataIndex] ?? undefined)
             return {
                 id: idx,
                 dataIndex: dp.dataIndex,
@@ -27,7 +46,7 @@ export function createTooltipData(
                 compare_label: pointDataset?.compare_label ?? pointDataset?.compareLabels?.[dp.dataIndex] ?? undefined,
                 action: pointDataset?.action ?? pointDataset?.actions?.[dp.dataIndex] ?? undefined,
                 label: pointDataset?.label ?? pointDataset.labels?.[dp.dataIndex] ?? undefined,
-                date_label: pointDataset?.labels?.[dp.dataIndex] ?? undefined,
+                date_label: dateLabel,
                 order: pointDataset?.order ?? 0,
                 color: Array.isArray(pointDataset.borderColor)
                     ? pointDataset.borderColor?.[dp.dataIndex]

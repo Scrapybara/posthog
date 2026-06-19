@@ -13,6 +13,7 @@ of one query per account, so the accounts list stays free of N+1 queries.
 """
 
 from collections.abc import Iterable
+from copy import deepcopy
 from datetime import datetime, timedelta
 from functools import cached_property
 from zoneinfo import ZoneInfo
@@ -356,8 +357,8 @@ class AccountHealthScorer:
         current_condition: ast.Expr,
         previous_condition: ast.Expr,
     ) -> tuple[ast.Expr, ast.Expr]:
-        current_cond = ast.And(exprs=[filter_expr, current_condition])
-        previous_cond = ast.And(exprs=[filter_expr, previous_condition])
+        current_cond = ast.And(exprs=[deepcopy(filter_expr), deepcopy(current_condition)])
+        previous_cond = ast.And(exprs=[deepcopy(filter_expr), deepcopy(previous_condition)])
 
         if metric.math == GroupUsageMetric.Math.SUM:
             if metric.is_data_warehouse:

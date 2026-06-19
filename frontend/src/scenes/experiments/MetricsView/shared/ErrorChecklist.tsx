@@ -40,14 +40,15 @@ function ChecklistItem({
     variants,
     getInsightType,
 }: ChecklistItemProps): JSX.Element {
+    const baselineVariantKey = experiment.stats_config?.baseline_variant_key ?? 'control'
     const failureText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant not received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: `Events with the baseline variant (${baselineVariantKey}) not received`,
         [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant not received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events not received',
     }
 
     const successText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: `Events with the baseline variant (${baselineVariantKey}) received`,
         [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events have been received',
     }
@@ -77,8 +78,10 @@ function ChecklistItem({
                     value: hasMissingExposure
                         ? variants.map((variant) => variant.key)
                         : errorCode === ResultErrorCode.NO_CONTROL_VARIANT
-                          ? ['control']
-                          : variants.slice(1).map((variant) => variant.key),
+                          ? [baselineVariantKey]
+                          : variants
+                                .filter((variant) => variant.key !== baselineVariantKey)
+                                .map((variant) => variant.key),
                     operator: 'exact',
                     type: 'event',
                 },

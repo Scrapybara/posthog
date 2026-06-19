@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import cast
 
 from posthog.test.base import APIBaseTest
@@ -6,15 +7,21 @@ from parameterized import parameterized
 
 from posthog.schema import (
     EventsNode,
+    ExperimentFunnelsQuery,
     ExperimentMeanMetric,
     ExperimentMetricMathType,
     ExperimentQuery,
     ExperimentStatsBase,
+    ExperimentTrendsQuery,
     ExperimentVariantResultBayesian,
     ExperimentVariantResultFrequentist,
+    FunnelsQuery,
+    TrendsQuery,
 )
 
+from products.experiments.backend.hogql_queries.experiment_funnels_query_runner import ExperimentFunnelsQueryRunner
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
+from products.experiments.backend.hogql_queries.experiment_trends_query_runner import ExperimentTrendsQueryRunner
 from products.experiments.backend.hogql_queries.utils import (
     get_bayesian_experiment_result,
     get_frequentist_experiment_result,
@@ -399,6 +406,106 @@ class TestStatsConfig(APIBaseTest):
         runner = ExperimentQueryRunner(query=query, team=self.team)
 
         self.assertEqual(runner.baseline_variant_key, expected_baseline)
+
+    def test_legacy_trends_query_runner_uses_configured_baseline(self):
+        feature_flag = FeatureFlag.objects.create(
+            name="Test flag",
+            key="test-flag",
+            team=self.team,
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": None}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "control", "name": "Control", "rollout_percentage": 50},
+                        {"key": "test", "name": "Test", "rollout_percentage": 50},
+                    ]
+                },
+            },
+            created_by=self.user,
+        )
+        experiment = Experiment.objects.create(
+            name="test-experiment",
+            team=self.team,
+            feature_flag=feature_flag,
+            stats_config={"baseline_variant_key": "test"},
+        )
+
+        runner = ExperimentTrendsQueryRunner(
+            query=ExperimentTrendsQuery(
+                experiment_id=experiment.id,
+                kind="ExperimentTrendsQuery",
+                count_query=TrendsQuery(series=[EventsNode(event="$pageview")]),
+            ),
+            team=self.team,
+        )
+        baseline, variants = runner._get_variants_with_base_stats(
+            count_results=SimpleNamespace(
+                results=[
+                    {"breakdown_value": "control", "count": 10},
+                    {"breakdown_value": "test", "count": 20},
+                ]
+            ),
+            exposure_results=SimpleNamespace(
+                results=[
+                    {"breakdown_value": "control", "count": 100},
+                    {"breakdown_value": "test", "count": 200},
+                ]
+            ),
+        )
+
+        self.assertEqual(baseline.key, "test")
+        self.assertEqual([variant.key for variant in variants], ["control"])
+        self.assertEqual(variants[0].exposure, 0.5)
+
+    def test_legacy_funnels_query_runner_uses_configured_baseline(self):
+        feature_flag = FeatureFlag.objects.create(
+            name="Test flag",
+            key="test-flag",
+            team=self.team,
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": None}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "control", "name": "Control", "rollout_percentage": 50},
+                        {"key": "test", "name": "Test", "rollout_percentage": 50},
+                    ]
+                },
+            },
+            created_by=self.user,
+        )
+        experiment = Experiment.objects.create(
+            name="test-experiment",
+            team=self.team,
+            feature_flag=feature_flag,
+            stats_config={"baseline_variant_key": "test"},
+        )
+
+        runner = ExperimentFunnelsQueryRunner(
+            query=ExperimentFunnelsQuery(
+                experiment_id=experiment.id,
+                kind="ExperimentFunnelsQuery",
+                funnels_query=FunnelsQuery(series=[EventsNode(event="$pageview"), EventsNode(event="purchase")]),
+            ),
+            team=self.team,
+        )
+        baseline, variants = runner._get_variants_with_base_stats(
+            SimpleNamespace(
+                results=[
+                    [
+                        {"breakdown_value": ["control"], "count": 10},
+                        {"breakdown_value": ["control"], "count": 4},
+                    ],
+                    [
+                        {"breakdown_value": ["test"], "count": 20},
+                        {"breakdown_value": ["test"], "count": 12},
+                    ],
+                ]
+            )
+        )
+
+        self.assertEqual(baseline.key, "test")
+        self.assertEqual(baseline.success_count, 12)
+        self.assertEqual([variant.key for variant in variants], ["control"])
 
 
 class TestSequentialStatsConfig(APIBaseTest):

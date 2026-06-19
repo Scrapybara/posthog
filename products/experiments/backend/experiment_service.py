@@ -2546,7 +2546,7 @@ class ExperimentService:
                         Value(""),
                         output_field=CharField(),
                     )
-                ).order_by(order_expression)
+                ).order_by(order_expression, "-created_at", "id")
             elif order_value in ["conclusion", "-conclusion"]:
                 conclusion_sort_key = Case(
                     *[
@@ -2559,7 +2559,9 @@ class ExperimentService:
                 order_expression = (
                     F("conclusion_sort_key").desc() if order_value.startswith("-") else F("conclusion_sort_key").asc()
                 )
-                queryset = queryset.annotate(conclusion_sort_key=conclusion_sort_key).order_by(order_expression)
+                queryset = queryset.annotate(conclusion_sort_key=conclusion_sort_key).order_by(
+                    order_expression, "-created_at", "id"
+                )
             else:
                 queryset = queryset.order_by(order_value)
         else:

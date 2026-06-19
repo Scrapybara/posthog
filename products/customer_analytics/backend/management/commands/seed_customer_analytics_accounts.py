@@ -33,7 +33,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from posthog.clickhouse.client import sync_execute
 from posthog.models import Group, OrganizationMembership, Team, User
+from posthog.models.event.sql import EVENTS_DATA_TABLE
 from posthog.models.event.util import create_event
 from posthog.models.group_usage_metric import GroupUsageMetric
 from posthog.models.scoping import team_scope
@@ -60,8 +62,8 @@ HEALTH_DEMO_INTERVAL_DAYS = 7
 # the first external-id account retains 9/10 (healthy ~90) and the second retains 2/10 (at risk ~20)
 # on both factors.
 HEALTH_DEMO_METRICS: list[tuple[str, str]] = [
-    ("Events ingested", "demo_health_event_ingested"),
-    ("Active users", "demo_health_active_user"),
+    ("Customer analytics demo: Events ingested", "demo_health_event_ingested"),
+    ("Customer analytics demo: Active users", "demo_health_active_user"),
 ]
 # (current_period_count, previous_period_count) per account, indexed by account position.
 HEALTH_DEMO_COUNTS: list[tuple[int, int]] = [(9, 10), (2, 10)]
@@ -287,7 +289,7 @@ class Command(BaseCommand):
     ) -> int:
         group_property = f"$group_{ACCOUNT_GROUP_TYPE_INDEX}"
         for i in range(count):
-            # uuid5 over a stable name makes re-runs idempotent (same UUID overwrites, never duplicates).
+            # Keep identifiers deterministic so this fixture is reproducible after its prior rows are cleared.
             event_uuid = uuid.uuid5(HEALTH_DEMO_UUID_NAMESPACE, f"{team.id}:{external_id}:{event_name}:{period}:{i}")
             create_event(
                 event_uuid=event_uuid,
@@ -300,6 +302,7 @@ class Command(BaseCommand):
         return count
 
     def _create_health_demo(self, team: Team, accounts: list[Account]) -> None:
+        self._clear_health_demo_events(team)
         metrics = self._ensure_health_demo_metrics(team)
         # Only accounts with an external id can carry group-attributed events.
         demo_accounts = [account for account in accounts if account.external_id][: len(HEALTH_DEMO_COUNTS)]
@@ -324,6 +327,18 @@ class Command(BaseCommand):
         self.stdout.write(
             f"Defined/updated {len(metrics)} demo usage metric(s) and queued {created} event(s) "
             f"across {len(demo_accounts)} account(s) for the Health column."
+        )
+
+    def _clear_health_demo_events(self, team: Team) -> None:
+        # Stable UUIDs alone are insufficient because the events table key also includes the event
+        # date. Remove this seeder's namespaced events before recreating rolling-window fixtures.
+        sync_execute(
+            f"ALTER TABLE {EVENTS_DATA_TABLE()} DELETE WHERE team_id = %(team_id)s "
+            "AND event IN %(event_names)s SETTINGS mutations_sync=1",
+            {
+                "team_id": team.id,
+                "event_names": tuple(event_name for _, event_name in HEALTH_DEMO_METRICS),
+            },
         )
 
 

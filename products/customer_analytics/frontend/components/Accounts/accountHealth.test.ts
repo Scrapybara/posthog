@@ -1,4 +1,4 @@
-import { AccountHealthStatus } from '~/queries/schema/schema-general'
+import type { AccountHealthStatus } from '~/queries/schema/schema-general'
 
 import { healthScoreColor, healthStatusTagType, parseAccountHealth } from './accountHealth'
 
@@ -108,11 +108,11 @@ describe('accountHealth', () => {
 
     describe('healthScoreColor', () => {
         it('buckets scores by threshold and handles null', () => {
-            expect(healthScoreColor(90)).toBe('var(--color-success)')
-            expect(healthScoreColor(80)).toBe('var(--color-success)')
-            expect(healthScoreColor(60)).toBe('var(--color-warning)')
-            expect(healthScoreColor(50)).toBe('var(--color-warning)')
-            expect(healthScoreColor(20)).toBe('var(--color-danger)')
+            expect(healthScoreColor(90)).toBe('var(--success)')
+            expect(healthScoreColor(80)).toBe('var(--success)')
+            expect(healthScoreColor(60)).toBe('var(--warning)')
+            expect(healthScoreColor(50)).toBe('var(--warning)')
+            expect(healthScoreColor(20)).toBe('var(--danger)')
             expect(healthScoreColor(null)).toBe('var(--color-text-tertiary)')
         })
     })

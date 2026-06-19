@@ -253,6 +253,12 @@ describe('accountsLogic', () => {
             logic.actions.toggleSort('name')
             expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['name DESC'])
         })
+
+        it('ignores attempts to sort by the synthetic health column', () => {
+            logic.actions.toggleSort(ACCOUNTS_HEALTH_COLUMN)
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
+        })
     })
 
     describe('selectColumns', () => {
@@ -347,6 +353,18 @@ describe('accountsLogic', () => {
             expect(logic.values.assignedToFilter).toEqual([7])
             expect(logic.values.sortOrder).toEqual({ column: 'name', direction: 'desc' })
             expect(logic.values.tileFilter).toEqual(tileFilter)
+        })
+
+        it('drops a legacy sort that collides with the synthetic health column', async () => {
+            router.actions.push(
+                urls.customerAnalyticsAccounts(),
+                {},
+                { view: { sort: { column: ACCOUNTS_HEALTH_COLUMN, direction: 'desc' } } }
+            )
+            await expectLogic(logic).toFinishAllListeners()
+
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
         })
 
         it('coerces a malformed scalar assignedTo from the view hash into an array', async () => {

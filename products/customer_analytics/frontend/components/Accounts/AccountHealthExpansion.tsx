@@ -77,7 +77,7 @@ function NoHealthData(): JSX.Element {
 }
 
 export function AccountHealthExpansion({ health }: { health: AccountHealthScore | null }): JSX.Element {
-    if (!health || health.status === 'no_data') {
+    if (!health || (health.status === 'no_data' && health.factors.length === 0)) {
         return <NoHealthData />
     }
 

@@ -771,3 +771,33 @@ class TestAccountsQueryRunnerHealth(ClickhouseTestMixin, NonAtomicBaseTest):
             query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
         ).get_cache_key()
         assert key_before != key_after
+
+    def test_cache_key_changes_when_usage_metric_is_renamed(self):
+        self._configure()
+        metric = self._metric("Events ingested", "ev_a")
+        key_before = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+
+        metric.name = "Renamed events"
+        metric.save(update_fields=["name"])
+
+        key_after = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"]), team=self.team, user=self.user
+        ).get_cache_key()
+        assert key_before != key_after
+
+    def test_ordering_by_synthetic_health_column_falls_back_to_default(self):
+        older = create_account(team_id=self.team.id, name="Older")
+        newer = create_account(team_id=self.team.id, name="Newer")
+
+        runner = AccountsQueryRunner(
+            query=AccountsQuery(select=["name", "health_score"], orderBy=["health_score DESC"]),
+            team=self.team,
+            user=self.user,
+        )
+        response = runner.calculate()
+        name_idx = runner.columns.index("name")
+        ids = [row[name_idx]["id"] for row in response.results]
+
+        assert ids == [str(newer.id), str(older.id)]

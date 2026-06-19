@@ -119,12 +119,19 @@ class TestSeedCustomerAnalyticsAccounts(BaseTest):
         self._make_group("globex-id", "Globex")
         self._make_group("initech-id", "Initech")
 
-        with patch(f"{SEED_MODULE}.create_event") as create_event:
+        with (
+            patch(f"{SEED_MODULE}.create_event") as create_event,
+            patch(f"{SEED_MODULE}.sync_execute") as sync_execute,
+        ):
             self._run(users=2, accounts_with_notes=0, with_health_demo=True)
 
         metrics = GroupUsageMetric.objects.filter(team=self.team).order_by("name")
-        assert [m.name for m in metrics] == ["Active users", "Events ingested"]
+        assert [m.name for m in metrics] == [
+            "Customer analytics demo: Active users",
+            "Customer analytics demo: Events ingested",
+        ]
         assert all(m.interval == 7 and m.math == GroupUsageMetric.Math.COUNT for m in metrics)
+        sync_execute.assert_called_once()
 
         # Two metrics × first two external-id accounts: (9+10)+(2+10) totals = 31 per metric → 62.
         assert create_event.call_count == 62
@@ -133,11 +140,33 @@ class TestSeedCustomerAnalyticsAccounts(BaseTest):
         self._make_group("acme-id", "Acme")
         self._make_group("globex-id", "Globex")
 
-        with patch(f"{SEED_MODULE}.create_event"):
+        with patch(f"{SEED_MODULE}.create_event"), patch(f"{SEED_MODULE}.sync_execute") as sync_execute:
             self._run(users=2, accounts_with_notes=0, with_health_demo=True)
             self._run(users=2, accounts_with_notes=0, with_health_demo=True)
 
         assert GroupUsageMetric.objects.filter(team=self.team).count() == 2
+        assert sync_execute.call_count == 2
+
+    def test_health_demo_does_not_overwrite_existing_metrics(self):
+        self._make_group("acme-id", "Acme")
+        self._make_group("globex-id", "Globex")
+        existing = GroupUsageMetric.objects.create(
+            team=self.team,
+            group_type_index=0,
+            name="Events ingested",
+            interval=30,
+            math=GroupUsageMetric.Math.SUM,
+            math_property="bytes",
+            filters={"events": [{"id": "real_event", "type": "events", "order": 0}]},
+        )
+
+        with patch(f"{SEED_MODULE}.create_event"), patch(f"{SEED_MODULE}.sync_execute"):
+            self._run(users=2, accounts_with_notes=0, with_health_demo=True)
+
+        existing.refresh_from_db()
+        assert existing.interval == 30
+        assert existing.math == GroupUsageMetric.Math.SUM
+        assert GroupUsageMetric.objects.filter(team=self.team).count() == 3
 
     def test_health_demo_dry_run_describes_optional_work_and_writes_nothing(self):
         self._make_group("acme-id", "Acme")

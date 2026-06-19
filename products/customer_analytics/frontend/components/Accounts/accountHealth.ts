@@ -34,12 +34,12 @@ export function healthScoreColor(score: number | null): string {
         return 'var(--color-text-tertiary)'
     }
     if (score >= HEALTHY_THRESHOLD) {
-        return 'var(--color-success)'
+        return 'var(--success)'
     }
     if (score >= NEEDS_ATTENTION_THRESHOLD) {
-        return 'var(--color-warning)'
+        return 'var(--warning)'
     }
-    return 'var(--color-danger)'
+    return 'var(--danger)'
 }
 
 function asNumberOrNull(value: unknown): number | null {

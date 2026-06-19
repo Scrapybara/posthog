@@ -1,4 +1,6 @@
+from collections.abc import Sequence
 from functools import cached_property
+from typing import cast
 
 from posthog.schema import AccountsQuery, AccountsQueryResponse, CachedAccountsQueryResponse
 
@@ -167,7 +169,12 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
 
     def to_query(self) -> ast.SelectQuery:
         where_exprs = self._build_where_exprs()
-        order_clauses = self.query.orderBy or [DEFAULT_ORDER_BY]
+        requested_order_clauses = self.query.orderBy or []
+        order_clauses = [
+            clause
+            for clause in requested_order_clauses
+            if _normalize_order_clause(clause).split(maxsplit=1)[0] != HEALTH_COLUMN
+        ] or [DEFAULT_ORDER_BY]
 
         return ast.SelectQuery(
             select=self._select_exprs,
@@ -284,7 +291,7 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             **self.paginator.response_params(),
         )
 
-    def _build_results(self, rows: list) -> list[list]:
+    def _build_results(self, rows: Sequence[Sequence[object]]) -> list[list[object]]:
         # Rows come back aligned to `_real_columns`; rebuild them in `self.columns` order,
         # expanding the name tuple into its dict shape and injecting the synthetic health cell.
         real_name_index = self._real_columns.index(NAME_COLUMN)
@@ -293,7 +300,7 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
         health_by_external_id: dict[str, object] = {}
         if self._health_requested:
             # Batch only the current page's external ids — no per-row (N+1) health queries.
-            external_ids = [row[real_name_index][1] for row in rows]
+            external_ids = [cast(Sequence[object], row[real_name_index])[1] for row in rows]
             try:
                 health_by_external_id = self._health_scorer.score_external_ids(external_ids)
             except Exception as error:
@@ -301,11 +308,11 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
                 # must not take down the core accounts list.
                 capture_exception(error, {"scope": "accounts_query_runner.health", "team_id": self.team.id})
 
-        results: list[list] = []
+        results: list[list[object]] = []
         for row in rows:
-            name_cell = row[real_name_index]
-            external_id = name_cell[1]
-            out_row: list = []
+            name_cell = cast(Sequence[object], row[real_name_index])
+            external_id = cast(str | None, name_cell[1])
+            out_row: list[object] = []
             for col in self.columns:
                 if col == HEALTH_COLUMN:
                     score = health_by_external_id.get(external_id) if external_id else None
@@ -317,7 +324,7 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             results.append(out_row)
         return results
 
-    def _align_types(self, response_types) -> list[str]:
+    def _align_types(self, response_types: Sequence[tuple[str, str]] | None) -> list[str]:
         # The synthetic health column has no HogQL type; insert a placeholder so `types` stays
         # aligned with `columns` for any consumer that zips them.
         type_by_col = {}

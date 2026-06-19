@@ -118,7 +118,8 @@ class AccountHealthScorer:
     def usage_metric_fingerprints(self) -> list[tuple[str, ...]]:
         """Stable per-metric fingerprints for the query cache key, sorted for determinism."""
         return sorted(
-            (str(m.id), m.math, m.math_property or "", str(m.filters), str(m.interval)) for m in self.usage_metrics
+            (str(m.id), m.name, m.math, m.math_property or "", str(m.filters), str(m.interval))
+            for m in self.usage_metrics
         )
 
     def config_fingerprint(self) -> int | None:
@@ -247,7 +248,7 @@ class AccountHealthScorer:
                 modifiers=self.modifiers,
             )
         for row in response.results or []:
-            external_id = row[0]
+            external_id = str(row[0])
             for i, (metric, _filter_expr) in enumerate(group):
                 current = float(row[1 + i * 2] or 0)
                 previous = float(row[2 + i * 2] or 0)
@@ -308,7 +309,7 @@ class AccountHealthScorer:
             if not key_field:
                 raise ValueError("data_warehouse usage metric is missing 'key_field' in filters")
             tag_contains_user_hogql()
-            return parse_expr(key_field)
+            return ast.Call(name="toString", args=[parse_expr(key_field)])
         return ast.Field(chain=[f"$group_{self.account_group_type_index}"])
 
     def _table_expr(self, source_descriptor: SourceDescriptor) -> ast.Field:

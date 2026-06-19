@@ -4,7 +4,12 @@ from parameterized import parameterized
 
 from posthog.schema import AccountHealthStatus
 
+from posthog.hogql import ast
+
+from posthog.models.group_usage_metric import GroupUsageMetric
+
 from products.customer_analytics.backend.services.account_health import (
+    AccountHealthScorer,
     compute_change_pct,
     compute_factor_score,
     compute_overall_score,
@@ -70,3 +75,12 @@ class TestAccountHealthScoring(SimpleTestCase):
         self.assertIsNone(score.score)
         self.assertEqual(score.status, AccountHealthStatus.NO_DATA)
         self.assertEqual(score.factors, [])
+
+    def test_data_warehouse_group_keys_are_normalized_to_strings(self):
+        scorer = object.__new__(AccountHealthScorer)
+        expression = scorer._group_key_expr(
+            (GroupUsageMetric.Source.DATA_WAREHOUSE, "warehouse_table", "created_at", "numeric_account_id")
+        )
+
+        assert isinstance(expression, ast.Call)
+        assert expression.name == "toString"

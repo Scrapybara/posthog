@@ -54,6 +54,20 @@ describe('TextCard', () => {
         expect(onEnterEditModeFromEdge).toHaveBeenCalledTimes(1)
     })
 
+    it('renders section headers as polished full-width rows', () => {
+        const { container } = render(
+            <TextCard
+                textTile={makeTextTile({
+                    text: { body: '# Activation', last_modified_at: '2022-04-01T12:24:36' },
+                    transparent_background: true,
+                })}
+                placement={DashboardPlacement.Dashboard}
+            />
+        )
+
+        expect(container.querySelector('[data-attr="section-header-card"]')).toHaveClass('TextCard--section-header')
+    })
+
     describe('TextContent', () => {
         it('calls closeDetails when clicked', () => {
             const closeDetails = jest.fn()

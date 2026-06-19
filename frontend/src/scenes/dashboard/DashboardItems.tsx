@@ -3,8 +3,9 @@ import './DashboardItems.scss'
 import clsx from 'clsx'
 import { useActions, useAsyncActions, useValues } from 'kea'
 import { router } from 'kea-router'
+import posthog from 'posthog-js'
 import { RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Layout, Responsive as ReactGridLayout, useContainerWidth } from 'react-grid-layout'
+import { Layout, LayoutItem, Responsive as ReactGridLayout, useContainerWidth } from 'react-grid-layout'
 import { GridBackground } from 'react-grid-layout/extras'
 
 import { DashboardWidgetItem } from '@posthog/products-dashboards/frontend/components/DashboardWidgetItem/DashboardWidgetItem'
@@ -12,6 +13,7 @@ import { getDashboardWidgetFetchDisplayError } from '@posthog/products-dashboard
 
 import { InsightCard } from 'lib/components/Cards/InsightCard'
 import { EditModeEdge } from 'lib/components/Cards/InsightCard/EditModeEdgeOverlay'
+import { isDashboardSectionHeaderTextTile } from 'lib/components/Cards/TextCard/textCardUtils'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
 import { DashboardEventSource, eventUsageLogic } from 'lib/utils/eventUsageLogic'
 import { dashboardLogic } from 'scenes/dashboard/dashboardLogic'
@@ -339,23 +341,36 @@ export function DashboardItems(): JSX.Element {
         []
     )
 
-    const handleDragStop = useCallback(() => {
-        if (scrollAnimationRef.current) {
-            cancelAnimationFrame(scrollAnimationRef.current)
-            scrollAnimationRef.current = null
-        }
-        scrollContainerRef.current = null
-        scrollContainerRectRef.current = null
-        if (dragEndTimeout.current) {
-            window.clearTimeout(dragEndTimeout.current)
-        }
-        dragEndTimeout.current = window.setTimeout(() => {
-            isDragging.current = false
-        }, 250)
-        if (dashboard?.id) {
-            reportDashboardTileRepositioned(dashboard.id, 'moved', effectiveZoom)
-        }
-    }, [dashboard?.id, reportDashboardTileRepositioned, effectiveZoom])
+    const handleDragStop = useCallback(
+        (_layout: Layout, _oldItem: LayoutItem | null, newItem: LayoutItem | null) => {
+            if (scrollAnimationRef.current) {
+                cancelAnimationFrame(scrollAnimationRef.current)
+                scrollAnimationRef.current = null
+            }
+            scrollContainerRef.current = null
+            scrollContainerRectRef.current = null
+            if (dragEndTimeout.current) {
+                window.clearTimeout(dragEndTimeout.current)
+            }
+            dragEndTimeout.current = window.setTimeout(() => {
+                isDragging.current = false
+            }, 250)
+            if (dashboard?.id) {
+                reportDashboardTileRepositioned(dashboard.id, 'moved', effectiveZoom)
+
+                const movedTileId = Number(newItem?.i)
+                const movedTile = Number.isFinite(movedTileId) ? tiles?.find((tile) => tile.id === movedTileId) : null
+                if (movedTile && isDashboardSectionHeaderTextTile(movedTile)) {
+                    posthog.capture('dashboard section header rearranged', {
+                        dashboard_id: dashboard.id,
+                        tile_id: movedTile.id,
+                        layout_zoom: effectiveZoom,
+                    })
+                }
+            }
+        },
+        [dashboard?.id, reportDashboardTileRepositioned, effectiveZoom, tiles]
+    )
 
     return (
         <div className="dashboard-items-wrapper" ref={containerRef as RefObject<HTMLDivElement>}>

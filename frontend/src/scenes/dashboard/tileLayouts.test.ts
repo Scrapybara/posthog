@@ -15,6 +15,15 @@ function textTileWithLayout(
     } as unknown as DashboardTile<QueryBasedInsightModel>
 }
 
+function sectionHeaderTile(tileId: number = 1): DashboardTile<QueryBasedInsightModel> {
+    return {
+        id: tileId,
+        text: { body: '# Activation' },
+        transparent_background: true,
+        layouts: {},
+    } as DashboardTile<QueryBasedInsightModel>
+}
+
 describe('calculating tile layouts', () => {
     it('minimum width and height are added if missing', () => {
         const tiles: DashboardTile<QueryBasedInsightModel>[] = [
@@ -84,6 +93,13 @@ describe('calculating tile layouts', () => {
         const tiles: DashboardTile<QueryBasedInsightModel>[] = [textTileWithLayout(layouts, 1)]
         const result = calculateLayouts(tiles)
         expect(result.xs?.[0]?.h).toBe(expectedXsH)
+    })
+
+    it('uses full-width one-row defaults for section header text tiles', () => {
+        const result = calculateLayouts([sectionHeaderTile()])
+
+        expect(result.sm?.[0]).toEqual({ i: '1', x: 0, y: 0, w: 12, h: 1, minW: 1, minH: 1 })
+        expect(result.xs?.[0]).toEqual({ i: '1', x: 0, y: 0, w: 1, h: 1, minW: 1, minH: 1 })
     })
 
     it('xs follows final sm row-major order when some tiles have no stored sm layout', () => {

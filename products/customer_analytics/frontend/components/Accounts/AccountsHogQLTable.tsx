@@ -1,7 +1,7 @@
 import { useActions, useValues } from 'kea'
 import { useMemo } from 'react'
 
-import { LemonButton, LemonSkeleton, LemonTable, ProfilePicture } from '@posthog/lemon-ui'
+import { LemonButton, LemonSkeleton, LemonTable, LemonTag, ProfilePicture } from '@posthog/lemon-ui'
 
 import { CopyToClipboardInline } from 'lib/components/CopyToClipboard'
 import { MemberSelect } from 'lib/components/MemberSelect'
@@ -15,8 +15,9 @@ import { DataTableNode } from '~/queries/schema/schema-general'
 import { QueryContext, QueryContextColumn, QueryContextColumnComponent } from '~/queries/types'
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY } from '../../constants'
+import { HEALTH_STATUS_LABEL, healthScoreColor, healthStatusTagType, parseAccountHealth } from './accountHealth'
 import { AccountNotebooksExpansion } from './AccountNotebooksExpansion'
-import { ACCOUNTS_NAME_COLUMN, accountsColumnConfigLogic } from './accountsColumnConfigLogic'
+import { ACCOUNTS_HEALTH_COLUMN, ACCOUNTS_NAME_COLUMN, accountsColumnConfigLogic } from './accountsColumnConfigLogic'
 import { accountsExpansionLogic } from './accountsExpansionLogic'
 import { AccountRoleKey, accountsLogic } from './accountsLogic'
 
@@ -33,6 +34,7 @@ const ROLE_LABELS: Record<AccountRoleKey, string> = {
 
 const COLUMN_WIDTHS = {
     name: '240px',
+    health_score: '170px',
     tag_names: '280px',
     notebook_count: '80px',
     csm: '220px',
@@ -95,6 +97,45 @@ function NameCell({ record }: { record: unknown }): JSX.Element {
                 </CopyToClipboardInline>
             ) : null}
         </div>
+    )
+}
+
+function HealthCell({ record }: { record: unknown }): JSX.Element {
+    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
+    const { openAccountTab } = useActions(accountsExpansionLogic)
+    const accountId = getNameCell(record, visibleColumnNames)?.id
+    const health = parseAccountHealth(getCellAt(record, visibleColumnNames, ACCOUNTS_HEALTH_COLUMN))
+    const hasScore = !!health && health.status !== 'no_data' && health.score !== null
+    return (
+        <button
+            type="button"
+            // The whole cell opens the row's Health tab — there is no separate sort/expand affordance.
+            onClick={(event) => {
+                event.stopPropagation()
+                if (accountId) {
+                    openAccountTab(accountId, 'health')
+                }
+            }}
+            className="flex items-center gap-2 cursor-pointer bg-transparent border-none p-0 text-left"
+            data-attr="accounts-health-cell"
+        >
+            {hasScore && health ? (
+                <>
+                    <span
+                        className="font-semibold tabular-nums"
+                        // eslint-disable-next-line react/forbid-dom-props
+                        style={{ color: healthScoreColor(health.score) }}
+                    >
+                        {`${health.score}/100`}
+                    </span>
+                    <LemonTag type={healthStatusTagType(health.status)} size="small">
+                        {HEALTH_STATUS_LABEL[health.status]}
+                    </LemonTag>
+                </>
+            ) : (
+                <span className="text-muted">No data</span>
+            )}
+        </button>
     )
 }
 
@@ -189,6 +230,8 @@ type KnownColumnTemplate = {
     label?: string
     width?: string
     render?: QueryContextColumnComponent
+    /** Synthetic columns (health) have no backing expression to sort by. */
+    sortable?: boolean
 }
 
 const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
@@ -196,6 +239,12 @@ const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
         label: 'Account',
         width: COLUMN_WIDTHS.name,
         render: ({ record }) => <NameCell record={record} />,
+    },
+    health_score: {
+        label: 'Health',
+        width: COLUMN_WIDTHS.health_score,
+        render: ({ record }) => <HealthCell record={record} />,
+        sortable: false,
     },
     tag_names: {
         label: 'Tags',
@@ -232,7 +281,10 @@ function useContextColumns(): Record<string, QueryContextColumn> {
             const template = KNOWN_COLUMN_TEMPLATES[key]
             const label = template?.label ?? key
             columns[key] = {
-                renderTitle: () => <SortableColumnHeader column={key} label={label} />,
+                renderTitle:
+                    template?.sortable === false
+                        ? () => <span className="font-medium">{label}</span>
+                        : () => <SortableColumnHeader column={key} label={label} />,
                 width: template?.width,
                 render: template?.render,
             }
@@ -267,8 +319,13 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
             },
             expandedRowRender: ({ result }) => {
                 const cell = getNameCell(result, visibleColumnNames)
+                const health = parseAccountHealth(getCellAt(result, visibleColumnNames, ACCOUNTS_HEALTH_COLUMN))
                 return cell ? (
-                    <AccountNotebooksExpansion accountId={cell.id} externalId={cell.external_id ?? ''} />
+                    <AccountNotebooksExpansion
+                        accountId={cell.id}
+                        externalId={cell.external_id ?? ''}
+                        health={health}
+                    />
                 ) : null
             },
         }),

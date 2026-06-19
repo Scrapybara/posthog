@@ -2306,6 +2306,36 @@ export interface GroupsQuery extends DataNode<GroupsQueryResponse> {
     offset?: integer
 }
 
+/** Health bucket an account falls into. `no_data` means we could not score it (no
+ * external id, no usage-metric config, no defined metrics, or no usable signal). */
+export type AccountHealthStatus = 'healthy' | 'needs_attention' | 'at_risk' | 'no_data'
+
+/** One usage metric's contribution to an account's health score. */
+export interface AccountHealthFactor {
+    /** The GroupUsageMetric id this factor was derived from. */
+    metric_id: string
+    metric_name: string
+    /** Lookback window in days for both the current and the immediately preceding period. */
+    interval: integer
+    /** Total in the current period. */
+    current: number
+    /** Total in the immediately preceding equal-length period. */
+    previous: number
+    /** 0–100 retained-usage score, or null when there is no signal (both periods zero). */
+    factor_score: number | null
+    /** Percentage change current vs previous, or null when previous is zero. */
+    change_pct: number | null
+}
+
+/** Explainable account health score derived from the team's usage-metric definitions. */
+export interface AccountHealthScore {
+    /** 0–100 overall score (rounded mean of non-null factor scores), or null when no_data. */
+    score: number | null
+    status: AccountHealthStatus
+    /** Per-metric breakdown that explains the overall score. */
+    factors: AccountHealthFactor[]
+}
+
 export type CachedAccountsQueryResponse = CachedQueryResponse<AccountsQueryResponse>
 
 export interface AccountsQueryResponse extends AnalyticsQueryResponseBase {
@@ -2323,6 +2353,10 @@ export interface AccountsQueryResponse extends AnalyticsQueryResponseBase {
 
 export interface AccountsQuery extends DataNode<AccountsQueryResponse> {
     kind: NodeKind.AccountsQuery
+    /** Columns to return. Most are HogQL expressions resolved against `system.accounts`, but the
+     * synthetic `health_score` column is computed by the runner from the team's usage-metric
+     * definitions and returned as an `AccountHealthScore` object per row. Callers that omit it do
+     * zero health work. */
     select?: HogQLExpression[]
     /** Aggregation expressions evaluated against the filtered account set; one value per metric is returned in `metricsResults`. When `metrics` is set without a `select`, the runner skips the regular row fetch and returns only the aggregated values. */
     metrics?: HogQLExpression[]

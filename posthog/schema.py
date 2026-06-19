@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, confloat, conint
 
 from posthog.schema_enums import (
+    AccountHealthStatus as AccountHealthStatus,
     Action as Action,
     Action1 as Action1,
     AgentMode as AgentMode,
@@ -3028,6 +3029,40 @@ class GetEffectiveExcludedColumns(BaseModel):
 
 class Integer(RootModel[int]):
     root: int
+
+
+class AccountHealthFactor(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    change_pct: float | None = Field(
+        ...,
+        description=("Percentage change current vs previous, or null when previous is zero."),
+    )
+    current: float = Field(..., description="Total in the current period.")
+    factor_score: float | None = Field(
+        ...,
+        description=("0–100 retained-usage score, or null when there is no signal (both periods zero)."),
+    )
+    interval: int = Field(
+        ...,
+        description=("Lookback window in days for both the current and the immediately preceding period."),
+    )
+    metric_id: str = Field(..., description="The GroupUsageMetric id this factor was derived from.")
+    metric_name: str
+    previous: float = Field(..., description="Total in the immediately preceding equal-length period.")
+
+
+class AccountHealthScore(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    factors: list[AccountHealthFactor] = Field(..., description="Per-metric breakdown that explains the overall score.")
+    score: float | None = Field(
+        ...,
+        description=("0–100 overall score (rounded mean of non-null factor scores), or null when no_data."),
+    )
+    status: AccountHealthStatus
 
 
 class ActionConversionGoal(BaseModel):
@@ -20615,7 +20650,16 @@ class AccountsQuery(BaseModel):
     orderBy: list[str] | None = None
     response: AccountsQueryResponse | None = None
     search: str | None = None
-    select: list[str] | None = None
+    select: list[str] | None = Field(
+        default=None,
+        description=(
+            "Columns to return. Most are HogQL expressions resolved against"
+            " `system.accounts`, but the synthetic `health_score` column is computed by"
+            " the runner from the team's usage-metric definitions and returned as an"
+            " `AccountHealthScore` object per row. Callers that omit it do zero health"
+            " work."
+        ),
+    )
     tagNames: list[str] | None = None
     tags: QueryLogTags | None = None
     version: float | None = Field(default=None, description="version of the node, used for schema migrations")

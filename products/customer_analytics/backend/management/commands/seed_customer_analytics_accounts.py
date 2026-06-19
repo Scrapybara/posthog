@@ -12,19 +12,30 @@ so it has no dependency on ClickHouse->Postgres sync timing. For the given team 
 
 Re-running is safe: existing accounts, pool users, and notes are left alone.
 
+Optionally, `--with-health-demo` also seeds two demo usage metrics plus deterministic events so the
+accounts list's Health column has something healthy and something at risk to show. It is off by
+default and is the only part of this command that writes events — the default behavior stays
+event-free and Kafka-free.
+
 Usage:
     python manage.py seed_customer_analytics_accounts --team-id 1
     python manage.py seed_customer_analytics_accounts --team-id 1 --users 5 --accounts-with-notes 5
+    python manage.py seed_customer_analytics_accounts --team-id 1 --with-health-demo
     python manage.py seed_customer_analytics_accounts --team-id 1 --dry-run
 """
 
+import uuid
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from posthog.models import Group, OrganizationMembership, Team, User
+from posthog.models.event.util import create_event
+from posthog.models.group_usage_metric import GroupUsageMetric
 from posthog.models.scoping import team_scope
 
 from products.customer_analytics.backend.models.account import Account, AccountAssignment, AccountProperties
@@ -39,6 +50,21 @@ NOTE_TEMPLATES: list[tuple[str, str]] = [
     ("Renewal notes", "Renewal in ~60 days. Champion is happy; needs finance sign-off on the enterprise tier."),
     ("Support escalation", "Looked into slow shared-link loads. Mitigated for now; permanent fix ETA to follow."),
 ]
+
+# Stable namespace so health-demo event UUIDs are reproducible (uuid5) — re-running the command
+# regenerates the exact same rows instead of piling up duplicates.
+HEALTH_DEMO_UUID_NAMESPACE = uuid.UUID("5b6c3d2e-1f4a-4c8b-9e7d-0a1b2c3d4e5f")
+HEALTH_DEMO_INTERVAL_DAYS = 7
+
+# Two count metrics, one event each. The current/previous counts below produce the demo narrative:
+# the first external-id account retains 9/10 (healthy ~90) and the second retains 2/10 (at risk ~20)
+# on both factors.
+HEALTH_DEMO_METRICS: list[tuple[str, str]] = [
+    ("Events ingested", "demo_health_event_ingested"),
+    ("Active users", "demo_health_active_user"),
+]
+# (current_period_count, previous_period_count) per account, indexed by account position.
+HEALTH_DEMO_COUNTS: list[tuple[int, int]] = [(9, 10), (2, 10)]
 
 
 class Command(BaseCommand):
@@ -61,6 +87,12 @@ class Command(BaseCommand):
         parser.add_argument(
             "--limit", type=int, default=None, help="Cap how many groups become accounts (default: all)."
         )
+        parser.add_argument(
+            "--with-health-demo",
+            action="store_true",
+            help="Also seed two demo usage metrics and deterministic events so the Health column has "
+            "healthy and at-risk accounts to show (writes events; off by default).",
+        )
         parser.add_argument("--dry-run", action="store_true", help="Report what would be created without writing.")
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -82,12 +114,21 @@ class Command(BaseCommand):
                 f"and add up to {note_account_count * options['notes_per_account']} note(s) "
                 f"across {note_account_count} account(s)."
             )
+            if options["with_health_demo"]:
+                demo_account_count = min(len(HEALTH_DEMO_COUNTS), len(groups))
+                event_count = self._health_demo_event_count(demo_account_count)
+                self.stdout.write(
+                    f"Would also define/update {len(HEALTH_DEMO_METRICS)} demo usage metric(s) and queue "
+                    f"{event_count} event(s) across the first {demo_account_count} account(s) for the Health column."
+                )
             return
 
         self._set_config(team)
         user_pool = self._ensure_user_pool(team, options["users"])
         accounts = self._create_accounts(team, groups, user_pool)
         self._create_notes(team, accounts, user_pool, options["accounts_with_notes"], options["notes_per_account"])
+        if options["with_health_demo"]:
+            self._create_health_demo(team, accounts)
         self.stdout.write(self.style.SUCCESS("Done."))
 
     def _get_team(self, team_id: int) -> Team:
@@ -217,6 +258,73 @@ class Command(BaseCommand):
                 ResourceNotebook.objects.create(notebook=notebook, account=account)
                 created += 1
         self.stdout.write(f"Created {created} note(s) across up to {len(selected)} account(s).")
+
+    @staticmethod
+    def _health_demo_event_count(account_count: int) -> int:
+        per_account = sum(current + previous for current, previous in HEALTH_DEMO_COUNTS[:account_count])
+        return per_account * len(HEALTH_DEMO_METRICS)
+
+    def _ensure_health_demo_metrics(self, team: Team) -> list[GroupUsageMetric]:
+        metrics: list[GroupUsageMetric] = []
+        for name, event_name in HEALTH_DEMO_METRICS:
+            metric, _ = GroupUsageMetric.objects.update_or_create(
+                team=team,
+                group_type_index=ACCOUNT_GROUP_TYPE_INDEX,
+                name=name,
+                defaults={
+                    "interval": HEALTH_DEMO_INTERVAL_DAYS,
+                    "math": GroupUsageMetric.Math.COUNT,
+                    "format": GroupUsageMetric.Format.NUMERIC,
+                    "display": GroupUsageMetric.Display.NUMBER,
+                    "filters": {"events": [{"id": event_name, "type": "events", "order": 0}]},
+                },
+            )
+            metrics.append(metric)
+        return metrics
+
+    def _emit_demo_events(
+        self, team: Team, external_id: str, distinct_id: str, event_name: str, period: str, count: int, timestamp: Any
+    ) -> int:
+        group_property = f"$group_{ACCOUNT_GROUP_TYPE_INDEX}"
+        for i in range(count):
+            # uuid5 over a stable name makes re-runs idempotent (same UUID overwrites, never duplicates).
+            event_uuid = uuid.uuid5(HEALTH_DEMO_UUID_NAMESPACE, f"{team.id}:{external_id}:{event_name}:{period}:{i}")
+            create_event(
+                event_uuid=event_uuid,
+                event=event_name,
+                team=team,
+                distinct_id=distinct_id,
+                timestamp=timestamp,
+                properties={group_property: external_id},
+            )
+        return count
+
+    def _create_health_demo(self, team: Team, accounts: list[Account]) -> None:
+        metrics = self._ensure_health_demo_metrics(team)
+        # Only accounts with an external id can carry group-attributed events.
+        demo_accounts = [account for account in accounts if account.external_id][: len(HEALTH_DEMO_COUNTS)]
+        now = timezone.now()
+        # Current period is the trailing `interval` days; the previous period is the one before it.
+        # Place events safely inside each window so the relative timestamps stay valid when scored.
+        current_ts = now - timedelta(days=3)
+        previous_ts = now - timedelta(days=HEALTH_DEMO_INTERVAL_DAYS + 3)
+        created = 0
+        for account_index, account in enumerate(demo_accounts):
+            external_id = account.external_id
+            assert external_id is not None  # filtered above; reassures the type checker
+            current_count, previous_count = HEALTH_DEMO_COUNTS[account_index]
+            distinct_id = f"ca-health-demo-{external_id}"
+            for _name, event_name in HEALTH_DEMO_METRICS:
+                created += self._emit_demo_events(
+                    team, external_id, distinct_id, event_name, "current", current_count, current_ts
+                )
+                created += self._emit_demo_events(
+                    team, external_id, distinct_id, event_name, "previous", previous_count, previous_ts
+                )
+        self.stdout.write(
+            f"Defined/updated {len(metrics)} demo usage metric(s) and queued {created} event(s) "
+            f"across {len(demo_accounts)} account(s) for the Health column."
+        )
 
 
 def _paragraph_doc(text: str) -> dict[str, Any]:

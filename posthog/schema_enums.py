@@ -21,6 +21,13 @@ class AIEventType(StrEnum):
     FIELD_AI_GENERATION_CLUSTERS = "$ai_generation_clusters"
 
 
+class AccountHealthStatus(StrEnum):
+    HEALTHY = "healthy"
+    NEEDS_ATTENTION = "needs_attention"
+    AT_RISK = "at_risk"
+    NO_DATA = "no_data"
+
+
 class MathGroupTypeIndex(float, Enum):
     NUMBER_0 = 0
     NUMBER_1 = 1

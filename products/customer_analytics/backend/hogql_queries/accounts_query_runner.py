@@ -1,3 +1,5 @@
+from functools import cached_property
+
 from posthog.schema import AccountsQuery, AccountsQueryResponse, CachedAccountsQueryResponse
 
 from posthog.hogql import ast
@@ -6,12 +8,20 @@ from posthog.hogql.parser import parse_expr, parse_order_expr, parse_select
 from posthog.hogql.query import execute_hogql_query
 
 from posthog.errors import ExposedCHQueryError, InternalCHQueryError
+from posthog.exceptions_capture import capture_exception
 from posthog.hogql_queries.insights.paginators import HogQLHasMorePaginator
 from posthog.hogql_queries.query_runner import AnalyticsQueryRunner
 from posthog.models import User
 from posthog.rbac.user_access_control import UserAccessControl
 
+from products.customer_analytics.backend.services.account_health import AccountHealthScorer, no_data_score
+
 NAME_COLUMN = "name"
+
+# Synthetic column: not a real `system.accounts` field. When selected, the runner computes an
+# explainable AccountHealthScore per row from the team's GroupUsageMetric definitions and injects
+# it into the results. Callers that omit it do zero health work.
+HEALTH_COLUMN = "health_score"
 
 DEFAULT_COLUMNS = (NAME_COLUMN, "created_at")
 
@@ -47,20 +57,34 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
         # resolution. A combined query carries both `select` and `metrics`.
         self._metrics_only = bool(self.query.metrics) and not self.query.select
 
+        # `columns` is the full ordered set the frontend renders (it may include the synthetic
+        # `health_score`). `_real_columns` / `_select_exprs` are the subset backed by an actual
+        # HogQL expression, aligned 1:1 with the query result row positions.
         self.columns: list[str] = []
+        self._real_columns: list[str] = []
         self._select_exprs: list[ast.Expr] = []
+        self._health_requested = False
         if not self._metrics_only:
             raw_selects = list(self.query.select) if self.query.select else list(DEFAULT_COLUMNS)
             seen: set[str] = set()
             for raw in raw_selects:
+                if raw == HEALTH_COLUMN:
+                    if HEALTH_COLUMN in seen:
+                        continue
+                    seen.add(HEALTH_COLUMN)
+                    self._health_requested = True
+                    self.columns.append(HEALTH_COLUMN)
+                    continue
                 column_name, expr = self._resolve_column(raw)
                 if column_name in seen:
                     continue
                 seen.add(column_name)
                 self.columns.append(column_name)
+                self._real_columns.append(column_name)
                 self._select_exprs.append(expr)
             if NAME_COLUMN not in seen:
                 self.columns.insert(0, NAME_COLUMN)
+                self._real_columns.insert(0, NAME_COLUMN)
                 self._select_exprs.insert(0, self._name_tuple_expr())
 
         self.paginator = HogQLHasMorePaginator.from_limit_context(
@@ -73,6 +97,22 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
         return UserAccessControl(user=user, team=self.team).assert_access_level_for_resource(
             "customer_analytics", "viewer"
         )
+
+    @cached_property
+    def _health_scorer(self) -> AccountHealthScorer:
+        return AccountHealthScorer(team=self.team, timings=self.timings, modifiers=self.modifiers, user=self.user)
+
+    def get_cache_payload(self) -> dict:
+        payload = super().get_cache_payload()
+        # Only health requests depend on usage-metric definitions and the configured group type —
+        # fold their fingerprints into the cache key so edits invalidate exactly those results, and
+        # leave non-health callers' cache keys untouched (and free of any GroupUsageMetric query).
+        if self._health_requested:
+            payload["account_health"] = {
+                "usage_metric_fingerprints": self._health_scorer.usage_metric_fingerprints(),
+                "account_group_type_index": self._health_scorer.config_fingerprint(),
+            }
+        return payload
 
     def _resolve_column(self, raw: str) -> tuple[str, ast.Expr]:
         if raw == NAME_COLUMN:
@@ -230,26 +270,61 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             modifiers=self.modifiers,
         )
 
-        name_index = self.columns.index(NAME_COLUMN)
-        results = [
-            [
-                {"name": cell[0], "external_id": cell[1], "id": cell[2]} if index == name_index else cell
-                for index, cell in enumerate(row)
-            ]
-            for row in self.paginator.results
-        ]
+        results = self._build_results(self.paginator.results)
 
         return AccountsQueryResponse(
             kind="AccountsQuery",
             columns=list(self.columns),
             results=results,
-            types=[t for _, t in response.types] if response.types else [],
+            types=self._align_types(response.types),
             metricsResults=metrics_results,
             hogql=response.hogql or "",
             timings=response.timings,
             modifiers=self.modifiers,
             **self.paginator.response_params(),
         )
+
+    def _build_results(self, rows: list) -> list[list]:
+        # Rows come back aligned to `_real_columns`; rebuild them in `self.columns` order,
+        # expanding the name tuple into its dict shape and injecting the synthetic health cell.
+        real_name_index = self._real_columns.index(NAME_COLUMN)
+        real_index_by_col = {col: index for index, col in enumerate(self._real_columns)}
+
+        health_by_external_id: dict[str, object] = {}
+        if self._health_requested:
+            # Batch only the current page's external ids — no per-row (N+1) health queries.
+            external_ids = [row[real_name_index][1] for row in rows]
+            try:
+                health_by_external_id = self._health_scorer.score_external_ids(external_ids)
+            except Exception as error:
+                # Health is a derived enhancement, so a bad usage metric or transient query failure
+                # must not take down the core accounts list.
+                capture_exception(error, {"scope": "accounts_query_runner.health", "team_id": self.team.id})
+
+        results: list[list] = []
+        for row in rows:
+            name_cell = row[real_name_index]
+            external_id = name_cell[1]
+            out_row: list = []
+            for col in self.columns:
+                if col == HEALTH_COLUMN:
+                    score = health_by_external_id.get(external_id) if external_id else None
+                    out_row.append((score or no_data_score()).model_dump(mode="json"))
+                elif col == NAME_COLUMN:
+                    out_row.append({"name": name_cell[0], "external_id": name_cell[1], "id": name_cell[2]})
+                else:
+                    out_row.append(row[real_index_by_col[col]])
+            results.append(out_row)
+        return results
+
+    def _align_types(self, response_types) -> list[str]:
+        # The synthetic health column has no HogQL type; insert a placeholder so `types` stays
+        # aligned with `columns` for any consumer that zips them.
+        type_by_col = {}
+        if response_types:
+            for real_col, (_, col_type) in zip(self._real_columns, response_types):
+                type_by_col[real_col] = col_type
+        return [("AccountHealthScore" if col == HEALTH_COLUMN else type_by_col.get(col, "")) for col in self.columns]
 
     def _compute_metrics_results(self, metrics: list[str]) -> list[float | int | None]:
         try:

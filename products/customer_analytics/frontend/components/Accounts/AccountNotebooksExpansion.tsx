@@ -1,7 +1,7 @@
 import { useActions, useValues } from 'kea'
 import posthog from 'posthog-js'
 
-import { IconGraph, IconPeople, IconPiggyBank, IconReceipt } from '@posthog/icons'
+import { IconGraph, IconHeartFilled, IconPeople, IconPiggyBank, IconReceipt } from '@posthog/icons'
 import {
     LemonButton,
     LemonSkeleton,
@@ -17,9 +17,12 @@ import { IconSlack } from 'lib/lemon-ui/icons'
 import { fullName } from 'lib/utils'
 import { urls } from 'scenes/urls'
 
+import type { AccountHealthScore } from '~/queries/schema/schema-general'
+
 import type { AccountNotebookApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import { AccountBillingExpansion } from './AccountBillingExpansion'
+import { AccountHealthExpansion } from './AccountHealthExpansion'
 import { accountLinksLogic } from './accountLinksLogic'
 import { accountNotebooksLogic } from './accountNotebooksLogic'
 import { AccountRelatedUsersExpansion } from './AccountRelatedUsersExpansion'
@@ -86,18 +89,10 @@ function UsefulLinks({ accountId }: { accountId: string }): JSX.Element {
     )
 }
 
-export function AccountNotebooksExpansion({
-    accountId,
-    externalId,
-}: {
-    accountId: string
-    externalId: string
-}): JSX.Element {
-    const logic = accountNotebooksLogic({ accountId })
-    const { notebooks, notebooksLoading } = useValues(logic)
-    const { activeTabFor } = useValues(accountsExpansionLogic)
-    const { setActiveTab } = useActions(accountsExpansionLogic)
-    const activeTab = activeTabFor(accountId)
+// Mounted only when the Notes tab is active (LemonTabs renders just the active tab's content), so
+// expanding straight to the Health tab never triggers the notebooks API call.
+function AccountNotesTab({ accountId }: { accountId: string }): JSX.Element {
+    const { notebooks, notebooksLoading } = useValues(accountNotebooksLogic({ accountId }))
 
     const columns: LemonTableColumns<AccountNotebookApi> = [
         {
@@ -157,6 +152,32 @@ export function AccountNotebooksExpansion({
     ]
 
     return (
+        <LemonTable<AccountNotebookApi>
+            size="small"
+            embedded
+            dataSource={notebooks ?? []}
+            rowKey="short_id"
+            loading={notebooksLoading}
+            columns={columns}
+            emptyState={notebooks === null ? 'Failed to load account notes.' : 'No notes linked to this account yet.'}
+        />
+    )
+}
+
+export function AccountNotebooksExpansion({
+    accountId,
+    externalId,
+    health,
+}: {
+    accountId: string
+    externalId: string
+    health: AccountHealthScore | null
+}): JSX.Element {
+    const { activeTabFor } = useValues(accountsExpansionLogic)
+    const { setActiveTab } = useActions(accountsExpansionLogic)
+    const activeTab = activeTabFor(accountId)
+
+    return (
         <div className="sticky left-0 w-[100cqw] p-3 bg-bg-light">
             <div className="flex gap-8">
                 <div className="w-fit shrink-0">
@@ -169,23 +190,19 @@ export function AccountNotebooksExpansion({
                         size="small"
                         tabs={[
                             {
+                                key: 'health',
+                                label: (
+                                    <span className="flex items-center gap-1">
+                                        <IconHeartFilled />
+                                        Health
+                                    </span>
+                                ),
+                                content: <AccountHealthExpansion health={health} />,
+                            },
+                            {
                                 key: 'notes',
                                 label: 'Notes',
-                                content: (
-                                    <LemonTable<AccountNotebookApi>
-                                        size="small"
-                                        embedded
-                                        dataSource={notebooks ?? []}
-                                        rowKey="short_id"
-                                        loading={notebooksLoading}
-                                        columns={columns}
-                                        emptyState={
-                                            notebooks === null
-                                                ? 'Failed to load account notes.'
-                                                : 'No notes linked to this account yet.'
-                                        }
-                                    />
-                                ),
+                                content: <AccountNotesTab accountId={accountId} />,
                             },
                             {
                                 key: 'users',

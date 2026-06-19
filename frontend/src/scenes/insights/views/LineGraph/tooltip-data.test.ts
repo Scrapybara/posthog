@@ -73,6 +73,29 @@ describe('createTooltipData', () => {
         expect(data[0].date_label).toBe('30 Apr - 2 May 2024')
     })
 
+    it('uses the compare date range for previous weekly labels', () => {
+        const data = createTooltipData(
+            [
+                tooltipItem({
+                    data: [10],
+                    days: ['2024-06-03'],
+                    label: '$pageview',
+                    compare: true,
+                    compare_label: 'previous',
+                }),
+            ],
+            undefined,
+            {
+                interval: 'week',
+                timezone: 'UTC',
+                dateRange: { date_from: '2024-06-06', date_to: '2024-06-12' },
+                compareDateRange: { date_from: '2024-05-30', date_to: '2024-06-05' },
+            }
+        )
+
+        expect(data[0].date_label).toBe('2-5 Jun 2024')
+    })
+
     it('falls back to backend labels when a dataset has no day values', () => {
         const data = createTooltipData([
             tooltipItem({
@@ -85,5 +108,21 @@ describe('createTooltipData', () => {
         ])
 
         expect(data[0].date_label).toBe('3-Jun-2024')
+    })
+
+    it('falls back to backend labels when formatting options are omitted', () => {
+        const data = createTooltipData([
+            tooltipItem(
+                {
+                    data: [10, 20],
+                    days: ['2024-06-03', '2024-06-04'],
+                    labels: ['Pageview', 'Signup'],
+                    compareLabels: ['previous', 'current'],
+                },
+                1
+            ),
+        ])
+
+        expect(data[0].date_label).toBe('Signup')
     })
 })

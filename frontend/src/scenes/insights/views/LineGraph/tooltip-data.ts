@@ -7,6 +7,7 @@ import { GraphDataset, IntervalType } from '~/types'
 export interface TooltipDataOptions {
     interval?: IntervalType | null
     dateRange?: DateRange | null
+    compareDateRange?: DateRange | null
     timezone?: string
     weekStartDay?: number
 }
@@ -23,11 +24,14 @@ export function createTooltipData(
         .map((dp, idx) => {
             const pointDataset = (dp?.dataset ?? {}) as GraphDataset
             const date = pointDataset?.days?.[dp.dataIndex]
+            const compareLabel = pointDataset?.compare_label ?? pointDataset?.compareLabels?.[dp.dataIndex] ?? undefined
+            const dateRange =
+                compareLabel === 'previous' ? (options?.compareDateRange ?? options?.dateRange) : options?.dateRange
             const dateLabel =
-                typeof date === 'string'
+                typeof date === 'string' && options
                     ? getFormattedDate(date, {
                           interval: options?.interval,
-                          dateRange: options?.dateRange,
+                          dateRange,
                           timezone: options?.timezone,
                           weekStartDay: options?.weekStartDay,
                       })
@@ -43,7 +47,7 @@ export function createTooltipData(
                     pointDataset?.breakdownLabels?.[dp.dataIndex] ??
                     pointDataset?.breakdownValues?.[dp.dataIndex] ??
                     undefined,
-                compare_label: pointDataset?.compare_label ?? pointDataset?.compareLabels?.[dp.dataIndex] ?? undefined,
+                compare_label: compareLabel,
                 action: pointDataset?.action ?? pointDataset?.actions?.[dp.dataIndex] ?? undefined,
                 label: pointDataset?.label ?? pointDataset.labels?.[dp.dataIndex] ?? undefined,
                 date_label: dateLabel,

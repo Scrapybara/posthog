@@ -874,6 +874,7 @@ export function LineGraph_({
                                     {
                                         interval,
                                         dateRange: insightData?.resolved_date_range,
+                                        compareDateRange: insightData?.resolved_compare_date_range,
                                         timezone,
                                         weekStartDay,
                                     }

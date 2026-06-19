@@ -1,6 +1,6 @@
 import { useActions, useValues } from 'kea'
 import { Field, Form } from 'kea-forms'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 
 import { isTextCardMarkdownRoundTripSafe } from 'lib/components/Cards/TextCard/textCardMarkdown'
 import { TextCardModalBodyField } from 'lib/components/Cards/TextCard/TextCardModalBodyField'
@@ -61,7 +61,10 @@ export function TextCardModal({
     // Form `body` + validation drive updates while typing; splitting useValues does not reduce rerenders.
     const { isTextTileSubmitting, textTileValidationErrors, textTile } = useValues(modalLogic)
     const { resetTextTile } = useActions(modalLogic)
-    const [initialBody] = useState(() => getInitialBody(dashboard, resolvedTileId, resolvedTextTileKind))
+    const initialBody = useMemo(
+        () => getInitialBody(dashboard, resolvedTileId, resolvedTextTileKind),
+        [dashboard, resolvedTileId, resolvedTextTileKind]
+    )
     const shouldUseLegacyMarkdownEditor =
         resolvedTextTileKind === 'text' && !isTextCardMarkdownRoundTripSafe(initialBody)
     const hasUnsavedInput = (textTile?.body || '') !== initialBody

@@ -360,7 +360,13 @@ export function DashboardItems(): JSX.Element {
 
                 const movedTileId = Number(newItem?.i)
                 const movedTile = Number.isFinite(movedTileId) ? tiles?.find((tile) => tile.id === movedTileId) : null
-                if (movedTile && isDashboardSectionHeaderTextTile(movedTile)) {
+                if (
+                    movedTile &&
+                    isDashboardSectionHeaderTextTile(movedTile) &&
+                    _oldItem &&
+                    newItem &&
+                    (_oldItem.x !== newItem.x || _oldItem.y !== newItem.y)
+                ) {
                     posthog.capture('dashboard section header rearranged', {
                         dashboard_id: dashboard.id,
                         tile_id: movedTile.id,

@@ -30,7 +30,15 @@
  *    We clamp any integer schema's min/max/exclusiveMin/exclusiveMax to int32
  *    range, which is far more than enough for every PostHog identifier.
  *
- * 4. `default: null` on null-permitting schemas (stripNullDefaults)
+ * 4. Omitted-only properties (applyCodegenNeverSchemas)
+ *    Some schema-only request variants need a field to stay optional, but become
+ *    uninhabitable if present so a fallback branch can't accept config-bearing
+ *    payloads. OpenAPI expresses this with `not: {}` plus the
+ *    `x-posthog-codegen-never` extension. Orval does not generate useful TS/Zod
+ *    for `not: {}`, so we translate these fields to an empty enum just before
+ *    codegen. That produces a TypeScript `never` alias and `z.enum([])`.
+ *
+ * 5. `default: null` on null-permitting schemas (stripNullDefaults)
  *    Pydantic emits `default: null` for every `Optional[...] = None` field.
  *    Orval mirrors that into `.default(null)`, which makes Zod fill the field
  *    with `null` whenever the caller omits it (`safeParse` applies defaults).
@@ -43,6 +51,7 @@
 export const INT32_MIN = -2147483648
 export const INT32_MAX = 2147483647
 const INTEGER_BOUND_KEYS = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum']
+const CODEGEN_NEVER_EXTENSION = 'x-posthog-codegen-never'
 
 /**
  * Component names whose $refs get replaced inline, mapped to the substitute schema.
@@ -192,6 +201,41 @@ export function stripNullDefaults(obj) {
 }
 
 /**
+ * Translate explicit codegen-only never markers into the shape Orval handles best.
+ *
+ * The source OpenAPI schema keeps `not: {}` so the public contract still says
+ * the field must be omitted. Orval currently emits `unknown` for `not: {}` in
+ * TS and Zod, while an empty string enum emits a `never` type alias and
+ * `z.enum([])` runtime rejection.
+ */
+export function applyCodegenNeverSchemas(obj) {
+    if (!obj || typeof obj !== 'object') {
+        return
+    }
+    if (Array.isArray(obj)) {
+        obj.forEach(applyCodegenNeverSchemas)
+        return
+    }
+
+    if (obj[CODEGEN_NEVER_EXTENSION] === true) {
+        const description = obj.description
+        for (const key of Object.keys(obj)) {
+            delete obj[key]
+        }
+        obj.type = 'string'
+        obj.enum = []
+        if (description !== undefined) {
+            obj.description = description
+        }
+        return
+    }
+
+    for (const value of Object.values(obj)) {
+        applyCodegenNeverSchemas(value)
+    }
+}
+
+/**
  * Run standard preprocessing on a full OpenAPI schema.
  * Mutates the schema in place, also returns it for convenience.
  */
@@ -202,6 +246,7 @@ export function preprocessSchema(schema) {
     }
     stripCollidingInlineEnums(schema)
     clampIntegerBounds(schema)
+    applyCodegenNeverSchemas(schema)
     stripNullDefaults(schema)
     return schema
 }

@@ -210,22 +210,36 @@ export const DashboardsUpdateBody = /* @__PURE__ */ zod
 
 export const dashboardsPartialUpdateBodyNameMax = 400
 
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneOneLimitDefault = 25
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneOneLimitMax = 50
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneOneConfigOneLimitDefault = 25
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneOneConfigOneLimitMax = 50
 
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoLimitDefault = 10
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoLimitMax = 25
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneOneNameMax = 400
 
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoOrderByDefault = `occurrences`
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoOrderDirectionDefault = `DESC`
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoStatusDefault = `active`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneLimitDefault = 10
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneLimitMax = 25
 
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeLimitDefault = 10
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeLimitMax = 25
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneOrderByDefault = `occurrences`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneOrderDirectionDefault = `DESC`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneStatusDefault = `active`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneTwoNameMax = 400
 
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeOrderByDefault = `start_time`
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeOrderDirectionDefault = `DESC`
-export const dashboardsPartialUpdateBodyTilesItemWidgetOneNameMax = 400
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneLimitDefault = 5
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneLimitMax = 10
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsDefault = 15
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsMin = 15
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsMax = 60
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneThreeNameMax = 400
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneLimitDefault = 10
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneLimitMax = 25
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderByDefault = `start_time`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderDirectionDefault = `DESC`
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFourNameMax = 400
+
+export const dashboardsPartialUpdateBodyTilesItemWidgetOneFiveNameMax = 400
 
 export const dashboardsPartialUpdateBodyDeleteInsightsDefault = false
 
@@ -245,25 +259,20 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
         tiles: zod
             .array(
                 zod.object({
-                    id: zod.number().optional().describe('Dashboard tile ID to update.'),
                     widget: zod
-                        .object({
-                            id: zod
-                                .uuid()
-                                .optional()
-                                .describe('Existing widget row ID when updating a widget tile via dashboard PATCH.'),
-                            widget_type: zod
-                                .enum(['activity_events_list', 'error_tracking_list', 'session_replay_list'])
-                                .describe(
-                                    '\* `activity_events_list` - activity_events_list\n\* `error_tracking_list` - error_tracking_list\n\* `session_replay_list` - session_replay_list'
-                                )
-                                .optional()
-                                .describe(
-                                    'Widget type identifier (cannot be changed on update).\n\n\* `activity_events_list` - activity_events_list\n\* `error_tracking_list` - error_tracking_list\n\* `session_replay_list` - session_replay_list'
-                                ),
-                            config: zod
-                                .union([
-                                    zod.object({
+                        .union([
+                            zod.object({
+                                id: zod
+                                    .uuid()
+                                    .optional()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                widget_type: zod
+                                    .enum(['activity_events_list'])
+                                    .describe('\* `activity_events_list` - activity_events_list'),
+                                config: zod
+                                    .object({
                                         dateRange: zod
                                             .union([
                                                 zod.object({
@@ -341,13 +350,36 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                         limit: zod
                                             .number()
                                             .min(1)
-                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneOneLimitMax)
+                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneOneConfigOneLimitMax)
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneOneLimitDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneOneConfigOneLimitDefault
                                             )
                                             .describe('Maximum number of events to return.'),
-                                    }),
-                                    zod.object({
+                                    })
+                                    .optional()
+                                    .describe('Configuration patch for the recent events widget.'),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneOneNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                            zod.object({
+                                id: zod
+                                    .uuid()
+                                    .optional()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                widget_type: zod
+                                    .enum(['error_tracking_list'])
+                                    .describe('\* `error_tracking_list` - error_tracking_list'),
+                                config: zod
+                                    .object({
                                         dateRange: zod
                                             .union([
                                                 zod.object({
@@ -425,21 +457,21 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                         limit: zod
                                             .number()
                                             .min(1)
-                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoLimitMax)
+                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneLimitMax)
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoLimitDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneLimitDefault
                                             )
                                             .describe('Maximum number of issues to return.'),
                                         orderBy: zod
                                             .enum(['last_seen', 'first_seen', 'occurrences', 'users', 'sessions'])
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoOrderByDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneOrderByDefault
                                             )
                                             .describe('Issue ranking column.'),
                                         orderDirection: zod
                                             .enum(['ASC', 'DESC'])
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoOrderDirectionDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneOrderDirectionDefault
                                             )
                                             .describe('Sort direction for orderBy.'),
                                         status: zod
@@ -452,7 +484,7 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                                 'all',
                                             ])
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneTwoStatusDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneTwoConfigOneStatusDefault
                                             )
                                             .describe('Issue status filter.'),
                                         assignee: zod
@@ -467,8 +499,82 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                             .describe(
                                                 'Filter by assignee ({type: user|role, id}). Omit for any assignee.'
                                             ),
-                                    }),
-                                    zod.object({
+                                    })
+                                    .optional()
+                                    .describe('Configuration patch for the top issues widget.'),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneTwoNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                            zod.object({
+                                id: zod
+                                    .uuid()
+                                    .optional()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                widget_type: zod.enum(['live_activity']).describe('\* `live_activity` - live_activity'),
+                                config: zod
+                                    .object({
+                                        limit: zod
+                                            .number()
+                                            .min(1)
+                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneLimitMax)
+                                            .default(
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneLimitDefault
+                                            )
+                                            .describe('Maximum number of recent events to return.'),
+                                        filterTestAccounts: zod
+                                            .union([zod.boolean(), zod.null()])
+                                            .optional()
+                                            .describe(
+                                                'Whether to exclude test accounts. When omitted, the project default is used.'
+                                            ),
+                                        refreshIntervalSeconds: zod
+                                            .number()
+                                            .min(
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsMin
+                                            )
+                                            .max(
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsMax
+                                            )
+                                            .default(
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneThreeConfigOneRefreshIntervalSecondsDefault
+                                            )
+                                            .describe(
+                                                'Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.'
+                                            ),
+                                    })
+                                    .optional()
+                                    .describe('Configuration patch for the live activity widget.'),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneThreeNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                            zod.object({
+                                id: zod
+                                    .uuid()
+                                    .optional()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                widget_type: zod
+                                    .enum(['session_replay_list'])
+                                    .describe('\* `session_replay_list` - session_replay_list'),
+                                config: zod
+                                    .object({
                                         dateRange: zod
                                             .union([
                                                 zod.object({
@@ -546,9 +652,9 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                         limit: zod
                                             .number()
                                             .min(1)
-                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeLimitMax)
+                                            .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneLimitMax)
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeLimitDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneLimitDefault
                                             )
                                             .describe('Maximum number of recordings to return.'),
                                         orderBy: zod
@@ -561,13 +667,13 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                                 'console_error_count',
                                             ])
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeOrderByDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderByDefault
                                             )
                                             .describe('Recording ranking column.'),
                                         orderDirection: zod
                                             .enum(['ASC', 'DESC'])
                                             .default(
-                                                dashboardsPartialUpdateBodyTilesItemWidgetOneConfigOneThreeOrderDirectionDefault
+                                                dashboardsPartialUpdateBodyTilesItemWidgetOneFourConfigOneOrderDirectionDefault
                                             )
                                             .describe('Sort direction for orderBy.'),
                                         savedFilterId: zod
@@ -576,22 +682,51 @@ export const DashboardsPartialUpdateBody = /* @__PURE__ */ zod
                                             .describe(
                                                 'short_id of a saved session replay filter to use as the recordings source. When set, the saved filter owns the date range and property filters; only orderBy, orderDirection, and limit still apply.'
                                             ),
-                                    }),
-                                ])
-                                .optional()
-                                .describe("Widget-specific configuration. Shape depends on the tile's widget_type."),
-                            name: zod
-                                .string()
-                                .max(dashboardsPartialUpdateBodyTilesItemWidgetOneNameMax)
-                                .nullish()
-                                .describe('Optional custom display name for the widget tile.'),
-                            description: zod
-                                .string()
-                                .optional()
-                                .describe('Optional markdown description shown when show_description is enabled.'),
-                        })
+                                    })
+                                    .optional()
+                                    .describe('Configuration patch for the recent recordings widget.'),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFourNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                            zod.object({
+                                id: zod
+                                    .uuid()
+                                    .describe(
+                                        'Existing widget row ID when updating a widget tile via dashboard PATCH.'
+                                    ),
+                                widget_type: zod
+                                    .enum([])
+                                    .optional()
+                                    .describe(
+                                        'Omit for metadata-only updates. Include a supported widget_type when patching config.'
+                                    ),
+                                config: zod
+                                    .enum([])
+                                    .optional()
+                                    .describe(
+                                        'Omit for metadata-only updates. Include widget_type to use a typed config schema.'
+                                    ),
+                                name: zod
+                                    .string()
+                                    .max(dashboardsPartialUpdateBodyTilesItemWidgetOneFiveNameMax)
+                                    .nullish()
+                                    .describe('Optional custom display name for the widget tile.'),
+                                description: zod
+                                    .string()
+                                    .optional()
+                                    .describe('Optional markdown description shown when show_description is enabled.'),
+                            }),
+                        ])
                         .optional()
                         .describe('Nested widget row updates.'),
+                    id: zod.number().optional().describe('Dashboard tile ID to update.'),
                 })
             )
             .optional()
@@ -777,11 +912,20 @@ export const dashboardsWidgetsBatchCreateBodyWidgetsItemTwoConfigOneOrderDirecti
 export const dashboardsWidgetsBatchCreateBodyWidgetsItemTwoConfigOneStatusDefault = `active`
 export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeNameMax = 400
 
-export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitDefault = 10
-export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitMax = 25
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitDefault = 5
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitMax = 10
 
-export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneOrderByDefault = `start_time`
-export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneOrderDirectionDefault = `DESC`
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsDefault = 15
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsMin = 15
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsMax = 60
+
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemFourNameMax = 400
+
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneLimitDefault = 10
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneLimitMax = 25
+
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneOrderByDefault = `start_time`
+export const dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneOrderDirectionDefault = `DESC`
 export const dashboardsWidgetsBatchCreateBodyWidgetsMax = 10
 
 export const DashboardsWidgetsBatchCreateBody = /* @__PURE__ */ zod
@@ -1140,6 +1284,95 @@ export const DashboardsWidgetsBatchCreateBody = /* @__PURE__ */ zod
                             .boolean()
                             .optional()
                             .describe('Whether to show the description on the dashboard tile.'),
+                        widget_type: zod.enum(['live_activity']),
+                        config: zod
+                            .object({
+                                limit: zod
+                                    .number()
+                                    .min(1)
+                                    .max(dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitMax)
+                                    .default(dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitDefault)
+                                    .describe('Maximum number of recent events to return.'),
+                                filterTestAccounts: zod
+                                    .union([zod.boolean(), zod.null()])
+                                    .optional()
+                                    .describe(
+                                        'Whether to exclude test accounts. When omitted, the project default is used.'
+                                    ),
+                                refreshIntervalSeconds: zod
+                                    .number()
+                                    .min(
+                                        dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsMin
+                                    )
+                                    .max(
+                                        dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsMax
+                                    )
+                                    .default(
+                                        dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneRefreshIntervalSecondsDefault
+                                    )
+                                    .describe(
+                                        'Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.'
+                                    ),
+                            })
+                            .describe('Configuration for the live activity widget.'),
+                    }),
+                    zod.object({
+                        name: zod
+                            .string()
+                            .max(dashboardsWidgetsBatchCreateBodyWidgetsItemFourNameMax)
+                            .nullish()
+                            .describe('Optional custom display name for the widget tile.'),
+                        description: zod
+                            .string()
+                            .optional()
+                            .describe('Optional markdown description shown when show_description is enabled.'),
+                        layouts: zod
+                            .object({
+                                sm: zod
+                                    .object({
+                                        x: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Column position in the dashboard grid (0-indexed).'),
+                                        y: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Row position in the dashboard grid (0-indexed).'),
+                                        w: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Width in grid columns. The desktop grid is 12 columns wide.'),
+                                        h: zod.number().optional().describe('Height in grid rows.'),
+                                    })
+                                    .optional()
+                                    .describe(
+                                        'Layout for the standard (desktop) breakpoint. The grid is 12 columns wide.'
+                                    ),
+                                xs: zod
+                                    .object({
+                                        x: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Column position in the dashboard grid (0-indexed).'),
+                                        y: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Row position in the dashboard grid (0-indexed).'),
+                                        w: zod
+                                            .number()
+                                            .optional()
+                                            .describe('Width in grid columns. The desktop grid is 12 columns wide.'),
+                                        h: zod.number().optional().describe('Height in grid rows.'),
+                                    })
+                                    .optional()
+                                    .describe('Layout for the small (mobile) breakpoint. The grid is 1 column wide.'),
+                            })
+                            .optional()
+                            .describe('Optional react-grid-layout positions keyed by breakpoint (sm, xs).'),
+                        show_description: zod
+                            .boolean()
+                            .optional()
+                            .describe('Whether to show the description on the dashboard tile.'),
                         widget_type: zod.enum(['session_replay_list']),
                         config: zod
                             .object({
@@ -1212,8 +1445,8 @@ export const DashboardsWidgetsBatchCreateBody = /* @__PURE__ */ zod
                                 limit: zod
                                     .number()
                                     .min(1)
-                                    .max(dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitMax)
-                                    .default(dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneLimitDefault)
+                                    .max(dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneLimitMax)
+                                    .default(dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneLimitDefault)
                                     .describe('Maximum number of recordings to return.'),
                                 orderBy: zod
                                     .enum([
@@ -1224,12 +1457,12 @@ export const DashboardsWidgetsBatchCreateBody = /* @__PURE__ */ zod
                                         'click_count',
                                         'console_error_count',
                                     ])
-                                    .default(dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneOrderByDefault)
+                                    .default(dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneOrderByDefault)
                                     .describe('Recording ranking column.'),
                                 orderDirection: zod
                                     .enum(['ASC', 'DESC'])
                                     .default(
-                                        dashboardsWidgetsBatchCreateBodyWidgetsItemThreeConfigOneOrderDirectionDefault
+                                        dashboardsWidgetsBatchCreateBodyWidgetsItemFourConfigOneOrderDirectionDefault
                                     )
                                     .describe('Sort direction for orderBy.'),
                                 savedFilterId: zod
@@ -1246,7 +1479,7 @@ export const DashboardsWidgetsBatchCreateBody = /* @__PURE__ */ zod
             .min(1)
             .max(dashboardsWidgetsBatchCreateBodyWidgetsMax)
             .describe(
-                'Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).'
+                'Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, live_activity, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).'
             ),
     })
     .describe('OpenAPI-only batch-add schema with widget_type-discriminated config shapes for agents.')

@@ -8,6 +8,7 @@ export {
 } from './src/schema.mjs'
 export {
     clampIntegerBounds,
+    applyCodegenNeverSchemas,
     inlineSchemaRefs,
     INT32_MAX,
     INT32_MIN,

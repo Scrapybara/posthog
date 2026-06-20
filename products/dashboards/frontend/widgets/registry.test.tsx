@@ -2,7 +2,13 @@ import posthog from 'posthog-js'
 
 import { ApiError } from 'lib/api-error'
 
-import { DASHBOARD_WIDGET_CATALOG, type DashboardWidgetCatalogEntry } from '../widget_types/catalog'
+import type { _DashboardPatchExistingWidgetOpenApiApi } from '../generated/api.schemas'
+import {
+    DASHBOARD_WIDGET_CATALOG,
+    DASHBOARD_WIDGET_PREVIEWS,
+    getDashboardWidgetCatalogEntry,
+    type DashboardWidgetCatalogEntry,
+} from '../widget_types/catalog'
 import {
     getDashboardWidgetDefinition,
     parseDashboardWidgetConfigApiError,
@@ -15,6 +21,26 @@ jest.mock('posthog-js', () => ({
         captureException: jest.fn(),
     },
 }))
+
+const metadataOnlyWidgetPatch: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    name: 'Renamed widget',
+}
+void metadataOnlyWidgetPatch
+
+const metadataOnlyWidgetPatchWithType: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept widget_type.
+    widget_type: 'live_activity',
+}
+void metadataOnlyWidgetPatchWithType
+
+const metadataOnlyWidgetPatchWithConfig: _DashboardPatchExistingWidgetOpenApiApi = {
+    id: '00000000-0000-4000-8000-000000000002',
+    // @ts-expect-error metadata-only widget PATCHes must not accept config.
+    config: { limit: 5 },
+}
+void metadataOnlyWidgetPatchWithConfig
 
 describe('dashboard widget registry', () => {
     beforeEach(() => {
@@ -34,7 +60,29 @@ describe('dashboard widget registry', () => {
             expect(definition?.TileFilters).toBeTruthy()
             expect(catalogEntry.tileFilters.allowedPropertyNames.length).toBeGreaterThan(0)
         }
+        expect(definition?.parseConfigApiError).toBeTruthy()
         expect(posthog.captureException).not.toHaveBeenCalled()
+    })
+
+    it('registers every catalog preview', () => {
+        expect(Object.keys(DASHBOARD_WIDGET_PREVIEWS).sort()).toEqual(Object.keys(DASHBOARD_WIDGET_CATALOG).sort())
+        expect(DASHBOARD_WIDGET_PREVIEWS.live_activity()).toBeTruthy()
+    })
+
+    it('documents live activity catalog defaults and shared placeholder copy', () => {
+        const entry = getDashboardWidgetCatalogEntry('live_activity')
+
+        expect(entry.groupId).toBe('activity')
+        expect(entry.defaultLayout).toEqual({ w: 4, h: 4, minW: 3, minH: 3 })
+        expect(entry.headerMeta.showDateRange).toBe(false)
+        expect(entry.defaultConfig).toEqual({
+            limit: 5,
+            refreshIntervalSeconds: 15,
+        })
+        expect(entry.sharedPlaceholder).toEqual({
+            title: 'Live activity',
+            message: 'Log in to PostHog to see live activity from this dashboard.',
+        })
     })
 
     it('delegates config api error parsing to the widget registry entry', () => {

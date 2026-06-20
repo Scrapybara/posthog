@@ -10,13 +10,15 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from products.dashboards.backend.widget_specs.configs import (
     ACTIVITY_EVENTS_LIST_WIDGET_TYPE,
     ERROR_TRACKING_LIST_WIDGET_TYPE,
+    LIVE_ACTIVITY_WIDGET_TYPE,
     SESSION_REPLAY_LIST_WIDGET_TYPE,
     ActivityEventsListWidgetConfig,
     ErrorTrackingListWidgetConfig,
+    LiveActivityWidgetConfig,
     SessionReplayListWidgetConfig,
 )
 
-DashboardWidgetType = Literal["activity_events_list", "error_tracking_list", "session_replay_list"]
+DashboardWidgetType = Literal["activity_events_list", "error_tracking_list", "live_activity", "session_replay_list"]
 
 __all__ = [
     "DashboardWidgetType",
@@ -44,6 +46,7 @@ class WidgetSpec:
     product_access_denied_message: str | None
     availability_requirements: tuple[str, ...]
     form_fields: tuple[str, ...]
+    default_layout: tuple[int, int] = (6, 5)
 
 
 def validate_widget_config(widget_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +68,7 @@ def _load_widget_specs() -> dict[str, WidgetSpec]:
         run_activity_events_list_widget,
     )
     from products.dashboards.backend.widgets.error_tracking_list import run_error_tracking_list_widget  # noqa: PLC0415
+    from products.dashboards.backend.widgets.live_activity import run_live_activity_widget  # noqa: PLC0415
     from products.dashboards.backend.widgets.session_replay_list import run_session_replay_list_widget  # noqa: PLC0415
 
     return {
@@ -95,6 +99,21 @@ def _load_widget_specs() -> dict[str, WidgetSpec]:
             product_access_denied_message="You do not have access to error tracking.",
             availability_requirements=("exception_autocapture",),
             form_fields=("limit", "orderBy", "orderDirection", "dateRange", "filterTestAccounts", "status"),
+        ),
+        LIVE_ACTIVITY_WIDGET_TYPE: WidgetSpec(
+            widget_type=LIVE_ACTIVITY_WIDGET_TYPE,
+            config_model=LiveActivityWidgetConfig,
+            query_fn=run_live_activity_widget,
+            required_scopes=("query:read",),
+            group_id="activity",
+            group_label="Activity",
+            label="Live activity",
+            description="Active users, activity pulse, and recent events for the last 5 minutes.",
+            required_product_access=None,
+            product_access_denied_message=None,
+            availability_requirements=(),
+            form_fields=("limit", "refreshIntervalSeconds", "filterTestAccounts"),
+            default_layout=(4, 4),
         ),
         SESSION_REPLAY_LIST_WIDGET_TYPE: WidgetSpec(
             widget_type=SESSION_REPLAY_LIST_WIDGET_TYPE,

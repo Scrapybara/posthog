@@ -81,11 +81,11 @@
                         "type": "number"
                     },
                     "widget": {
-                        "description": "Nested widget row updates.",
-                        "properties": {
-                            "config": {
-                                "anyOf": [
-                                    {
+                        "anyOf": [
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Configuration patch for the recent events widget.",
                                         "properties": {
                                             "dateRange": {
                                                 "anyOf": [
@@ -229,7 +229,39 @@
                                         },
                                         "type": "object"
                                     },
-                                    {
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "* `activity_events_list` - activity_events_list",
+                                        "enum": ["activity_events_list"],
+                                        "type": "string"
+                                    }
+                                },
+                                "required": ["widget_type"],
+                                "type": "object"
+                            },
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Configuration patch for the top issues widget.",
                                         "properties": {
                                             "assignee": {
                                                 "anyOf": [
@@ -426,7 +458,101 @@
                                         },
                                         "type": "object"
                                     },
-                                    {
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "* `error_tracking_list` - error_tracking_list",
+                                        "enum": ["error_tracking_list"],
+                                        "type": "string"
+                                    }
+                                },
+                                "required": ["widget_type"],
+                                "type": "object"
+                            },
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Configuration patch for the live activity widget.",
+                                        "properties": {
+                                            "filterTestAccounts": {
+                                                "anyOf": [
+                                                    {
+                                                        "type": "boolean"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ],
+                                                "description": "Whether to exclude test accounts. When omitted, the project default is used."
+                                            },
+                                            "limit": {
+                                                "default": 5,
+                                                "description": "Maximum number of recent events to return.",
+                                                "maximum": 10,
+                                                "minimum": 1,
+                                                "type": "number"
+                                            },
+                                            "refreshIntervalSeconds": {
+                                                "default": 15,
+                                                "description": "Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.",
+                                                "maximum": 60,
+                                                "minimum": 15,
+                                                "type": "number"
+                                            }
+                                        },
+                                        "type": "object"
+                                    },
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "* `live_activity` - live_activity",
+                                        "enum": ["live_activity"],
+                                        "type": "string"
+                                    }
+                                },
+                                "required": ["widget_type"],
+                                "type": "object"
+                            },
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Configuration patch for the recent recordings widget.",
                                         "properties": {
                                             "dateRange": {
                                                 "anyOf": [
@@ -599,37 +725,74 @@
                                             }
                                         },
                                         "type": "object"
-                                    }
-                                ],
-                                "description": "Widget-specific configuration. Shape depends on the tile's widget_type."
-                            },
-                            "description": {
-                                "description": "Optional markdown description shown when show_description is enabled.",
-                                "type": "string"
-                            },
-                            "id": {
-                                "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
-                                "type": "string"
-                            },
-                            "name": {
-                                "anyOf": [
-                                    {
-                                        "maxLength": 400,
+                                    },
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
                                         "type": "string"
                                     },
-                                    {
-                                        "type": "null"
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "* `session_replay_list` - session_replay_list",
+                                        "enum": ["session_replay_list"],
+                                        "type": "string"
                                     }
-                                ],
-                                "description": "Optional custom display name for the widget tile."
+                                },
+                                "required": ["widget_type"],
+                                "type": "object"
                             },
-                            "widget_type": {
-                                "description": "Widget type identifier (cannot be changed on update).\n\n* `activity_events_list` - activity_events_list\n* `error_tracking_list` - error_tracking_list\n* `session_replay_list` - session_replay_list",
-                                "enum": ["activity_events_list", "error_tracking_list", "session_replay_list"],
-                                "type": "string"
+                            {
+                                "properties": {
+                                    "config": {
+                                        "description": "Omit for metadata-only updates. Include widget_type to use a typed config schema.",
+                                        "enum": [],
+                                        "type": "string"
+                                    },
+                                    "description": {
+                                        "description": "Optional markdown description shown when show_description is enabled.",
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "description": "Existing widget row ID when updating a widget tile via dashboard PATCH.",
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "anyOf": [
+                                            {
+                                                "maxLength": 400,
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Optional custom display name for the widget tile."
+                                    },
+                                    "widget_type": {
+                                        "description": "Omit for metadata-only updates. Include a supported widget_type when patching config.",
+                                        "enum": [],
+                                        "type": "string"
+                                    }
+                                },
+                                "required": ["id"],
+                                "type": "object"
                             }
-                        },
-                        "type": "object"
+                        ],
+                        "description": "Nested widget row updates."
                     }
                 },
                 "type": "object"

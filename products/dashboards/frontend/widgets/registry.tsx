@@ -16,6 +16,9 @@ import { ActivityEventsWidget } from './activity/ActivityEventsWidget'
 import { parseActivityEventsWidgetConfigApiError } from './activity/activityEventsWidgetConfigValidation'
 import { ActivityEventsWidgetTileFilters } from './activity/ActivityEventsWidgetTileFilters'
 import { EditActivityEventsWidgetModal } from './activity/EditActivityEventsWidgetModal'
+import { EditLiveActivityWidgetModal } from './activity/EditLiveActivityWidgetModal'
+import { LiveActivityWidget } from './activity/LiveActivityWidget'
+import { parseLiveActivityWidgetConfigApiError } from './activity/liveActivityWidgetConfigValidation'
 import type {
     WidgetIssueMetadataContext,
     WidgetIssueMetadataDelta,
@@ -134,6 +137,11 @@ export const DASHBOARD_WIDGET_REGISTRY = {
         TileFilters: ActivityEventsWidgetTileFilters,
         EditModal: EditActivityEventsWidgetModal,
         parseConfigApiError: parseActivityEventsWidgetConfigApiError,
+    },
+    live_activity: {
+        Component: LiveActivityWidget,
+        EditModal: EditLiveActivityWidgetModal,
+        parseConfigApiError: parseLiveActivityWidgetConfigApiError,
     },
     error_tracking_list: {
         Component: ErrorTrackingWidget,

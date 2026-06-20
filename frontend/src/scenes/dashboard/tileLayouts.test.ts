@@ -134,6 +134,12 @@ describe('calculating tile layouts', () => {
             expectedMinH: 3,
             expectedMinW: 3,
         },
+        {
+            name: 'uses catalog minW for live activity widgets',
+            widgetType: 'live_activity',
+            expectedMinH: 3,
+            expectedMinW: 3,
+        },
     ])('$name', ({ widgetType, expectedMinH, expectedMinW }) => {
         const tiles: DashboardTile<QueryBasedInsightModel>[] = [
             {

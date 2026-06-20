@@ -1,6 +1,7 @@
 import typing
 from typing import Any, cast
 
+from freezegun import freeze_time
 from posthog.test.base import APIBaseTest
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +29,8 @@ from products.dashboards.backend.constants import (
     ACTIVITY_EVENTS_DEFAULT_LIMIT,
     ACTIVITY_EVENTS_MAX_LIMIT,
     DEFAULT_WIDGET_LIST_LIMIT,
+    LIVE_ACTIVITY_DEFAULT_LIMIT,
+    LIVE_ACTIVITY_MAX_LIMIT,
     MAX_WIDGET_RESULT_LIMIT,
     MAX_WIDGETS_BATCH_SIZE,
 )
@@ -36,6 +39,7 @@ from products.dashboards.backend.widget_registry import EXPECTED_WIDGET_TYPES, W
 from products.dashboards.backend.widget_specs.configs import (
     ACTIVITY_EVENTS_LIST_WIDGET_TYPE,
     ERROR_TRACKING_LIST_WIDGET_TYPE,
+    LIVE_ACTIVITY_WIDGET_TYPE,
     SESSION_REPLAY_LIST_WIDGET_TYPE,
     ErrorTrackingListWidgetConfig,
     SessionReplayOrderBy,
@@ -46,6 +50,11 @@ from products.dashboards.backend.widgets.activity_events_list import (
     run_activity_events_list_widget,
 )
 from products.dashboards.backend.widgets.error_tracking_list import run_error_tracking_list_widget
+from products.dashboards.backend.widgets.live_activity import (
+    LIVE_ACTIVITY_BUCKET_COUNT,
+    LIVE_ACTIVITY_BUCKET_SECONDS,
+    run_live_activity_widget,
+)
 from products.dashboards.backend.widgets.session_replay_list import run_session_replay_list_widget
 from products.error_tracking.backend.api.query_utils import ERROR_TRACKING_LISTING_VOLUME_RESOLUTION
 
@@ -103,10 +112,26 @@ class TestWidgetRegistry(APIBaseTest):
         with self.assertRaises(Exception):
             validate_widget_config(ACTIVITY_EVENTS_LIST_WIDGET_TYPE, {"limit": ACTIVITY_EVENTS_MAX_LIMIT + 1})
 
+    def test_validate_live_activity_config_defaults(self) -> None:
+        validated = validate_widget_config(LIVE_ACTIVITY_WIDGET_TYPE, {})
+        assert validated["limit"] == LIVE_ACTIVITY_DEFAULT_LIMIT
+        assert validated["refreshIntervalSeconds"] == 15
+        assert "filterTestAccounts" not in validated
+
+    def test_validate_live_activity_config_accepts_limit_up_to_max(self) -> None:
+        validated = validate_widget_config(LIVE_ACTIVITY_WIDGET_TYPE, {"limit": LIVE_ACTIVITY_MAX_LIMIT})
+        assert validated["limit"] == LIVE_ACTIVITY_MAX_LIMIT
+
+    @parameterized.expand([0, 14, 61])
+    def test_validate_live_activity_config_rejects_unsupported_refresh_interval(self, refresh_interval: int) -> None:
+        with self.assertRaises(Exception):
+            validate_widget_config(LIVE_ACTIVITY_WIDGET_TYPE, {"refreshIntervalSeconds": refresh_interval})
+
     @parameterized.expand(
         [
             ("activity_events", ACTIVITY_EVENTS_LIST_WIDGET_TYPE),
             ("error_tracking", ERROR_TRACKING_LIST_WIDGET_TYPE),
+            ("live_activity", LIVE_ACTIVITY_WIDGET_TYPE),
             ("session_replay", SESSION_REPLAY_LIST_WIDGET_TYPE),
         ]
     )
@@ -121,6 +146,7 @@ class TestWidgetRegistry(APIBaseTest):
         [
             ("activity_events", ACTIVITY_EVENTS_LIST_WIDGET_TYPE),
             ("error_tracking", ERROR_TRACKING_LIST_WIDGET_TYPE),
+            ("live_activity", LIVE_ACTIVITY_WIDGET_TYPE),
             ("session_replay", SESSION_REPLAY_LIST_WIDGET_TYPE),
         ]
     )
@@ -345,6 +371,73 @@ class TestDashboardRunWidgets(APIBaseTest):
         self.assertEqual(query.orderBy, ["timestamp DESC"])
         self.assertEqual(query.after, "-24h")
         self.assertEqual(query.limit, 10)
+
+    @freeze_time("2026-06-17T12:00:00Z")
+    @patch("products.dashboards.backend.widgets.live_activity.HogQLQueryRunner")
+    def test_runs_live_activity_widget_for_requested_tile(self, mock_runner_cls: MagicMock) -> None:
+        def runner_side_effect(*_args: object, **kwargs: object) -> MagicMock:
+            query = kwargs["query"]
+            if "events_in_window" in query.query:
+                results = [[9, 3, "2026-06-17T11:59:50Z"]]
+            elif "bucket_index" in query.query:
+                results = [[19, 9]]
+            else:
+                results = [
+                    [
+                        "0196e9ab-0000-0000-0000-000000000000",
+                        "$pageview",
+                        "Alex Chen",
+                        "https://app.example.test/dashboard",
+                        "web",
+                        "2026-06-17T11:59:50Z",
+                        "user-1",
+                    ]
+                ]
+            return MagicMock(
+                calculate=MagicMock(return_value=MagicMock(model_dump=lambda mode="json": {"results": results}))
+            )
+
+        mock_runner_cls.side_effect = runner_side_effect
+        dashboard_id, _ = self.dashboard_api.create_dashboard({"name": "dash"})
+        _, dashboard_json = self.dashboard_api.create_widget_tile(
+            dashboard_id,
+            widget_type=LIVE_ACTIVITY_WIDGET_TYPE,
+            config={"limit": 5, "refreshIntervalSeconds": 15},
+        )
+        tile_id = dashboard_json["tiles"][0]["id"]
+
+        body = self._run(dashboard_id, [tile_id])
+
+        self.assertEqual(len(body["results"]), 1)
+        self.assertEqual(body["results"][0]["tile_id"], tile_id)
+        self.assertEqual(body["results"][0]["widget_type"], LIVE_ACTIVITY_WIDGET_TYPE)
+        self.assertIsNone(body["results"][0]["error"])
+        result = body["results"][0]["result"]
+        self.assertEqual(result["activeUsers"], 3)
+        self.assertEqual(result["eventsInWindow"], 9)
+        self.assertEqual(result["events"][0]["surface"], "web")
+        self.assertEqual(result["limit"], 5)
+        self.assertEqual(result["bucketSeconds"], LIVE_ACTIVITY_BUCKET_SECONDS)
+        self.assertEqual(len(result["pulse"]), LIVE_ACTIVITY_BUCKET_COUNT)
+        self.assertEqual(mock_runner_cls.call_count, 3)
+        for call in mock_runner_cls.call_args_list:
+            self.assertEqual(call.kwargs["user"], self.user)
+
+    @patch("products.dashboards.backend.widgets.live_activity.HogQLQueryRunner")
+    def test_live_activity_widget_tags_queries_in_debug_mode(self, mock_runner_cls: MagicMock) -> None:
+        def calculate_with_tag_assertion() -> MagicMock:
+            tags = get_query_tags()
+            if tags.product != Product.PRODUCT_ANALYTICS or tags.feature != Feature.QUERY:
+                raise UntaggedQueryError("live activity widget must tag ClickHouse queries")
+            return MagicMock(model_dump=lambda mode="json": {"results": []})
+
+        mock_runner_cls.return_value.calculate.side_effect = calculate_with_tag_assertion
+
+        with override_settings(DEBUG=True, TEST=False):
+            result = run_live_activity_widget(self.team, {"limit": 5}, user=self.user)
+
+        self.assertEqual(result["limit"], 5)
+        self.assertEqual(mock_runner_cls.call_count, 3)
 
     @patch("products.dashboards.backend.widgets.activity_events_list.EventsQueryRunner")
     def test_activity_events_widget_applies_date_range_and_widget_filters(self, mock_runner_cls: MagicMock) -> None:

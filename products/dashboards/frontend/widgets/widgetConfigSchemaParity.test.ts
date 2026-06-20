@@ -3,6 +3,7 @@ import configPropertyMetadata from '../generated/widget-config-property-keys.jso
 import {
     activityEventsWidgetConfigSchema,
     errorTrackingWidgetConfigSchema,
+    liveActivityWidgetConfigSchema,
     sessionReplayWidgetConfigSchema,
     widgetFilterEntrySchema,
 } from '../generated/widget-configs.zod'
@@ -10,6 +11,7 @@ import {
 const WIDGET_CONFIG_SCHEMAS = {
     activity_events_list: activityEventsWidgetConfigSchema,
     error_tracking_list: errorTrackingWidgetConfigSchema,
+    live_activity: liveActivityWidgetConfigSchema,
     session_replay_list: sessionReplayWidgetConfigSchema,
 } as const
 

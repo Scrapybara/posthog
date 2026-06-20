@@ -6,7 +6,7 @@
             "type": "number"
         },
         "widgets": {
-            "description": "Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).",
+            "description": "Widget tiles to add atomically. Supported widget_type values: activity_events_list, error_tracking_list, live_activity, session_replay_list. Use dashboard-widget-catalog-list for per-type config_schema documentation. (1–10 per request).",
             "items": {
                 "anyOf": [
                     {
@@ -496,6 +496,117 @@
                             },
                             "widget_type": {
                                 "enum": ["error_tracking_list"],
+                                "type": "string"
+                            }
+                        },
+                        "required": ["widget_type", "config"],
+                        "type": "object"
+                    },
+                    {
+                        "properties": {
+                            "config": {
+                                "description": "Configuration for the live activity widget.",
+                                "properties": {
+                                    "filterTestAccounts": {
+                                        "anyOf": [
+                                            {
+                                                "type": "boolean"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ],
+                                        "description": "Whether to exclude test accounts. When omitted, the project default is used."
+                                    },
+                                    "limit": {
+                                        "default": 5,
+                                        "description": "Maximum number of recent events to return.",
+                                        "maximum": 10,
+                                        "minimum": 1,
+                                        "type": "number"
+                                    },
+                                    "refreshIntervalSeconds": {
+                                        "default": 15,
+                                        "description": "Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.",
+                                        "maximum": 60,
+                                        "minimum": 15,
+                                        "type": "number"
+                                    }
+                                },
+                                "type": "object"
+                            },
+                            "description": {
+                                "description": "Optional markdown description shown when show_description is enabled.",
+                                "type": "string"
+                            },
+                            "layouts": {
+                                "description": "Optional react-grid-layout positions keyed by breakpoint (sm, xs).",
+                                "properties": {
+                                    "sm": {
+                                        "description": "Layout for the standard (desktop) breakpoint. The grid is 12 columns wide.",
+                                        "properties": {
+                                            "h": {
+                                                "description": "Height in grid rows.",
+                                                "type": "number"
+                                            },
+                                            "w": {
+                                                "description": "Width in grid columns. The desktop grid is 12 columns wide.",
+                                                "type": "number"
+                                            },
+                                            "x": {
+                                                "description": "Column position in the dashboard grid (0-indexed).",
+                                                "type": "number"
+                                            },
+                                            "y": {
+                                                "description": "Row position in the dashboard grid (0-indexed).",
+                                                "type": "number"
+                                            }
+                                        },
+                                        "type": "object"
+                                    },
+                                    "xs": {
+                                        "description": "Layout for the small (mobile) breakpoint. The grid is 1 column wide.",
+                                        "properties": {
+                                            "h": {
+                                                "description": "Height in grid rows.",
+                                                "type": "number"
+                                            },
+                                            "w": {
+                                                "description": "Width in grid columns. The desktop grid is 12 columns wide.",
+                                                "type": "number"
+                                            },
+                                            "x": {
+                                                "description": "Column position in the dashboard grid (0-indexed).",
+                                                "type": "number"
+                                            },
+                                            "y": {
+                                                "description": "Row position in the dashboard grid (0-indexed).",
+                                                "type": "number"
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                },
+                                "type": "object"
+                            },
+                            "name": {
+                                "anyOf": [
+                                    {
+                                        "maxLength": 400,
+                                        "type": "string"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "description": "Optional custom display name for the widget tile."
+                            },
+                            "show_description": {
+                                "description": "Whether to show the description on the dashboard tile.",
+                                "type": "boolean"
+                            },
+                            "widget_type": {
+                                "enum": ["live_activity"],
                                 "type": "string"
                             }
                         },

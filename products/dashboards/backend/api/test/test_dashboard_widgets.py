@@ -570,9 +570,14 @@ class TestDashboardWidgets(APIBaseTest):
 
         results = response.json()["results"]
         assert any(entry["widget_type"] == "error_tracking_list" for entry in results)
+        assert any(entry["widget_type"] == "live_activity" for entry in results)
         error_tracking_list = next(entry for entry in results if entry["widget_type"] == "error_tracking_list")
         assert error_tracking_list["config_schema"]["properties"]["limit"]["default"] == DEFAULT_WIDGET_LIST_LIMIT
         assert error_tracking_list["availability_requirements"] == ["exception_autocapture"]
+        live_activity = next(entry for entry in results if entry["widget_type"] == "live_activity")
+        assert live_activity["group_id"] == "activity"
+        assert live_activity["config_schema"]["properties"]["refreshIntervalSeconds"]["minimum"] == 15
+        assert live_activity["config_schema"]["properties"]["refreshIntervalSeconds"]["maximum"] == 60
 
     @override_settings(IN_UNIT_TESTING=True)
     def test_add_widget_via_batch_endpoint(self) -> None:
@@ -593,6 +598,56 @@ class TestDashboardWidgets(APIBaseTest):
         assert tile["widget"]["config"]["limit"] == 8
         assert tile["widget"]["name"] == "Errors"
         assert tile["layouts"]["sm"]["w"] == 6
+
+    @override_settings(IN_UNIT_TESTING=True)
+    def test_add_live_activity_widget_via_batch_endpoint_uses_compact_layout(self) -> None:
+        dashboard_id, _ = self.dashboard_api.create_dashboard({"name": "dashboard"})
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/dashboards/{dashboard_id}/widgets/batch/",
+            {
+                "widgets": [
+                    {
+                        "widget_type": "live_activity",
+                        "config": {"limit": 5, "refreshIntervalSeconds": 15},
+                        "name": "Live activity",
+                    },
+                ]
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        tile = response.json()["tiles"][0]
+        assert tile["widget"]["widget_type"] == "live_activity"
+        assert tile["widget"]["config"] == {"limit": 5, "refreshIntervalSeconds": 15}
+        assert tile["widget"]["name"] == "Live activity"
+        assert tile["layouts"]["sm"]["w"] == 4
+        assert tile["layouts"]["sm"]["h"] == 4
+
+    @override_settings(IN_UNIT_TESTING=True)
+    def test_live_activity_widget_create_and_update_validate_refresh_interval(self) -> None:
+        dashboard_id, _ = self.dashboard_api.create_dashboard({"name": "dashboard"})
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/dashboards/{dashboard_id}/widgets/batch/",
+            {"widgets": [{"widget_type": "live_activity", "config": {"refreshIntervalSeconds": 5}}]},
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+        _, dashboard_json = self.dashboard_api.create_widget_tile(
+            dashboard_id,
+            widget_type="live_activity",
+            config={"limit": 5, "refreshIntervalSeconds": 15},
+        )
+        tile = dashboard_json["tiles"][0]
+        tile["widget"]["config"] = {"limit": 5, "refreshIntervalSeconds": 61}
+
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/dashboards/{dashboard_id}",
+            {"tiles": [tile]},
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.json()["attr"] == "config"
 
     @override_settings(IN_UNIT_TESTING=True)
     def test_widgets_batch_endpoint_rejects_legacy_error_tracking_widget_type(self) -> None:

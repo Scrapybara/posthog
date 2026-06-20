@@ -4,9 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from products.dashboards.backend.constants import ACTIVITY_EVENTS_DEFAULT_LIMIT, DEFAULT_WIDGET_LIST_LIMIT
+from products.dashboards.backend.constants import (
+    ACTIVITY_EVENTS_DEFAULT_LIMIT,
+    DEFAULT_WIDGET_LIST_LIMIT,
+    LIVE_ACTIVITY_DEFAULT_LIMIT,
+)
 from products.dashboards.backend.widget_specs.common import (
     ActivityWidgetLimit,
+    LiveActivityWidgetLimit,
     WidgetLimit,
     WidgetListConfigBase,
     WidgetOrderDirection,
@@ -14,6 +19,7 @@ from products.dashboards.backend.widget_specs.common import (
 
 ACTIVITY_EVENTS_LIST_WIDGET_TYPE = "activity_events_list"
 ERROR_TRACKING_LIST_WIDGET_TYPE = "error_tracking_list"
+LIVE_ACTIVITY_WIDGET_TYPE = "live_activity"
 SESSION_REPLAY_LIST_WIDGET_TYPE = "session_replay_list"
 
 ErrorTrackingOrderBy = Literal["last_seen", "first_seen", "occurrences", "users", "sessions"]
@@ -68,3 +74,31 @@ class ActivityEventsListWidgetConfig(WidgetListConfigBase):
     limit: ActivityWidgetLimit = Field(
         default=ACTIVITY_EVENTS_DEFAULT_LIMIT, description="Maximum number of events to return."
     )
+
+
+class LiveActivityWidgetConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: LiveActivityWidgetLimit = Field(
+        default=LIVE_ACTIVITY_DEFAULT_LIMIT,
+        description="Maximum number of recent events to return.",
+    )
+    filterTestAccounts: bool | None = Field(
+        default=None,
+        description="Whether to exclude test accounts. When omitted, the project default is used.",
+    )
+    refreshIntervalSeconds: int = Field(
+        default=15,
+        ge=15,
+        le=60,
+        description="Auto-refresh interval in seconds. The frontend pauses this timer while the tab is hidden.",
+    )
+
+    @field_validator("filterTestAccounts", mode="before")
+    @classmethod
+    def validate_filter_test_accounts(cls, value: object) -> bool | None:
+        if value is None:
+            return None
+        if not isinstance(value, bool):
+            raise ValueError("filterTestAccounts must be a boolean.")
+        return value

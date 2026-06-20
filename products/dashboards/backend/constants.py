@@ -11,6 +11,10 @@ DEFAULT_WIDGET_LIST_LIMIT = 10
 ACTIVITY_EVENTS_MAX_LIMIT = 50
 ACTIVITY_EVENTS_DEFAULT_LIMIT = 25
 
+# Live activity is intentionally compact: active users + pulse + a short recent-events feed.
+LIVE_ACTIVITY_MAX_LIMIT = 10
+LIVE_ACTIVITY_DEFAULT_LIMIT = 5
+
 # Cap widgets per batch create / run-widgets request.
 MAX_WIDGETS_BATCH_SIZE = 10
 

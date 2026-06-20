@@ -7613,6 +7613,441 @@ class TestTrendsQueryRunner(ClickhouseTestMixin, APIBaseTest):
         assert response.results[0]["days"] == expected_days
         assert response.results[0]["data"] == expected_data
 
+    # --- Regression coverage for issue #61782 -----------------------------------------
+    # "Hide weekend data" must drop only Saturday/Sunday buckets and keep every weekday
+    # bucket (and its real value) intact — including the in-progress week after the most
+    # recent weekend. The bug zeroed out weekday values after the last weekend; these
+    # tests pin the corrected behavior across the full data path and the bucket-alignment
+    # transformation itself.
+
+    def _create_daily_count_events(
+        self,
+        counts: dict[str, int],
+        *,
+        event: str = "$pageview",
+        distinct_id: str = "weekend_user",
+        hour: str = "12:00:00",
+        tz_suffix: str = "Z",
+    ) -> None:
+        # Create `n` events on each given date so the daily count equals the mapped value.
+        _create_person(team_id=self.team.pk, distinct_ids=[distinct_id], properties={})
+        for date_str, n in counts.items():
+            for _ in range(n):
+                _create_event(
+                    team=self.team,
+                    event=event,
+                    distinct_id=distinct_id,
+                    timestamp=f"{date_str}T{hour}{tz_suffix}",
+                    properties={},
+                )
+
+    @staticmethod
+    def _weekday_alignment(days: list[str], data: list) -> None:
+        # No weekend date may survive, and arrays must stay the same length (aligned).
+        assert len(days) == len(data), f"days/data misaligned: {len(days)} vs {len(data)}"
+        for day_str in days:
+            parsed = datetime.strptime(day_str[:10], "%Y-%m-%d")
+            assert parsed.weekday() < 5, f"{day_str} is a weekend but survived weekend filtering"
+
+    def test_hide_weekends_midweek_inprogress_week_preserved(self):
+        # Exact issue scenario: a daily range ending mid-week (Thu) with a weekend before
+        # the final Mon-Thu run. Toggling hideWeekends on must remove only Sat/Sun and keep
+        # the in-progress week's real, non-zero values — not zero them out.
+        self._create_daily_count_events(
+            {
+                "2020-01-09": 4,  # Thu
+                "2020-01-10": 5,  # Fri
+                "2020-01-11": 6,  # Sat (weekend)
+                "2020-01-12": 7,  # Sun (weekend)
+                "2020-01-13": 8,  # Mon
+                "2020-01-14": 9,  # Tue
+                # 2020-01-15 Wed deliberately omitted -> a truly missing weekday bucket (real 0)
+                "2020-01-16": 2,  # Thu
+                "2020-01-17": 1,  # Fri
+                "2020-01-18": 6,  # Sat (weekend)
+                "2020-01-19": 7,  # Sun (weekend)
+                "2020-01-20": 3,  # Mon (in-progress week, mirrors issue: Mon 3)
+                "2020-01-21": 3,  # Tue 3
+                "2020-01-22": 3,  # Wed 3
+                "2020-01-23": 12,  # Thu 12
+            }
+        )
+
+        off = self._run_trends_query(
+            "2020-01-09",
+            "2020-01-23",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+        )
+        on = self._run_trends_query(
+            "2020-01-09",
+            "2020-01-23",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        off_days, off_data = off.results[0]["days"], off.results[0]["data"]
+        on_days, on_data = on.results[0]["days"], on.results[0]["data"]
+
+        # Exactly the four weekend buckets are dropped; everything else stays put.
+        assert on_days == [
+            "2020-01-09",
+            "2020-01-10",
+            "2020-01-13",
+            "2020-01-14",
+            "2020-01-15",
+            "2020-01-16",
+            "2020-01-17",
+            "2020-01-20",
+            "2020-01-21",
+            "2020-01-22",
+            "2020-01-23",
+        ]
+        assert on_data == [4, 5, 8, 9, 0, 2, 1, 3, 3, 3, 12]
+
+        # Every retained weekday keeps the exact value it had with the toggle off.
+        off_by_day = dict(zip(off_days, off_data))
+        for day, value in zip(on_days, on_data):
+            assert value == off_by_day[day], f"{day} changed when hiding weekends: {off_by_day[day]} -> {value}"
+
+        # The in-progress week after the last weekend is preserved and non-zero (the bug).
+        assert on_data[-4:] == [3, 3, 3, 12]
+        # A genuinely empty weekday stays zero (we must not fabricate values either).
+        assert on_data[on_days.index("2020-01-15")] == 0
+        # Count reflects only the visible weekday buckets.
+        assert on.results[0]["count"] == float(sum(on_data))
+
+    def test_hide_weekends_truly_missing_weekday_bucket_stays_zero(self):
+        # A weekday with no events must remain 0 — distinguish a real empty bucket from the
+        # bug's zeroing of populated weekdays.
+        self._create_daily_count_events(
+            {
+                "2020-01-16": 3,  # Thu
+                "2020-01-17": 2,  # Fri
+                "2020-01-18": 4,  # Sat (weekend)
+                "2020-01-19": 5,  # Sun (weekend)
+                "2020-01-20": 6,  # Mon
+                # 2020-01-21 Tue omitted -> truly empty weekday
+                "2020-01-22": 7,  # Wed
+                "2020-01-23": 8,  # Thu
+            }
+        )
+
+        response = self._run_trends_query(
+            "2020-01-16",
+            "2020-01-23",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+        days, data = response.results[0]["days"], response.results[0]["data"]
+
+        self._weekday_alignment(days, data)
+        assert days == ["2020-01-16", "2020-01-17", "2020-01-20", "2020-01-21", "2020-01-22", "2020-01-23"]
+        assert data == [3, 2, 6, 0, 7, 8]
+        assert data[days.index("2020-01-21")] == 0
+
+    def test_hide_weekends_compare_midweek_preserves_both_series(self):
+        # Comparison data: the current window ends mid-week (Mon-Thu, no weekend) and the
+        # auto previous window straddles a weekend. Both series must keep their weekday
+        # values; only Sat/Sun drop from the previous series.
+        self._create_daily_count_events(
+            {
+                # previous window 2020-01-16..2020-01-19
+                "2020-01-16": 1,  # Thu
+                "2020-01-17": 2,  # Fri
+                "2020-01-18": 7,  # Sat (weekend)
+                "2020-01-19": 8,  # Sun (weekend)
+                # current window 2020-01-20..2020-01-23
+                "2020-01-20": 3,  # Mon
+                "2020-01-21": 4,  # Tue
+                "2020-01-22": 5,  # Wed
+                "2020-01-23": 6,  # Thu
+            }
+        )
+
+        response = self._run_trends_query(
+            "2020-01-20",
+            "2020-01-23",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+            compare_filters=CompareFilter(compare=True),
+        )
+
+        assert len(response.results) == 2
+        current = next(r for r in response.results if r["compare_label"] == "current")
+        previous = next(r for r in response.results if r["compare_label"] == "previous")
+
+        # Current week is all weekdays -> nothing dropped, real values preserved.
+        self._weekday_alignment(current["days"], current["data"])
+        assert current["data"] == [3, 4, 5, 6]
+
+        # Previous window drops its Sat/Sun and keeps Thu/Fri values.
+        self._weekday_alignment(previous["days"], previous["data"])
+        assert previous["data"] == [1, 2]
+
+    def test_hide_weekends_timezone_offset_uses_team_local_dates(self):
+        # Timezone offset: weekend classification must follow the team-local bucket dates,
+        # and weekday buckets stay intact. Events fired at 20:00 UTC == 12:00 US/Pacific.
+        self.team.timezone = "US/Pacific"
+        self.team.save()
+        self._create_daily_count_events(
+            {
+                "2020-01-16": 1,  # Thu
+                "2020-01-17": 2,  # Fri
+                "2020-01-18": 9,  # Sat (weekend)
+                "2020-01-19": 8,  # Sun (weekend)
+                "2020-01-20": 3,  # Mon
+                "2020-01-21": 4,  # Tue
+                "2020-01-22": 5,  # Wed
+            },
+            hour="20:00:00",
+        )
+
+        response = self._run_trends_query(
+            "2020-01-16",
+            "2020-01-22",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+        days, data = response.results[0]["days"], response.results[0]["data"]
+
+        self._weekday_alignment(days, data)
+        assert days == ["2020-01-16", "2020-01-17", "2020-01-20", "2020-01-21", "2020-01-22"]
+        assert data == [1, 2, 3, 4, 5]
+
+    def test_hide_weekends_dst_boundary_preserves_weekday_buckets(self):
+        # DST boundary: US/Pacific springs forward on Sun 2021-03-14. A range straddling
+        # that weekend must still drop only Sat/Sun and keep the surrounding weekdays —
+        # no off-by-one bucket shift from the clock change.
+        self.team.timezone = "US/Pacific"
+        self.team.save()
+        self._create_daily_count_events(
+            {
+                "2021-03-11": 1,  # Thu
+                "2021-03-12": 2,  # Fri
+                "2021-03-13": 5,  # Sat (weekend, DST eve)
+                "2021-03-14": 6,  # Sun (weekend, DST transition day)
+                "2021-03-15": 3,  # Mon
+                "2021-03-16": 4,  # Tue
+                "2021-03-17": 2,  # Wed
+            },
+            hour="20:00:00",
+        )
+
+        response = self._run_trends_query(
+            "2021-03-11",
+            "2021-03-17",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+        days, data = response.results[0]["days"], response.results[0]["data"]
+
+        self._weekday_alignment(days, data)
+        assert days == ["2021-03-11", "2021-03-12", "2021-03-15", "2021-03-16", "2021-03-17"]
+        assert data == [1, 2, 3, 4, 2]
+
+    def test_hide_weekends_week_start_sunday_day_interval(self):
+        # Configured week start must not change which days count as weekend for a DAY
+        # interval — Saturday and Sunday are still the only buckets removed.
+        self.team.week_start_day = WeekStartDay.SUNDAY
+        self.team.save()
+        self._create_daily_count_events(
+            {
+                "2020-01-16": 1,  # Thu
+                "2020-01-17": 2,  # Fri
+                "2020-01-18": 5,  # Sat (weekend)
+                "2020-01-19": 6,  # Sun (weekend)
+                "2020-01-20": 3,  # Mon
+                "2020-01-21": 4,  # Tue
+                "2020-01-22": 7,  # Wed
+                "2020-01-23": 8,  # Thu
+            }
+        )
+
+        response = self._run_trends_query(
+            "2020-01-16",
+            "2020-01-23",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+        days, data = response.results[0]["days"], response.results[0]["data"]
+
+        self._weekday_alignment(days, data)
+        assert days == ["2020-01-16", "2020-01-17", "2020-01-20", "2020-01-21", "2020-01-22", "2020-01-23"]
+        assert data == [1, 2, 3, 4, 7, 8]
+
+    def _make_weekend_series_result(
+        self,
+        day_values: list[tuple[str, float]],
+        *,
+        with_action: bool = True,
+    ) -> dict:
+        days = [d for d, _ in day_values]
+        data = [v for _, v in day_values]
+        result: dict[str, Any] = {
+            "days": list(days),
+            "data": list(data),
+            "labels": list(days),
+            "count": float(sum(data)),
+            "label": "$pageview",
+            "action": None,
+        }
+        if with_action:
+            # action["days"] holds datetime objects (QueryDateRange.all_values()), not strings.
+            result["action"] = {"days": [datetime.strptime(d, "%Y-%m-%d") for d in days], "order": 0}
+        return result
+
+    def _weekend_filter_runner(self, display: Optional[ChartDisplayType] = None) -> "TrendsQueryRunner":
+        return self._create_query_runner(
+            "2020-01-01",
+            "2020-01-31",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True, display=display),
+        )
+
+    @parameterized.expand(
+        [
+            # Each range starts on a Thursday with a weekend before the final run and ends on
+            # the named weekday. Only Sat/Sun drop; weekday values stay aligned and non-zero.
+            ("ends_monday", "2020-01-20", [("2020-01-16", 1), ("2020-01-17", 2), ("2020-01-20", 3)]),
+            (
+                "ends_tuesday",
+                "2020-01-21",
+                [("2020-01-16", 1), ("2020-01-17", 2), ("2020-01-20", 3), ("2020-01-21", 4)],
+            ),
+            (
+                "ends_wednesday",
+                "2020-01-22",
+                [("2020-01-16", 1), ("2020-01-17", 2), ("2020-01-20", 3), ("2020-01-21", 4), ("2020-01-22", 5)],
+            ),
+            (
+                "ends_thursday",
+                "2020-01-23",
+                [
+                    ("2020-01-16", 1),
+                    ("2020-01-17", 2),
+                    ("2020-01-20", 3),
+                    ("2020-01-21", 4),
+                    ("2020-01-22", 5),
+                    ("2020-01-23", 6),
+                ],
+            ),
+            (
+                "ends_friday",
+                "2020-01-24",
+                [
+                    ("2020-01-16", 1),
+                    ("2020-01-17", 2),
+                    ("2020-01-20", 3),
+                    ("2020-01-21", 4),
+                    ("2020-01-22", 5),
+                    ("2020-01-23", 6),
+                    ("2020-01-24", 7),
+                ],
+            ),
+            # Ranges ending on a weekend day: the trailing weekend drops, last weekday kept.
+            ("ends_saturday", "2020-01-25", [("2020-01-16", 1), ("2020-01-17", 2), ("2020-01-20", 3)]),
+            ("ends_sunday", "2020-01-26", [("2020-01-16", 1), ("2020-01-17", 2), ("2020-01-20", 3)]),
+        ]
+    )
+    def test_filter_weekend_buckets_range_ending_each_weekday(self, _name, _date_to, expected_weekday_values):
+        # Build the full bucket axis (with both weekend days populated) up to the range end,
+        # then assert weekend buckets vanish while every weekday value is preserved in order.
+        weekend_days = {
+            "ends_monday": [("2020-01-18", 9), ("2020-01-19", 8)],
+            "ends_tuesday": [("2020-01-18", 9), ("2020-01-19", 8)],
+            "ends_wednesday": [("2020-01-18", 9), ("2020-01-19", 8)],
+            "ends_thursday": [("2020-01-18", 9), ("2020-01-19", 8)],
+            "ends_friday": [("2020-01-18", 9), ("2020-01-19", 8)],
+            "ends_saturday": [("2020-01-18", 9), ("2020-01-19", 8), ("2020-01-25", 4)],
+            "ends_sunday": [("2020-01-18", 9), ("2020-01-19", 8), ("2020-01-25", 4), ("2020-01-26", 5)],
+        }[_name]
+
+        # Merge weekday + weekend buckets and sort into a single chronological axis.
+        all_buckets = sorted(expected_weekday_values + weekend_days, key=lambda dv: dv[0])
+        result = self._make_weekend_series_result(all_buckets)
+
+        filtered = self._weekend_filter_runner()._filter_weekend_buckets([result])[0]
+
+        self._weekday_alignment(filtered["days"], filtered["data"])
+        assert filtered["days"] == [d for d, _ in expected_weekday_values]
+        assert filtered["data"] == [v for _, v in expected_weekday_values]
+        assert filtered["count"] == float(sum(v for _, v in expected_weekday_values))
+        # action["days"] (datetime objects) drops weekends too, without crashing.
+        assert all(d.weekday() < 5 for d in filtered["action"]["days"])
+        assert len(filtered["action"]["days"]) == len(expected_weekday_values)
+
+    def test_filter_weekend_buckets_multiple_weekends_preserves_all_weekdays(self):
+        # Three consecutive weeks: every Sat/Sun across the span is removed and all 15
+        # weekday buckets keep their distinct values in order (no shift, no zeroing).
+        axis = [
+            ("2020-01-06", 1),  # Mon
+            ("2020-01-07", 2),  # Tue
+            ("2020-01-08", 3),  # Wed
+            ("2020-01-09", 4),  # Thu
+            ("2020-01-10", 5),  # Fri
+            ("2020-01-11", 90),  # Sat
+            ("2020-01-12", 80),  # Sun
+            ("2020-01-13", 6),  # Mon
+            ("2020-01-14", 7),  # Tue
+            ("2020-01-15", 8),  # Wed
+            ("2020-01-16", 9),  # Thu
+            ("2020-01-17", 10),  # Fri
+            ("2020-01-18", 70),  # Sat
+            ("2020-01-19", 60),  # Sun
+            ("2020-01-20", 11),  # Mon
+            ("2020-01-21", 12),  # Tue
+            ("2020-01-22", 13),  # Wed
+            ("2020-01-23", 14),  # Thu
+            ("2020-01-24", 15),  # Fri
+        ]
+        filtered = self._weekend_filter_runner()._filter_weekend_buckets([self._make_weekend_series_result(axis)])[0]
+
+        self._weekday_alignment(filtered["days"], filtered["data"])
+        assert filtered["data"] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        assert "2020-01-11" not in filtered["days"]
+        assert "2020-01-19" not in filtered["days"]
+
+    def test_filter_weekend_buckets_no_weekend_in_range_is_identity(self):
+        # A Monday-Friday range has no weekend buckets, so the result is returned untouched.
+        axis = [
+            ("2020-01-20", 3),  # Mon
+            ("2020-01-21", 0),  # Tue (empty weekday stays)
+            ("2020-01-22", 5),  # Wed
+            ("2020-01-23", 6),  # Thu
+            ("2020-01-24", 7),  # Fri
+        ]
+        result = self._make_weekend_series_result(axis)
+        filtered = self._weekend_filter_runner()._filter_weekend_buckets([result])[0]
+
+        assert filtered["days"] == [d for d, _ in axis]
+        assert filtered["data"] == [v for _, v in axis]
+
+    def test_filter_weekend_buckets_cumulative_recomputes_count_from_last_value(self):
+        # For a cumulative display the recomputed count is the last retained weekday value,
+        # not the sum of the visible points.
+        axis = [
+            ("2020-01-16", 1),  # Thu
+            ("2020-01-17", 3),  # Fri
+            ("2020-01-18", 3),  # Sat (weekend)
+            ("2020-01-19", 3),  # Sun (weekend)
+            ("2020-01-20", 7),  # Mon
+            ("2020-01-21", 9),  # Tue (running total)
+        ]
+        runner = self._weekend_filter_runner(display=ChartDisplayType.ACTIONS_LINE_GRAPH_CUMULATIVE)
+        filtered = runner._filter_weekend_buckets([self._make_weekend_series_result(axis)])[0]
+
+        self._weekday_alignment(filtered["days"], filtered["data"])
+        assert filtered["data"] == [1, 3, 7, 9]
+        assert filtered["count"] == 9
+
     @parameterized.expand(
         [
             (

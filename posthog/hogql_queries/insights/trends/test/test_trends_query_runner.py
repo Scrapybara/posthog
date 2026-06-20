@@ -214,6 +214,80 @@ class TestTrendsQueryRunner(ClickhouseTestMixin, APIBaseTest):
             ]
         )
 
+    @staticmethod
+    def _date_range_days(date_from: str, date_to: str) -> list[str]:
+        start = datetime.strptime(date_from, "%Y-%m-%d")
+        end = datetime.strptime(date_to, "%Y-%m-%d")
+        return [(start + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range((end - start).days + 1)]
+
+    @staticmethod
+    def _weekday_days(date_from: str, date_to: str) -> list[str]:
+        return [
+            day
+            for day in TestTrendsQueryRunner._date_range_days(date_from, date_to)
+            if datetime.strptime(day, "%Y-%m-%d").weekday() < 5
+        ]
+
+    @staticmethod
+    def _timestamp_for_day(day: str, event_index: int, timezone: Optional[str] = None) -> str:
+        timestamp = datetime.strptime(day, "%Y-%m-%d").replace(hour=0, minute=event_index + 1, second=0)
+        if timezone is not None:
+            return timestamp.replace(tzinfo=zoneinfo.ZoneInfo(timezone)).isoformat()
+        return f"{day}T00:{event_index + 1:02d}:00Z"
+
+    def _create_pageview_events_by_day(
+        self,
+        counts_by_day: dict[str, int],
+        *,
+        distinct_id: str = "hide-weekends-user",
+        properties: Optional[dict[str, str | int | bool]] = None,
+        timezone: Optional[str] = None,
+    ) -> None:
+        timestamps = [
+            self._timestamp_for_day(day, event_index, timezone)
+            for day, count in counts_by_day.items()
+            for event_index in range(count)
+        ]
+        self._create_events(
+            [
+                SeriesTestData(
+                    distinct_id=distinct_id,
+                    events=[Series(event="$pageview", timestamps=timestamps)],
+                    properties=properties or {},
+                )
+            ]
+        )
+
+    def _issue_61782_counts(self, date_from: str, date_to: str) -> dict[str, int]:
+        counts_by_day = {
+            day: 2 if datetime.strptime(day, "%Y-%m-%d").weekday() >= 5 else 1
+            for day in self._date_range_days(date_from, date_to)
+        }
+        counts_by_day.update(
+            {
+                day: count
+                for day, count in {
+                    "2024-06-10": 3,
+                    "2024-06-11": 3,
+                    "2024-06-12": 3,
+                    "2024-06-13": 12,
+                }.items()
+                if date_from <= day <= date_to
+            }
+        )
+        return counts_by_day
+
+    @staticmethod
+    def _filter_result_to_weekdays(result: dict[str, Any]) -> tuple[list[str], list[Any], list[Any]]:
+        weekday_indices = [
+            index for index, day in enumerate(result["days"]) if datetime.strptime(day, "%Y-%m-%d").weekday() < 5
+        ]
+        return (
+            [result["days"][index] for index in weekday_indices],
+            [result["labels"][index] for index in weekday_indices],
+            [result["data"][index] for index in weekday_indices],
+        )
+
     def _create_group(self, **kwargs):
         create_group(**kwargs)
         props = kwargs.get("properties")
@@ -7487,6 +7561,316 @@ class TestTrendsQueryRunner(ClickhouseTestMixin, APIBaseTest):
         ]
         assert response.results[0]["data"] == [1, 0, 1, 0, 2, 0, 1]
         assert response.results[0]["count"] == 5.0
+
+    @parameterized.expand(
+        [
+            ("monday", "2024-06-10"),
+            ("tuesday", "2024-06-11"),
+            ("wednesday", "2024-06-12"),
+            ("thursday", "2024-06-13"),
+            ("friday", "2024-06-14"),
+            ("saturday", "2024-06-15"),
+            ("sunday", "2024-06-16"),
+        ]
+    )
+    def test_hide_weekends_preserves_weekday_buckets_for_ranges_ending_each_weekday(self, _name, date_to):
+        date_from = "2024-06-01"
+        self._create_pageview_events_by_day(self._issue_61782_counts(date_from, date_to))
+
+        response_visible = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=False),
+        )
+        response_hidden = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        expected_days, expected_labels, expected_data = self._filter_result_to_weekdays(response_visible.results[0])
+
+        assert response_hidden.results[0]["days"] == expected_days
+        assert response_hidden.results[0]["labels"] == expected_labels
+        assert response_hidden.results[0]["data"] == expected_data
+        assert response_hidden.results[0]["count"] == float(sum(expected_data))
+        assert [day.isoformat()[:10] for day in response_hidden.results[0]["action"]["days"]] == expected_days
+
+        values_by_day = dict(zip(response_hidden.results[0]["days"], response_hidden.results[0]["data"]))
+        expected_recent_weekdays = {
+            day: count
+            for day, count in {
+                "2024-06-10": 3,
+                "2024-06-11": 3,
+                "2024-06-12": 3,
+                "2024-06-13": 12,
+            }.items()
+            if day <= date_to
+        }
+        assert {day: values_by_day[day] for day in expected_recent_weekdays} == expected_recent_weekdays
+
+    @parameterized.expand(
+        [
+            ("monday_week_start", WeekStartDay.MONDAY),
+            ("sunday_week_start", WeekStartDay.SUNDAY),
+        ]
+    )
+    def test_hide_weekends_preserves_daily_buckets_with_configured_week_starts(self, _name, week_start_day):
+        self.team.week_start_day = week_start_day
+        self.team.save()
+        date_from = "2024-06-01"
+        date_to = "2024-06-16"
+        self._create_pageview_events_by_day(self._issue_61782_counts(date_from, date_to))
+
+        response_hidden = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        assert response_hidden.results[0]["days"] == self._weekday_days(date_from, date_to)
+        assert response_hidden.results[0]["data"][-5:] == [3, 3, 3, 12, 1]
+
+    @parameterized.expand(
+        [
+            (
+                "pacific_dst_start",
+                "US/Pacific",
+                "2024-03-08",
+                "2024-03-12",
+                {
+                    "2024-03-08": 1,
+                    "2024-03-09": 2,
+                    "2024-03-10": 3,
+                    "2024-03-11": 4,
+                    "2024-03-12": 5,
+                },
+                ["2024-03-08", "2024-03-11", "2024-03-12"],
+                [1, 4, 5],
+            ),
+            (
+                "kathmandu_offset",
+                "Asia/Kathmandu",
+                "2024-06-07",
+                "2024-06-11",
+                {
+                    "2024-06-07": 1,
+                    "2024-06-08": 2,
+                    "2024-06-09": 3,
+                    "2024-06-10": 4,
+                    "2024-06-11": 5,
+                },
+                ["2024-06-07", "2024-06-10", "2024-06-11"],
+                [1, 4, 5],
+            ),
+        ]
+    )
+    def test_hide_weekends_filters_local_weekends_across_timezones(
+        self, _name, timezone, date_from, date_to, counts_by_day, expected_days, expected_data
+    ):
+        self.team.timezone = timezone
+        self.team.save()
+        self._create_pageview_events_by_day(counts_by_day, timezone=timezone)
+
+        response_hidden = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        assert response_hidden.results[0]["days"] == expected_days
+        assert response_hidden.results[0]["data"] == expected_data
+
+    def test_hide_weekends_preserves_comparison_series_values(self):
+        counts_by_day = {
+            "2024-06-06": 5,
+            "2024-06-07": 7,
+            "2024-06-08": 11,
+            "2024-06-09": 13,
+            "2024-06-10": 3,
+            "2024-06-11": 3,
+            "2024-06-12": 3,
+            "2024-06-13": 12,
+        }
+        self._create_pageview_events_by_day(counts_by_day)
+
+        response_visible = self._run_trends_query(
+            "2024-06-10",
+            "2024-06-13",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=False),
+            compare_filters=CompareFilter(compare=True),
+        )
+        response_hidden = self._run_trends_query(
+            "2024-06-10",
+            "2024-06-13",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+            compare_filters=CompareFilter(compare=True),
+        )
+
+        visible_by_label = {result["compare_label"]: result for result in response_visible.results}
+        hidden_by_label = {result["compare_label"]: result for result in response_hidden.results}
+
+        assert hidden_by_label["current"]["days"] == ["2024-06-10", "2024-06-11", "2024-06-12", "2024-06-13"]
+        assert hidden_by_label["current"]["data"] == [3, 3, 3, 12]
+
+        for compare_label, visible_result in visible_by_label.items():
+            expected_days, expected_labels, expected_data = self._filter_result_to_weekdays(visible_result)
+            assert hidden_by_label[compare_label]["days"] == expected_days
+            assert hidden_by_label[compare_label]["labels"] == expected_labels
+            assert hidden_by_label[compare_label]["data"] == expected_data
+
+    def test_hide_weekends_preserves_breakdown_series_values(self):
+        date_from = "2024-06-07"
+        date_to = "2024-06-14"
+        self._create_events(
+            [
+                SeriesTestData(
+                    distinct_id="chrome",
+                    events=[
+                        Series(
+                            event="$pageview",
+                            timestamps=[
+                                self._timestamp_for_day(day, event_index)
+                                for day, count in {
+                                    "2024-06-08": 2,
+                                    "2024-06-09": 2,
+                                    "2024-06-10": 3,
+                                    "2024-06-11": 3,
+                                    "2024-06-12": 3,
+                                    "2024-06-13": 12,
+                                    "2024-06-14": 4,
+                                }.items()
+                                for event_index in range(count)
+                            ],
+                        )
+                    ],
+                    properties={"$browser": "Chrome"},
+                ),
+                SeriesTestData(
+                    distinct_id="firefox",
+                    events=[
+                        Series(
+                            event="$pageview",
+                            timestamps=[
+                                self._timestamp_for_day(day, event_index)
+                                for day, count in {
+                                    "2024-06-08": 1,
+                                    "2024-06-10": 1,
+                                    "2024-06-12": 2,
+                                    "2024-06-14": 5,
+                                }.items()
+                                for event_index in range(count)
+                            ],
+                        )
+                    ],
+                    properties={"$browser": "Firefox"},
+                ),
+            ]
+        )
+
+        response_visible = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=False),
+            breakdown=BreakdownFilter(breakdown_type=BreakdownType.EVENT, breakdown="$browser"),
+        )
+        response_hidden = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+            breakdown=BreakdownFilter(breakdown_type=BreakdownType.EVENT, breakdown="$browser"),
+        )
+
+        visible_by_breakdown = {result["breakdown_value"]: result for result in response_visible.results}
+        hidden_by_breakdown = {result["breakdown_value"]: result for result in response_hidden.results}
+
+        assert set(hidden_by_breakdown) == {"Chrome", "Firefox"}
+        for breakdown_value, visible_result in visible_by_breakdown.items():
+            expected_days, expected_labels, expected_data = self._filter_result_to_weekdays(visible_result)
+            assert hidden_by_breakdown[breakdown_value]["days"] == expected_days
+            assert hidden_by_breakdown[breakdown_value]["labels"] == expected_labels
+            assert hidden_by_breakdown[breakdown_value]["data"] == expected_data
+
+    def test_hide_weekends_preserves_missing_weekday_buckets(self):
+        date_from = "2024-06-07"
+        date_to = "2024-06-14"
+        self._create_pageview_events_by_day(
+            {
+                "2024-06-07": 1,
+                "2024-06-08": 2,
+                "2024-06-09": 2,
+                "2024-06-10": 3,
+                "2024-06-11": 3,
+                "2024-06-13": 12,
+                "2024-06-14": 4,
+            }
+        )
+
+        response_hidden = self._run_trends_query(
+            date_from,
+            date_to,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        assert response_hidden.results[0]["days"] == [
+            "2024-06-07",
+            "2024-06-10",
+            "2024-06-11",
+            "2024-06-12",
+            "2024-06-13",
+            "2024-06-14",
+        ]
+        assert response_hidden.results[0]["data"] == [1, 3, 3, 0, 12, 4]
+
+    @freeze_time("2024-06-13T15:00:00Z")
+    def test_hide_weekends_preserves_incomplete_current_weekday_bucket(self):
+        date_from = "2024-06-07"
+        self._create_pageview_events_by_day(
+            {
+                "2024-06-07": 1,
+                "2024-06-08": 2,
+                "2024-06-09": 2,
+                "2024-06-10": 3,
+                "2024-06-11": 3,
+                "2024-06-12": 3,
+                "2024-06-13": 12,
+            }
+        )
+
+        response_hidden = self._run_trends_query(
+            date_from,
+            None,
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            trends_filters=TrendsFilter(hideWeekends=True),
+        )
+
+        assert response_hidden.results[0]["days"] == [
+            "2024-06-07",
+            "2024-06-10",
+            "2024-06-11",
+            "2024-06-12",
+            "2024-06-13",
+        ]
+        assert response_hidden.results[0]["data"] == [1, 3, 3, 3, 12]
 
     def test_hide_weekends_week_interval(self):
         self._create_test_events()

@@ -23,6 +23,8 @@ jest.mock('lib/components/AutoSizer', () => ({
 // Deliberately different date ranges so we can detect which one is used for x-axis labels
 const CURRENT_DAYS = ['2024-06-10', '2024-06-11', '2024-06-12', '2024-06-13', '2024-06-14']
 const PREVIOUS_DAYS = ['2024-06-03', '2024-06-04', '2024-06-05', '2024-06-06', '2024-06-07']
+const HIDE_WEEKENDS_DAYS = ['2024-06-07', '2024-06-10', '2024-06-11', '2024-06-12', '2024-06-13', '2024-06-14']
+const HIDE_WEEKENDS_LABELS = ['7-Jun-2024', '10-Jun-2024', '11-Jun-2024', '12-Jun-2024', '13-Jun-2024', '14-Jun-2024']
 
 function compareResponse(): TrendsQueryResponse {
     return {
@@ -54,6 +56,26 @@ function compareResponse(): TrendsQueryResponse {
 const compareMock: MockResponse = {
     match: (query: QueryBody) => query.kind === NodeKind.TrendsQuery,
     response: compareResponse,
+}
+
+function hideWeekendsResponse(): TrendsQueryResponse {
+    return {
+        results: [
+            {
+                action: { id: '$pageview', type: 'events', name: '$pageview', days: HIDE_WEEKENDS_DAYS },
+                label: '$pageview',
+                count: 26,
+                data: [1, 3, 3, 3, 12, 4],
+                labels: HIDE_WEEKENDS_LABELS,
+                days: HIDE_WEEKENDS_DAYS,
+            },
+        ],
+    } as TrendsQueryResponse
+}
+
+const hideWeekendsMock: MockResponse = {
+    match: (query: QueryBody) => query.kind === NodeKind.TrendsQuery,
+    response: hideWeekendsResponse,
 }
 
 describe('LineGraph', () => {
@@ -154,6 +176,25 @@ describe('LineGraph', () => {
 
             const firstTickLabel = chart.axes.x.tickLabel(0)
             expect(firstTickLabel).toBe('Jun 10')
+        })
+    })
+
+    describe('Hide weekends', () => {
+        it('renders filtered weekday buckets without reinserting weekend zeroes', async () => {
+            renderInsight({
+                query: buildTrendsQuery({
+                    dateRange: { date_from: '2024-06-07', date_to: '2024-06-14' },
+                    trendsFilter: { hideWeekends: true },
+                }),
+                mocks: { mockResponses: [hideWeekendsMock] },
+            })
+
+            const chart = await waitForChart()
+
+            expect(chart.labels).toEqual(HIDE_WEEKENDS_LABELS)
+            expect(chart.series(0).data).toEqual([1, 3, 3, 3, 12, 4])
+            expect(chart.labels).not.toContain('8-Jun-2024')
+            expect(chart.labels).not.toContain('9-Jun-2024')
         })
     })
 

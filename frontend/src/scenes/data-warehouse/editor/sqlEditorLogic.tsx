@@ -597,13 +597,10 @@ export const sqlEditorLogic = kea<sqlEditorLogicType>([
             // subquery, which is too expensive to do on every arrow key.
             cache.cursorDisposable?.dispose()
             cache.cursorDisposable = props.editor.onDidChangeCursorPosition(() => {
-                if (cache.activeQueryDecorationDebounceTimeout) {
-                    window.clearTimeout(cache.activeQueryDecorationDebounceTimeout)
-                }
-                cache.activeQueryDecorationDebounceTimeout = window.setTimeout(() => {
-                    cache.activeQueryDecorationDebounceTimeout = null
-                    cache.updateActiveQueryDecoration?.()
-                }, 150)
+                cache.disposables.add(() => {
+                    const timeoutId = window.setTimeout(() => cache.updateActiveQueryDecoration?.(), 150)
+                    return () => window.clearTimeout(timeoutId)
+                }, 'activeQueryDecorationDebounce')
             })
 
             // Set up the active-query outline overlay. We render a single `div` parented
@@ -1887,8 +1884,11 @@ export const sqlEditorLogic = kea<sqlEditorLogicType>([
             // everything whenever the editor content changes.
             cache.subqueryValidationCache?.clear()
 
-            // Decorations are cheap and visual — update immediately for responsiveness.
-            cache.updateActiveQueryDecoration?.()
+            // Resolving the active subquery parses the full query, so wait until typing settles.
+            cache.disposables.add(() => {
+                const timeoutId = window.setTimeout(() => cache.updateActiveQueryDecoration?.(), 150)
+                return () => window.clearTimeout(timeoutId)
+            }, 'activeQueryDecorationDebounce')
 
             // Skip re-parsing if the text hasn't changed since the last parse.
             if (cache.lastParsedQueryInput === queryInput && cache.lastParsedQueryResult !== undefined) {
@@ -2640,10 +2640,6 @@ export const sqlEditorLogic = kea<sqlEditorLogicType>([
         cache.umountDataNode = null
 
         // Drop any pending decoration work so late callbacks don't touch a disposed editor.
-        if (cache.activeQueryDecorationDebounceTimeout) {
-            window.clearTimeout(cache.activeQueryDecorationDebounceTimeout)
-            cache.activeQueryDecorationDebounceTimeout = null
-        }
         if (cache.activeQueryFlashTimeout) {
             window.clearTimeout(cache.activeQueryFlashTimeout)
             cache.activeQueryFlashTimeout = null

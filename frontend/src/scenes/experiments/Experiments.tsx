@@ -17,7 +17,7 @@ import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { More } from 'lib/lemon-ui/LemonButton/More'
 import { LemonDivider } from 'lib/lemon-ui/LemonDivider'
 import { LemonProgress } from 'lib/lemon-ui/LemonProgress'
-import { LemonTable, LemonTableColumn, LemonTableColumns } from 'lib/lemon-ui/LemonTable'
+import { LemonTable, LemonTableColumn, LemonTableColumns, type Sorting } from 'lib/lemon-ui/LemonTable'
 import { atColumn, createdAtColumn, createdByColumn } from 'lib/lemon-ui/LemonTable/columnUtils'
 import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
 import { LemonTabs } from 'lib/lemon-ui/LemonTabs'
@@ -40,7 +40,6 @@ import {
     AccessControlResourceType,
     ActivityScope,
     Experiment,
-    ExperimentConclusion,
     ExperimentStatus,
     ExperimentsTabs,
 } from '~/types'
@@ -99,6 +98,16 @@ const getExperimentDuration = (experiment: Experiment): number | undefined => {
         : experiment.start_date
           ? dayjs().diff(dayjs(experiment.start_date), 'day')
           : undefined
+}
+
+const sortingFromOrder = (order: string | undefined): Sorting | null => {
+    if (!order) {
+        return null
+    }
+    return {
+        columnKey: order.startsWith('-') ? order.slice(1) : order,
+        order: order.startsWith('-') ? -1 : 1,
+    }
 }
 
 const ExperimentsTableFilters = ({
@@ -256,9 +265,18 @@ const ExperimentsTable = ({
                 )
             },
         },
-        createdByColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>,
-        createdAtColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>,
-        atColumn('start_date', 'Started') as LemonTableColumn<Experiment, keyof Experiment | undefined>,
+        {
+            ...(createdByColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>),
+            sorter: true,
+        },
+        {
+            ...(createdAtColumn<Experiment>() as LemonTableColumn<Experiment, keyof Experiment | undefined>),
+            sorter: true,
+        },
+        {
+            ...(atColumn('start_date', 'Started') as LemonTableColumn<Experiment, keyof Experiment | undefined>),
+            sorter: true,
+        },
         {
             title: 'Duration',
             key: 'duration',
@@ -267,11 +285,7 @@ const ExperimentsTable = ({
 
                 return <div>{duration !== undefined ? `${duration} day${duration !== 1 ? 's' : ''}` : '—'}</div>
             },
-            sorter: (a, b) => {
-                const durationA = getExperimentDuration(a) ?? -1
-                const durationB = getExperimentDuration(b) ?? -1
-                return durationA > durationB ? 1 : -1
-            },
+            sorter: true,
             align: 'right',
         },
         {
@@ -325,18 +339,7 @@ const ExperimentsTable = ({
                 return <StatusTag status={getExperimentStatus(experiment)} />
             },
             align: 'center',
-            sorter: (a, b) => {
-                const statusA = getExperimentStatus(a)
-                const statusB = getExperimentStatus(b)
-
-                const score: Record<ExperimentStatus, number> = {
-                    [ExperimentStatus.Draft]: 1,
-                    [ExperimentStatus.Running]: 2,
-                    [ExperimentStatus.Paused]: 3,
-                    [ExperimentStatus.Stopped]: 4,
-                }
-                return score[statusA] > score[statusB] ? 1 : -1
-            },
+            sorter: true,
         },
         {
             title: 'Result',
@@ -359,18 +362,7 @@ const ExperimentsTable = ({
                 )
             },
             align: 'left',
-            sorter: (a, b) => {
-                const conclusionScore: Record<ExperimentConclusion, number> = {
-                    [ExperimentConclusion.Won]: 1,
-                    [ExperimentConclusion.Lost]: 2,
-                    [ExperimentConclusion.Inconclusive]: 3,
-                    [ExperimentConclusion.StoppedEarly]: 4,
-                    [ExperimentConclusion.Invalid]: 5,
-                }
-                const aScore = a.conclusion ? conclusionScore[a.conclusion] : 6
-                const bScore = b.conclusion ? conclusionScore[b.conclusion] : 6
-                return aScore - bScore
-            },
+            sorter: true,
         },
         {
             width: 0,
@@ -523,6 +515,8 @@ const ExperimentsTable = ({
                         columnKey: 'created_at',
                         order: -1,
                     }}
+                    sorting={sortingFromOrder(filters.order)}
+                    useURLForSorting={false}
                     noSortingCancellation
                     pagination={pagination}
                     nouns={['experiment', 'experiments']}

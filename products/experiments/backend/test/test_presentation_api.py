@@ -77,6 +77,81 @@ class TestExperimentCRUD(APILicensedTest):
         response = self.client.get(f"/api/projects/{self.team.id}/experiments/{experiment.id}/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    def _create_orderable_experiment(
+        self,
+        name: str,
+        *,
+        conclusion: str | None = None,
+        created_by: User | None = None,
+    ) -> Experiment:
+        flag_key = f"order-{name.lower().replace(' ', '-').replace('_', '-')}"
+        flag = FeatureFlag.objects.create(
+            team=self.team,
+            created_by=self.user,
+            key=flag_key,
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": 100}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "control", "name": "Control", "rollout_percentage": 50},
+                        {"key": "test", "name": "Test", "rollout_percentage": 50},
+                    ]
+                },
+            },
+        )
+        return Experiment.objects.create(
+            team=self.team,
+            name=name,
+            feature_flag=flag,
+            conclusion=conclusion,
+            created_by=created_by,
+        )
+
+    @parameterized.expand(
+        [
+            ("ascending", "conclusion", ["Inconclusive", "Stopped early"]),
+            ("descending", "-conclusion", ["Stopped early", "Inconclusive"]),
+        ]
+    )
+    def test_can_order_experiments_by_conclusion_with_pagination(
+        self, _: str, order: str, expected_names: list[str]
+    ) -> None:
+        for name, conclusion in [
+            ("Invalid", "invalid"),
+            ("No conclusion", None),
+            ("Won", "won"),
+            ("Stopped early", "stopped_early"),
+            ("Lost", "lost"),
+            ("Inconclusive", "inconclusive"),
+        ]:
+            self._create_orderable_experiment(name, conclusion=conclusion, created_by=self.user)
+
+        response = self.client.get(f"/api/projects/{self.team.id}/experiments/?order={order}&limit=2&offset=2")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["count"], 6)
+        self.assertEqual([experiment["name"] for experiment in response.json()["results"]], expected_names)
+
+    @parameterized.expand(
+        [
+            ("ascending", "created_by", ["No creator", "Alice"]),
+            ("descending", "-created_by", ["Bob", "Alice"]),
+        ]
+    )
+    def test_can_order_experiments_by_created_by_with_null_creator(
+        self, _: str, order: str, expected_names: list[str]
+    ) -> None:
+        alice = self._create_user("alice@example.com", first_name="Alice")
+        bob = self._create_user("bob@example.com", first_name="Bob")
+        for name, created_by in [("Bob", bob), ("No creator", None), ("Alice", alice)]:
+            self._create_orderable_experiment(name, created_by=created_by)
+
+        response = self.client.get(f"/api/projects/{self.team.id}/experiments/?order={order}&limit=2")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["count"], 3)
+        self.assertEqual([experiment["name"] for experiment in response.json()["results"]], expected_names)
+
     def test_can_list_eligible_feature_flags(self) -> None:
         FeatureFlag.objects.create(
             team=self.team,

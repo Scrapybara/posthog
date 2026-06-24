@@ -344,7 +344,7 @@ export function LineGraph_({
 
     const { aggregationLabel } = useValues(groupsModel)
     const { isDarkModeOn } = useValues(themeLogic)
-    const { baseCurrency } = useValues(teamLogic)
+    const { baseCurrency, weekStartDay } = useValues(teamLogic)
 
     const { insightProps, insight } = useValues(insightLogic)
     const { timezone, isTrends, isStickiness, isFunnels, breakdownFilter, interval, insightData } = useValues(
@@ -850,25 +850,35 @@ export function LineGraph_({
                                 const referenceDataPoint = tooltip.dataPoints[0]
                                 const dataset = processedDatasets[referenceDataPoint.datasetIndex]
                                 const date = dataset?.days?.[referenceDataPoint.dataIndex]
-                                const seriesData = createTooltipData(tooltip.dataPoints, (dp) => {
-                                    // For stacked bar charts when shift is pressed, show only the hovered bar
-                                    if (isHighlightBarMode) {
-                                        return dp.datasetIndex === referenceDataPoint.datasetIndex
-                                    }
+                                const seriesData = createTooltipData(
+                                    tooltip.dataPoints,
+                                    (dp) => {
+                                        // For stacked bar charts when shift is pressed, show only the hovered bar
+                                        if (isHighlightBarMode) {
+                                            return dp.datasetIndex === referenceDataPoint.datasetIndex
+                                        }
 
-                                    if (tooltipConfig?.filter) {
-                                        return tooltipConfig.filter(dp)
-                                    }
+                                        if (tooltipConfig?.filter) {
+                                            return tooltipConfig.filter(dp)
+                                        }
 
-                                    const hasDotted =
-                                        hasAnyDottedDataset &&
-                                        dp.dataIndex - processedDatasets?.[dp.datasetIndex]?.data?.length >=
-                                            incompletenessOffsetFromEnd
-                                    return (
-                                        dp.datasetIndex >= (hasDotted ? _datasets.length : 0) &&
-                                        dp.datasetIndex < (hasDotted ? _datasets.length * 2 : _datasets.length)
-                                    )
-                                })
+                                        const hasDotted =
+                                            hasAnyDottedDataset &&
+                                            dp.dataIndex - processedDatasets?.[dp.datasetIndex]?.data?.length >=
+                                                incompletenessOffsetFromEnd
+                                        return (
+                                            dp.datasetIndex >= (hasDotted ? _datasets.length : 0) &&
+                                            dp.datasetIndex < (hasDotted ? _datasets.length * 2 : _datasets.length)
+                                        )
+                                    },
+                                    {
+                                        interval,
+                                        dateRange: insightData?.resolved_date_range,
+                                        compareDateRange: insightData?.resolved_compare_date_range,
+                                        timezone,
+                                        weekStartDay,
+                                    }
+                                )
                                 const referenceSeriesDatum = seriesData.find(
                                     (datum) =>
                                         datum.datasetIndex === referenceDataPoint.datasetIndex &&

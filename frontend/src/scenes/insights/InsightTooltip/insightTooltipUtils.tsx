@@ -115,6 +115,10 @@ export const INTERVAL_UNIT_TO_DAYJS_FORMAT: Record<IntervalType, string> = {
     month: 'MMMM YYYY',
 }
 
+export function formatCompareLabelWithDate(label: string, dateLabel?: string): string {
+    return `${capitalizeFirstLetter(label)}${dateLabel ? ` (${dateLabel})` : ''}`
+}
+
 const INTERVAL_UNIT_TO_DAYJS_FORMAT_SHORT: Record<IntervalType, string> = {
     second: 'D MMM HH:mm:ss',
     minute: 'D MMM HH:mm',
@@ -207,7 +211,7 @@ function getPillValues(
     if (s.compare_label) {
         const formattedLabel = formatCompareLabel
             ? formatCompareLabel(String(s.compare_label), s.date_label)
-            : capitalizeFirstLetter(String(s.compare_label))
+            : formatCompareLabelWithDate(String(s.compare_label), s.date_label)
         pillValues.push(formattedLabel)
     }
     return pillValues

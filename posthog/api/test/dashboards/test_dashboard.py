@@ -1702,6 +1702,32 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
         new_tile = next(t for t in tiles if t["id"] != original_tile.id)
         assert new_tile["layouts"] == expected_layouts
 
+    def test_duplicate_text_tile_within_dashboard_preserves_section_header_fields(self) -> None:
+        dashboard = Dashboard.objects.create(team=self.team, name="test dashboard", created_by=self.user)
+        text = Text.objects.create(
+            team=self.team,
+            body="<!-- posthog-dashboard-section-header -->\n## Activation\n\nKey funnel steps",
+            created_by=self.user,
+        )
+        original_tile = DashboardTile.objects.create(
+            dashboard=dashboard,
+            text=text,
+            layouts={"sm": {"x": 0, "y": 0, "w": 12, "h": 1}},
+            transparent_background=True,
+        )
+
+        _, response = self.dashboard_api.update_dashboard(
+            dashboard.id,
+            {"duplicate_tiles": [{"id": original_tile.id, "layouts": {"sm": {"x": 0, "y": 1, "w": 12, "h": 1}}}]},
+        )
+
+        new_tile = next(tile for tile in response["tiles"] if tile["id"] != original_tile.id)
+        assert (
+            new_tile["text"]["body"] == "<!-- posthog-dashboard-section-header -->\n## Activation\n\nKey funnel steps"
+        )
+        assert new_tile["layouts"] == {"sm": {"x": 0, "y": 1, "w": 12, "h": 1}}
+        assert new_tile["transparent_background"] is True
+
     def test_dashboard_duplication_can_duplicate_tiles_without_editing_name_if_there_is_none(self) -> None:
         existing_dashboard = Dashboard.objects.create(team=self.team, name="existing dashboard", created_by=self.user)
         self.dashboard_api.create_insight({"dashboards": [existing_dashboard.pk], "name": None})
@@ -2555,7 +2581,7 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
     def test_create_from_template_json_can_provide_text_tile(self) -> None:
         template: dict = {
             **valid_template,
-            "tiles": [{"type": "TEXT", "body": "hello world", "layouts": {}}],
+            "tiles": [{"type": "TEXT", "body": "hello world", "layouts": {}, "transparent_background": True}],
         }
 
         response = self.client.post(
@@ -2589,7 +2615,7 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
                     "last_modified_by": None,
                     "team": self.team.pk,
                 },
-                "transparent_background": None,
+                "transparent_background": True,
             },
         ]
 
@@ -3558,6 +3584,7 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
             {
                 "body": "## Section heading\n\nIntro markdown.",
                 "layouts": {"sm": {"x": 0, "y": 0, "w": 12, "h": 1}},
+                "transparent_background": True,
             },
             content_type="application/json",
         )
@@ -3567,12 +3594,33 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
         self.assertIsNone(body["insight"])
         self.assertEqual(body["text"]["body"], "## Section heading\n\nIntro markdown.")
         self.assertEqual(body["layouts"]["sm"], {"x": 0, "y": 0, "w": 12, "h": 1})
+        self.assertTrue(body["transparent_background"])
 
         dashboard_response = self.client.get(f"/api/environments/{self.team.pk}/dashboards/{dashboard.pk}/")
         self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
         tiles = dashboard_response.json()["tiles"]
         self.assertEqual(len(tiles), 1)
         self.assertEqual(tiles[0]["text"]["body"], "## Section heading\n\nIntro markdown.")
+        self.assertTrue(tiles[0]["transparent_background"])
+
+    @patch("products.dashboards.backend.api.dashboard.report_user_action")
+    def test_create_text_tile_reports_tile_added_event(self, mock_report_user_action):
+        dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
+
+        response = self.client.post(
+            f"/api/environments/{self.team.pk}/dashboards/{dashboard.pk}/create_text_tile/",
+            {"body": "## Section heading"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mock_report_user_action.assert_any_call(
+            self.user,
+            "dashboard tile added",
+            {"tile_type": "text", "insight_type": None, "dashboard_id": dashboard.pk},
+            team=ANY,
+            request=ANY,
+        )
 
     def test_create_text_tile_without_layouts_uses_default(self):
         dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
@@ -3611,6 +3659,22 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_create_text_tile_requires_edit_permissions(self):
+        dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
+        AccessControl.objects.create(
+            resource="dashboard", resource_id=dashboard.pk, team=self.team, access_level="none"
+        )
+        user = self._create_user("blocked@example.com", level=OrganizationMembership.Level.MEMBER)
+        self.client.force_login(user)
+
+        response = self.client.post(
+            f"/api/environments/{self.team.pk}/dashboards/{dashboard.pk}/create_text_tile/",
+            {"body": "## Section heading"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_update_text_tile_updates_body_and_layout(self):
         dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
         text = Text.objects.create(body="original", team=self.team, created_by=self.user)
@@ -3626,6 +3690,7 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
                 "tile_id": tile.pk,
                 "body": "## Updated heading",
                 "layouts": {"sm": {"x": 0, "y": 5, "w": 12, "h": 2}},
+                "transparent_background": True,
             },
             content_type="application/json",
         )
@@ -3633,12 +3698,14 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
         body = response.json()
         self.assertEqual(body["text"]["body"], "## Updated heading")
         self.assertEqual(body["layouts"]["sm"], {"x": 0, "y": 5, "w": 12, "h": 2})
+        self.assertTrue(body["transparent_background"])
 
         text.refresh_from_db()
         tile.refresh_from_db()
         self.assertEqual(text.body, "## Updated heading")
         self.assertEqual(text.last_modified_by, self.user)
         self.assertEqual(tile.layouts["sm"], {"x": 0, "y": 5, "w": 12, "h": 2})
+        self.assertTrue(tile.transparent_background)
 
     def test_update_text_tile_leaves_omitted_fields_unchanged(self):
         dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
@@ -3693,6 +3760,24 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_update_text_tile_requires_edit_permissions(self):
+        dashboard = Dashboard.objects.create(team=self.team, name="Test Dashboard")
+        text = Text.objects.create(body="original", team=self.team)
+        tile = DashboardTile.objects.create(dashboard=dashboard, text=text)
+        AccessControl.objects.create(
+            resource="dashboard", resource_id=dashboard.pk, team=self.team, access_level="none"
+        )
+        user = self._create_user("blocked@example.com", level=OrganizationMembership.Level.MEMBER)
+        self.client.force_login(user)
+
+        response = self.client.post(
+            f"/api/environments/{self.team.pk}/dashboards/{dashboard.pk}/update_text_tile/",
+            {"tile_id": tile.pk, "body": "blocked"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def _make_unknown_tile_id_args(self):
         dashboard_a = Dashboard.objects.create(team=self.team, name="A")

@@ -88,6 +88,21 @@ function DashboardEmptyActions({
                                       >
                                           <LemonButton
                                               fullWidth
+                                              onClick={() => {
+                                                  push(urls.dashboardSectionHeaderTile(dashboard.id, 'new'))
+                                              }}
+                                              data-attr="add-section-header-to-dashboard"
+                                          >
+                                              Add section header
+                                          </LemonButton>
+                                      </AccessControlAction>
+                                      <AccessControlAction
+                                          resourceType={AccessControlResourceType.Dashboard}
+                                          minAccessLevel={AccessControlLevel.Editor}
+                                          userAccessLevel={dashboard.user_access_level}
+                                      >
+                                          <LemonButton
+                                              fullWidth
                                               onClick={
                                                   dashboardWidgetsEnabled
                                                       ? onAddWidget

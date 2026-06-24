@@ -16,6 +16,7 @@ import { LemonMarkdown } from 'lib/lemon-ui/LemonMarkdown'
 import { DashboardPlacement, DashboardTile, QueryBasedInsightModel } from '~/types'
 
 import { markdownToTextCardDoc, TEXT_CARD_MARKDOWN_READONLY_EXTENSIONS } from './textCardMarkdown'
+import { isDashboardSectionHeaderTile, parseDashboardSectionHeaderBody } from './textCardSectionHeader'
 
 interface TextCardProps extends React.HTMLAttributes<HTMLDivElement>, Resizeable {
     textTile: DashboardTile<QueryBasedInsightModel>
@@ -95,16 +96,21 @@ function TextCardInternal(
     const shouldHideMoreButton = placement === DashboardPlacement.Public || showEditingControls === false
 
     const isTransparent = textTile.transparent_background
+    const isSectionHeader = isDashboardSectionHeaderTile(textTile)
+    const sectionHeader = isSectionHeader ? parseDashboardSectionHeaderBody(text.body) : null
 
     return (
         <div
             className={clsx(
                 'DashboardTileCard TextCard rounded flex flex-col',
-                !isTransparent && 'bg-surface-primary border',
-                isTransparent && showResizeHandles && 'border border-dashed border-border',
+                isSectionHeader && 'TextCard--section-header',
+                !isTransparent && !isSectionHeader && 'bg-surface-primary border',
+                !isSectionHeader && isTransparent && showResizeHandles && 'border border-dashed border-border',
+                isSectionHeader && showResizeHandles && 'border border-dashed border-border',
                 className
             )}
             data-attr="text-card"
+            data-card-kind={isSectionHeader ? 'section-header' : 'text-card'}
             {...divProps}
             ref={ref}
         >
@@ -114,12 +120,28 @@ function TextCardInternal(
                 </div>
             )}
 
-            <div
-                className={clsx('TextCard__body w-full', onDragHandleMouseDown && 'cursor-grab')}
-                onMouseDown={onDragHandleMouseDown}
-            >
-                <TextContent text={text.body} className={shouldHideMoreButton ? 'p-4' : 'p-4 pr-14'} />
-            </div>
+            {sectionHeader ? (
+                <div
+                    className={clsx(
+                        'TextCard__body TextCard__section-header-body w-full',
+                        onDragHandleMouseDown && 'cursor-grab',
+                        shouldHideMoreButton ? 'pr-0' : 'pr-14'
+                    )}
+                    onMouseDown={onDragHandleMouseDown}
+                >
+                    <div className="min-w-0 flex-1">
+                        <h2>{sectionHeader.title}</h2>
+                        {sectionHeader.description ? <p>{sectionHeader.description}</p> : null}
+                    </div>
+                </div>
+            ) : (
+                <div
+                    className={clsx('TextCard__body w-full', onDragHandleMouseDown && 'cursor-grab')}
+                    onMouseDown={onDragHandleMouseDown}
+                >
+                    <TextContent text={text.body} className={shouldHideMoreButton ? 'p-4' : 'p-4 pr-14'} />
+                </div>
+            )}
 
             {canEnterEditModeFromEdge && !showResizeHandles && onEnterEditModeFromEdge && (
                 <EditModeEdgeOverlay onEnterEditMode={onEnterEditModeFromEdge} />

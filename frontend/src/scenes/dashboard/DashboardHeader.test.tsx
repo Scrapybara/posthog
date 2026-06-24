@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom'
 
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 import { BindLogic } from 'kea'
 
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
@@ -161,4 +161,13 @@ describe('DashboardHeader', () => {
             logic.unmount()
         }
     )
+
+    it('includes section header in the add menu', () => {
+        const { logic } = renderHeader({ dashboard: makeDashboard({ user_access_level: AccessControlLevel.Editor }) })
+
+        fireEvent.click(document.querySelector('[data-attr="dashboard-add-tile"]') as HTMLElement)
+
+        expect(document.querySelector('[data-attr="dashboard-add-section-header"]')).toBeInTheDocument()
+        logic.unmount()
+    })
 })

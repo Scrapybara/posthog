@@ -4,6 +4,7 @@ import { lemonToast } from '@posthog/lemon-ui'
 import { getDashboardWidgetCatalogEntry } from '@posthog/products-dashboards/frontend/widget_types/catalog'
 
 import api, { ApiMethodOptions, getJSONOrNull } from 'lib/api'
+import { isDashboardSectionHeaderTile } from 'lib/components/Cards/TextCard/textCardSectionHeader'
 import type { Dayjs } from 'lib/dayjs'
 import { currentSessionId } from 'lib/internalMetrics'
 import { objectClean, shouldCancelQuery, toParams } from 'lib/utils'
@@ -50,6 +51,7 @@ export function dashboardToSaveableTemplate(
                         body: tile.text.body,
                         layouts: tile.layouts,
                         color: tile.color,
+                        transparent_background: tile.transparent_background,
                     }
                 }
                 if (tile.insight) {
@@ -102,7 +104,7 @@ export function getDashboardTileDisplayName(tile: DashboardTile<QueryBasedInsigh
         return catalogEntry?.headerTitle ?? catalogEntry?.label ?? tile.widget.widget_type
     }
     if (tile.text) {
-        return 'Text card'
+        return isDashboardSectionHeaderTile(tile) ? 'Section header' : 'Text card'
     }
     if (tile.button_tile) {
         return tile.button_tile.text || 'Button'

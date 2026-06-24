@@ -103,12 +103,13 @@ describe('EmptyDashboardComponent', () => {
         logic.unmount()
     })
 
-    it('shows Add text card in Get started dropdown', async () => {
+    it('shows text and section header actions in Get started dropdown', async () => {
         const { logic } = renderEmptyState()
 
         await openGetStartedDropdown()
 
         expect(screen.getByText('Add text card')).toBeInTheDocument()
+        expect(screen.getByText('Add section header')).toBeInTheDocument()
         expect(screen.getByText('Add widget')).toBeInTheDocument()
         expect(screen.getByText('BETA')).toBeInTheDocument()
 

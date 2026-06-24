@@ -2586,6 +2586,7 @@ export type DashboardTemplateStoredTextTile = {
     body: string
     layouts?: Record<DashboardLayoutSize, TileLayout> | Record<string, never>
     color?: InsightColor | null
+    transparent_background?: boolean | null
 }
 
 export type DashboardTemplateStoredButtonTile = {

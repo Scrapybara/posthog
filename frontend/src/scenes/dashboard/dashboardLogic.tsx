@@ -400,7 +400,7 @@ export const dashboardLogic = kea<dashboardLogicType>([
             toDashboard,
             toDashboardName,
         }),
-        setTextTileId: (textTileId: number | 'new' | null) => ({ textTileId }),
+        setTextTileId: (textTileId: number | 'new' | null, kind: 'text' | 'section' = 'text') => ({ textTileId, kind }),
         setButtonTileId: (buttonTileId: number | 'new' | null) => ({ buttonTileId }),
         setTileOverride: (tile: DashboardTile<QueryBasedInsightModel>) => ({ tile }),
 
@@ -1153,6 +1153,12 @@ export const dashboardLogic = kea<dashboardLogicType>([
             null as number | 'new' | null,
             {
                 setTextTileId: (_, { textTileId }) => textTileId,
+            },
+        ],
+        textTileKind: [
+            'text' as 'text' | 'section',
+            {
+                setTextTileId: (_, { kind }) => kind,
             },
         ],
 
@@ -3227,7 +3233,19 @@ export const dashboardLogic = kea<dashboardLogicType>([
             actions.setSubscriptionMode(false, undefined)
             actions.setDashboardMode(null, DashboardEventSource.Browser)
             actions.setButtonTileId(null)
-            actions.setTextTileId(textTileId === undefined ? 'new' : textTileId !== 'new' ? Number(textTileId) : 'new')
+            actions.setTextTileId(
+                textTileId === undefined ? 'new' : textTileId !== 'new' ? Number(textTileId) : 'new',
+                'text'
+            )
+        },
+        '/dashboard/:id/section-headers/:textTileId': ({ textTileId }) => {
+            actions.setSubscriptionMode(false, undefined)
+            actions.setDashboardMode(null, DashboardEventSource.Browser)
+            actions.setButtonTileId(null)
+            actions.setTextTileId(
+                textTileId === undefined ? 'new' : textTileId !== 'new' ? Number(textTileId) : 'new',
+                'section'
+            )
         },
         '/dashboard/:id/button-tiles/:buttonTileId': ({ buttonTileId }) => {
             actions.setSubscriptionMode(false, undefined)

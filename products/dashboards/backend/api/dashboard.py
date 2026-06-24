@@ -448,6 +448,10 @@ class CreateTextTileRequestSerializer(serializers.Serializer):
         help_text="Optional accent color name (e.g. 'blue', 'green', 'purple', 'black').",
         error_messages={"max_length": "Color cannot exceed 400 characters"},
     )
+    transparent_background = serializers.BooleanField(
+        required=False,
+        help_text="Whether the text tile should render without the standard card background.",
+    )
 
 
 class UpdateTextTileRequestSerializer(serializers.Serializer):
@@ -478,6 +482,10 @@ class UpdateTextTileRequestSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="New accent color name, empty string or null to clear. Omit to leave unchanged.",
         error_messages={"max_length": "Color cannot exceed 400 characters"},
+    )
+    transparent_background = serializers.BooleanField(
+        required=False,
+        help_text="Whether the text tile should render without the standard card background. Omit to leave unchanged.",
     )
 
 
@@ -2387,7 +2395,17 @@ class DashboardsViewSet(
                 tile_data["layouts"] = validated["layouts"]
             if "color" in validated:
                 tile_data["color"] = validated["color"]
+            if "transparent_background" in validated:
+                tile_data["transparent_background"] = validated["transparent_background"]
             tile, _ = DashboardSerializer._upsert_tile(dashboard, tile_data, text=text)
+
+        _report_dashboard_tile_added(
+            user=user,
+            dashboard=dashboard,
+            tile_type="text",
+            request=request,
+            tile=tile,
+        )
 
         return Response(
             DashboardTileSerializer(tile, context=self.get_serializer_context()).data,
@@ -2436,6 +2454,9 @@ class DashboardsViewSet(
             if "color" in validated:
                 tile.color = validated["color"]
                 tile_updates.append("color")
+            if "transparent_background" in validated:
+                tile.transparent_background = validated["transparent_background"]
+                tile_updates.append("transparent_background")
             if tile_updates:
                 tile.save(update_fields=tile_updates)
 

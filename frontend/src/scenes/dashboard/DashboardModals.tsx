@@ -28,12 +28,14 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
         subscriptionId,
         showTextTileModal,
         textTileId,
+        textTileKind,
         showButtonTileModal,
         buttonTileId,
         terraformModalOpen,
         addWidgetModalOpen,
         dashboardWidgetsEnabled,
         addWidgetTileLoading,
+        layouts,
     } = useValues(dashboardLogic)
     const { setTerraformModalOpen, setAddWidgetModalOpen, addWidgetTiles } = useActions(dashboardLogic)
     const { updateDashboardSuccess } = useActions(dashboardsModel)
@@ -63,6 +65,8 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
                         onClose={() => push(urls.dashboard(dashboard.id))}
                         dashboard={dashboard}
                         textTileId={textTileId}
+                        kind={textTileKind}
+                        smLayouts={layouts.sm}
                     />
                     <ButtonTileCardModal
                         isOpen={showButtonTileModal}

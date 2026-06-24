@@ -15,10 +15,15 @@ import { DataTableNode } from '~/queries/schema/schema-general'
 import { QueryContext, QueryContextColumn, QueryContextColumnComponent } from '~/queries/types'
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY } from '../../constants'
+import { AccountHealthScoreBadge, parseAccountHealthScore } from './AccountHealthScore'
 import { AccountNotebooksExpansion } from './AccountNotebooksExpansion'
-import { ACCOUNTS_NAME_COLUMN, accountsColumnConfigLogic } from './accountsColumnConfigLogic'
+import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
+    ACCOUNTS_NAME_COLUMN,
+    accountsColumnConfigLogic,
+} from './accountsColumnConfigLogic'
 import { accountsExpansionLogic } from './accountsExpansionLogic'
-import { AccountRoleKey, accountsLogic } from './accountsLogic'
+import { AccountRoleKey, accountsLogic, isAccountsColumnSortable } from './accountsLogic'
 
 type AccountAssignment = { id: number; email: string } | null
 
@@ -33,6 +38,7 @@ const ROLE_LABELS: Record<AccountRoleKey, string> = {
 
 const COLUMN_WIDTHS = {
     name: '240px',
+    health_score: '160px',
     tag_names: '280px',
     notebook_count: '80px',
     csm: '220px',
@@ -49,12 +55,12 @@ function getCellAt(record: unknown, names: string[], column: string): unknown {
 }
 
 function useGetCell(): (record: unknown, column: string) => unknown {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
-    return (record, column) => getCellAt(record, visibleColumnNames, column)
+    const { queryColumnNames } = useValues(accountsLogic)
+    return (record, column) => getCellAt(record, queryColumnNames, column)
 }
 
-function getNameCell(record: unknown, visibleColumnNames: string[]): AccountNameCell | undefined {
-    const value = getCellAt(record, visibleColumnNames, ACCOUNTS_NAME_COLUMN)
+function getNameCell(record: unknown, columnNames: string[]): AccountNameCell | undefined {
+    const value = getCellAt(record, columnNames, ACCOUNTS_NAME_COLUMN)
     if (!value || typeof value !== 'object') {
         return undefined
     }
@@ -78,8 +84,8 @@ function tupleToAssignment(value: unknown): AccountAssignment {
 }
 
 function NameCell({ record }: { record: unknown }): JSX.Element {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
-    const cell = getNameCell(record, visibleColumnNames)
+    const { queryColumnNames } = useValues(accountsLogic)
+    const cell = getNameCell(record, queryColumnNames)
     const name = cell?.name ?? ''
     const externalId = cell?.external_id ?? ''
     return (
@@ -111,12 +117,15 @@ function NotebookCountCell({ record }: { record: unknown }): JSX.Element {
     return count > 0 ? <span>{count}</span> : <span className="text-muted">—</span>
 }
 
+function HealthScoreCell({ value }: { value: unknown }): JSX.Element {
+    return <AccountHealthScoreBadge score={parseAccountHealthScore(value)} />
+}
+
 function RoleAssignmentCell({ record, role }: { record: unknown; role: AccountRoleKey }): JSX.Element {
-    const { isRoleSaving, accountOverrides } = useValues(accountsLogic)
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
+    const { isRoleSaving, accountOverrides, queryColumnNames } = useValues(accountsLogic)
     const { updateAccountRole } = useActions(accountsLogic)
     const getCell = useGetCell()
-    const accountId = getNameCell(record, visibleColumnNames)?.id ?? ''
+    const accountId = getNameCell(record, queryColumnNames)?.id ?? ''
     const overrideProperties = accountId ? accountOverrides[accountId]?.properties : undefined
     const overrideRole = overrideProperties != null ? overrideProperties[role] : undefined
     const assignment: AccountAssignment =
@@ -189,6 +198,7 @@ type KnownColumnTemplate = {
     label?: string
     width?: string
     render?: QueryContextColumnComponent
+    sortable?: boolean
 }
 
 const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
@@ -196,6 +206,12 @@ const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
         label: 'Account',
         width: COLUMN_WIDTHS.name,
         render: ({ record }) => <NameCell record={record} />,
+    },
+    health_score: {
+        label: 'Health',
+        width: COLUMN_WIDTHS.health_score,
+        render: ({ value }) => <HealthScoreCell value={value} />,
+        sortable: false,
     },
     tag_names: {
         label: 'Tags',
@@ -231,8 +247,14 @@ function useContextColumns(): Record<string, QueryContextColumn> {
         for (const key of visibleColumnNames) {
             const template = KNOWN_COLUMN_TEMPLATES[key]
             const label = template?.label ?? key
+            const sortable = template?.sortable ?? isAccountsColumnSortable(key)
             columns[key] = {
-                renderTitle: () => <SortableColumnHeader column={key} label={label} />,
+                renderTitle: () =>
+                    sortable ? (
+                        <SortableColumnHeader column={key} label={label} />
+                    ) : (
+                        <span data-attr={`accounts-hogql-column-${key}`}>{label}</span>
+                    ),
                 width: template?.width,
                 render: template?.render,
             }
@@ -242,7 +264,7 @@ function useContextColumns(): Record<string, QueryContextColumn> {
 }
 
 function useExpandable(): QueryContext<DataTableNode>['expandable'] {
-    const { visibleColumnNames } = useValues(accountsColumnConfigLogic)
+    const { queryColumnNames } = useValues(accountsLogic)
     const { expandedAccountIds } = useValues(accountsExpansionLogic)
     const { toggleAccountExpanded } = useActions(accountsExpansionLogic)
     return useMemo(
@@ -250,29 +272,36 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
             noIndent: true,
             expandedRowClassName: '[&>td]:overflow-visible!',
             isRowExpanded: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 return !!cell && expandedAccountIds.includes(cell.id)
             },
             onRowExpand: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 if (cell) {
                     toggleAccountExpanded(cell.id)
                 }
             },
             onRowCollapse: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
                 if (cell) {
                     toggleAccountExpanded(cell.id)
                 }
             },
             expandedRowRender: ({ result }) => {
-                const cell = getNameCell(result, visibleColumnNames)
+                const cell = getNameCell(result, queryColumnNames)
+                const healthScore = parseAccountHealthScore(
+                    getCellAt(result, queryColumnNames, ACCOUNTS_HEALTH_SCORE_COLUMN)
+                )
                 return cell ? (
-                    <AccountNotebooksExpansion accountId={cell.id} externalId={cell.external_id ?? ''} />
+                    <AccountNotebooksExpansion
+                        accountId={cell.id}
+                        externalId={cell.external_id ?? ''}
+                        healthScore={healthScore}
+                    />
                 ) : null
             },
         }),
-        [visibleColumnNames, expandedAccountIds, toggleAccountExpanded]
+        [queryColumnNames, expandedAccountIds, toggleAccountExpanded]
     )
 }
 
@@ -288,6 +317,11 @@ const SKELETON_COLUMNS: LemonTableColumns<{ key: number }> = [
                 <LemonSkeleton className="h-3 w-24" />
             </div>
         ),
+    },
+    {
+        title: 'Health',
+        width: COLUMN_WIDTHS.health_score,
+        render: () => <LemonSkeleton className="h-6 w-24 rounded" />,
     },
     {
         title: 'Tags',

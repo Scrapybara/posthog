@@ -21,9 +21,11 @@ import { AccountsEvents } from './constants'
 // Mandatory — the backend emits it as `tuple(name, external_id, id)` so the
 // row identity (id) and copy-able external_id ride along with the display name.
 export const ACCOUNTS_NAME_COLUMN = 'name'
+export const ACCOUNTS_HEALTH_SCORE_COLUMN = 'health_score'
 
 export const ACCOUNTS_HOGQL_DEFAULT_SELECT: string[] = [
     ACCOUNTS_NAME_COLUMN,
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
     'accounts.tags.names AS tag_names',
     'accounts.notebooks.count AS notebook_count',
     'csm',
@@ -33,6 +35,28 @@ export const ACCOUNTS_HOGQL_DEFAULT_SELECT: string[] = [
 
 function ensureNameColumn(columns: string[]): string[] {
     return columns.includes(ACCOUNTS_NAME_COLUMN) ? columns : [ACCOUNTS_NAME_COLUMN, ...columns]
+}
+
+export function ensureAccountQueryColumns(columns: string[]): string[] {
+    const columnsWithName = ensureNameColumn(columns)
+    if (columnsWithName.includes(ACCOUNTS_HEALTH_SCORE_COLUMN)) {
+        return columnsWithName
+    }
+    const nameIndex = columnsWithName.indexOf(ACCOUNTS_NAME_COLUMN)
+    return [
+        ...columnsWithName.slice(0, nameIndex + 1),
+        ACCOUNTS_HEALTH_SCORE_COLUMN,
+        ...columnsWithName.slice(nameIndex + 1),
+    ]
+}
+
+export function accountColumnDisplayNames(columns: string[]): string[] {
+    return columns.map((column) => {
+        const displayName = extractDisplayLabel(column)
+        return column !== ACCOUNTS_HEALTH_SCORE_COLUMN && displayName === ACCOUNTS_HEALTH_SCORE_COLUMN
+            ? column
+            : displayName
+    })
 }
 
 export function diffColumnConfiguration(
@@ -62,7 +86,7 @@ export const ACCOUNTS_ACCOUNTS_TABLE_NAME = 'system.accounts'
 // of which name the backend hands us.
 const ACCOUNTS_JOIN_SOURCE_TABLE_NAMES = new Set(['accounts', ACCOUNTS_ACCOUNTS_TABLE_NAME])
 
-export type AccountColumnGroupKey = 'account_properties' | 'sql_expression' | `accounts.${string}`
+export type AccountColumnGroupKey = 'account_health' | 'account_properties' | 'sql_expression' | `accounts.${string}`
 
 export type AccountColumnOption = {
     name: string
@@ -176,6 +200,11 @@ export function buildAccountColumnGroups(
     }
 
     return [
+        {
+            key: 'account_health',
+            label: 'Account health',
+            options: [{ name: 'Health score', expression: ACCOUNTS_HEALTH_SCORE_COLUMN, type: 'json' }],
+        },
         { key: 'account_properties', label: 'Account properties', options: directOptions },
         ...joinGroups,
         { key: 'sql_expression', label: 'SQL expression', options: [], isFreeform: true },
@@ -264,7 +293,7 @@ export const accountsColumnConfigLogic = kea<accountsColumnConfigLogicType>([
     selectors({
         visibleColumnNames: [
             (s) => [s.selectColumns],
-            (selectColumns: string[]): string[] => selectColumns.map((c) => extractDisplayLabel(c)),
+            (selectColumns: string[]): string[] => accountColumnDisplayNames(selectColumns),
         ],
         accountsColumnGroups: [
             (s) => [s.allTablesMap, s.warehouseJoins],

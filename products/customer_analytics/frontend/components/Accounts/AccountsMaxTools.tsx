@@ -3,7 +3,7 @@ import { useActions } from 'kea'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { useMaxTool } from 'scenes/max/useMaxTool'
 
-import { AccountExpansionTab } from './accountsExpansionLogic'
+import type { AccountExpansionTab } from './accountsExpansionLogic'
 import { accountsLogic } from './accountsLogic'
 
 interface OpenAccountResult {
@@ -25,7 +25,12 @@ export function AccountsMaxTools(): JSX.Element | null {
                 lemonToast.error("Couldn't open that account.")
                 return
             }
-            openAccount(result.account_id, result.external_id ?? null, result.account_name ?? '', result.tab ?? 'usage')
+            openAccount(
+                result.account_id,
+                result.external_id ?? null,
+                result.account_name ?? '',
+                result.tab ?? 'health'
+            )
         },
     })
 

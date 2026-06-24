@@ -23,10 +23,12 @@ AccountsTabContent  ── binds dataNodeLogic(ACCOUNTS_HOGQL_DATA_NODE_KEY, acc
 │                             "my accounts" on the left, AccountsOverviewTilesButton + AccountsColumnConfigurator on the right
 ├── AccountsOverviewTiles     metric tiles across the filtered set
 └── AccountsHogQLTable        the DataTable; per-column renderers; controlled row expansion
-    └── AccountNotebooksExpansion   expanded row: Useful links + LemonTabs(Notes/Users/Usage)
+    └── AccountNotebooksExpansion   expanded row: Useful links + LemonTabs(Health/Notes/Users/Usage/Spend)
+        ├── (health) AccountHealthScoreExplanation            query-time global health score breakdown
         ├── (notes)  in-place LemonTable of linked notebooks  (accountNotebooksLogic, keyed by accountId)
         ├── (users)  AccountRelatedUsersExpansion             (accountRelatedUsersLogic, keyed by externalId)
-        └── (usage)  AccountBillingExpansion kind="usage"     (accountBillingLogic — a saved billing-usage insight)
+        ├── (usage)  AccountBillingExpansion kind="usage"     (accountBillingLogic — a saved billing-usage insight)
+        └── (spend)  AccountBillingExpansion kind="spend"     (accountBillingLogic — saved billing-spend insights)
 ```
 
 ### Logics and what each owns
@@ -47,15 +49,16 @@ AccountsTabContent  ── binds dataNodeLogic(ACCOUNTS_HOGQL_DATA_NODE_KEY, acc
 `accountsLogic.hogqlQuery` builds a `DataTableNode` wrapping an `AccountsQuery` (`select`, plus optional `search`, `tagNames`, `allRolesUnassigned`, `assignedToUserIds`, `filterExpression`, `metrics`, `orderBy`). The backend runner (`accounts_query_runner`) returns **rows as arrays** aligned to `visibleColumnNames`. `assignedToUserIds` is the "assigned to" filter — a list of user ids the runner expands into `csm IN ids OR account_executive IN ids` (the single user-facing role filter; there are no separate per-role CSM/AE/owner filters). The `allRolesUnassigned` flag (the "Unassigned only" option, surfaced inside the "Assigned to" picker — mutually exclusive with picking people via the cascade in `accountsLogic` listeners) restricts to accounts with no csm/AE/owner. The "My accounts" checkbox is a client-side shortcut: `accountsLogic` resolves it to `[currentUserId]` (from `userLogic`) before the query is sent, so the backend only ever receives explicit ids and a shared URL resolves to the same accounts for every viewer. Two cell shapes matter:
 
 - **`name` column** (mandatory, `ACCOUNTS_NAME_COLUMN`) — emitted as `tuple(name, external_id, id)`, read as `{ name, external_id, id }`. This is the row's identity: `id` (the account PK) drives expansion/scroll/role updates; `external_id` is the copy-able group key. `getNameCell()` in `AccountsHogQLTable.tsx` is the canonical accessor; never assume a column index.
+- **`health_score` column** — a synthetic query-time cell emitted only when selected. It is not a `system.accounts` field: the backend fetches the visible page, batches a 30-day activity baseline + per-account metrics query, then replaces the placeholder cell with `{ score, status, factors, noDataReason, ... }`. It is visible by default and in the column picker, but intentionally **not sortable or filterable** because the score is page-row post-processing, not a globally ordered account column.
 - **role columns** (`csm`, `account_executive`, `account_owner`) — emitted as `tuple(id, email)`, rendered with `MemberSelect`. Sorting these uses `tupleElement(col, 2)` (email) so visual order matches.
 
-Default columns (`ACCOUNTS_HOGQL_DEFAULT_SELECT`): `name`, `tag_names`, `notebook_count`, `csm`, `account_executive`, `account_owner`. The name column is force-kept (`ensureNameColumn`) — removing it breaks identity, scroll, and role edits. Extra columns come from account properties, lazy/virtual-table joins under `system.accounts`, data-warehouse joins, or freeform SQL — all assembled by `buildAccountColumnGroups`.
+Default columns (`ACCOUNTS_HOGQL_DEFAULT_SELECT`): `name`, `health_score`, `tag_names`, `notebook_count`, `csm`, `account_executive`, `account_owner`. The name column is force-kept (`ensureNameColumn`) — removing it breaks identity, scroll, and role edits. Extra columns come from account health, account properties, lazy/virtual-table joins under `system.accounts`, data-warehouse joins, or freeform SQL — all assembled by `buildAccountColumnGroups`.
 
 Sort safety: removing the sorted column drops the sort (`clearSortIfColumnRemoved`), else the backend gets an `orderBy` referencing a missing alias.
 
 ## The expanded row
 
-`AccountsHogQLTable.useExpandable()` makes expansion **controlled** by `accountsExpansionLogic`: `isRowExpanded` reads `expandedAccountIds`, `onRowExpand`/`onRowCollapse` dispatch `toggleAccountExpanded`. The body is `AccountNotebooksExpansion`, a `LemonTabs` over `notes` / `users` / `usage` (`AccountExpansionTab`) plus the Useful links sidebar. Active tab comes from `activeTabFor(accountId)` (defaults to `notes`).
+`AccountsHogQLTable.useExpandable()` makes expansion **controlled** by `accountsExpansionLogic`: `isRowExpanded` reads `expandedAccountIds`, `onRowExpand`/`onRowCollapse` dispatch `toggleAccountExpanded`. The body is `AccountNotebooksExpansion`, a `LemonTabs` over `health` / `notes` / `users` / `usage` / `spend` (`AccountExpansionTab`) plus the Useful links sidebar. Active tab comes from `activeTabFor(accountId)` (defaults to `health`, so the health score is auditable immediately after expanding a row).
 
 The Usage tab renders an existing saved billing-usage insight — **point users to it, don't rebuild usage as a new insight.**
 
@@ -79,7 +82,7 @@ The tool is registered for the page regardless of agent mode. The Customer analy
 ### Backend touchpoints
 
 - `products/customer_analytics/backend/models` — the `Account` model (`external_id` = group key).
-- `products/customer_analytics/backend/` — `accounts_query_runner` (builds the list rows + cell tuples).
+- `products/customer_analytics/backend/` — `accounts_query_runner` (builds the list rows + cell tuples) and `account_health_score` (30-day query-time score contract).
 - `products/customer_analytics/backend/max_tools/` — `OpenAccountTool` and other account Max tools.
 - `ee/hogai/core/agent_modes/presets/customer_analytics.py` — the Customer analytics agent mode (gated by the `customer-analytics-csp` flag).
 
@@ -115,7 +118,7 @@ We track user actions on the Accounts list with `posthog.capture()`. Conventions
 | `customer analytics account role assigned`          | `accountsLogic` `updateAccountRole`                                                                                                   | `role` (`csm` \| `account_executive` \| `account_owner`), `is_assigned`, `assigned_user_id`, `source` (always `list_row` today)                                                             |
 | `customer analytics account link clicked`           | `AccountNotebooksExpansion.tsx` useful-link `onClick`                                                                                 | `link_key`, `has_destination`                                                                                                                                                               |
 | `customer analytics account note clicked`           | `AccountNotebooksExpansion.tsx` note `<Link>` `onClick`                                                                               | `notebook_short_id`                                                                                                                                                                         |
-| `customer analytics account tab viewed`             | `accountsExpansionLogic` `setActiveTab` listener (genuine tab clicks only; programmatic `openAccountTab` navigation does not fire it) | `tab` (`notes` \| `users` \| `usage`)                                                                                                                                                       |
+| `customer analytics account tab viewed`             | `accountsExpansionLogic` `setActiveTab` listener (genuine tab clicks only; programmatic `openAccountTab` navigation does not fire it) | `tab` (`health` \| `notes` \| `users` \| `usage` \| `spend`)                                                                                                                                |
 | `customer analytics account related user clicked`   | `AccountRelatedUsersExpansion.tsx` user `<Link>` `onClick`                                                                            | _(none — customer end-user PII kept out)_                                                                                                                                                   |
 
 > **Keep this table up to date.** Whenever you add, rename, or remove a `posthog.capture()` event in the Accounts area — or change its properties — update this table in the same change. An agent reading this file should be able to trust it as the source of truth for what the Accounts list reports.

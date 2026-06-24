@@ -13,19 +13,19 @@ from products.customer_analytics.backend.models import Account
 from ee.hogai.tool import MaxTool
 
 OPEN_ACCOUNT_TOOL_DESCRIPTION = dedent("""
-    Open an account in the Accounts list and jump to one of its tabs — Notes, Users, or Usage.
+    Open an account in the Accounts list and jump to one of its tabs — Health, Notes, Users, or Usage.
 
-    Use this to show the user an account's existing usage (the Usage tab) instead of building a new
-    insight, or to surface its notes or related users. Identify the account by name or external id;
-    `tab` defaults to usage. The account must be in the list the user is currently viewing.
+    Use this to show the user an account's health score breakdown, existing usage, notes, or related
+    users. Identify the account by name or external id; `tab` defaults to health. The account must be
+    in the list the user is currently viewing.
     """).strip()
 
 
 class OpenAccountToolArgs(BaseModel):
     account: str = Field(description="The account to open — its name or external id.")
-    tab: Literal["notes", "users", "usage"] = Field(
-        default="usage",
-        description="Which tab to open: notes, users, or usage. Defaults to usage.",
+    tab: Literal["health", "notes", "users", "usage"] = Field(
+        default="health",
+        description="Which tab to open: health, notes, users, or usage. Defaults to health.",
     )
 
 
@@ -37,7 +37,7 @@ class OpenAccountTool(MaxTool):
     def get_required_resource_access(self) -> list[tuple[APIScopeObject, AccessControlLevel]]:
         return [("account", "viewer")]
 
-    async def _arun_impl(self, account: str, tab: str = "usage") -> tuple[str, dict[str, Any]]:
+    async def _arun_impl(self, account: str, tab: str = "health") -> tuple[str, dict[str, Any]]:
         resolved = await self._resolve_account(account)
         if resolved is None:
             return f"Couldn't find an account matching '{account}'.", {"error": "account_not_found"}

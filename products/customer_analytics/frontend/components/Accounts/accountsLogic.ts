@@ -9,6 +9,7 @@ import { urls } from 'scenes/urls'
 import { userLogic } from 'scenes/userLogic'
 
 import { dataNodeLogic } from '~/queries/nodes/DataNode/dataNodeLogic'
+import { orderByForSelectKey } from '~/queries/nodes/DataTable/utils'
 import { AccountsQuery, DataTableNode, NodeKind } from '~/queries/schema/schema-general'
 import type { UserBasicType } from '~/types'
 
@@ -20,9 +21,12 @@ import type {
 
 import { ACCOUNTS_HOGQL_DATA_NODE_KEY, CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS } from '../../constants'
 import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
+    accountColumnDisplayNames,
     accountsColumnConfigLogic,
+    ensureAccountQueryColumns,
 } from './accountsColumnConfigLogic'
 import { AccountExpansionTab, accountsExpansionLogic } from './accountsExpansionLogic'
 import type { accountsLogicType } from './accountsLogicType'
@@ -86,17 +90,21 @@ export type AccountSortOrder = { column: AccountSortableColumn; direction: Accou
 // Columns that are HogQL `Tuple(id, email)` — sort by the `email` element so the
 // order matches what the user sees on screen rather than the opaque user id.
 const TUPLE_SORT_COLUMNS = new Set<string>(['csm', 'account_executive', 'account_owner'])
+const NON_SORTABLE_COLUMNS = new Set<string>([ACCOUNTS_HEALTH_SCORE_COLUMN])
+
+export function isAccountsColumnSortable(column: string): boolean {
+    return !NON_SORTABLE_COLUMNS.has(column)
+}
 
 // Resolve the HogQL expression to use in ORDER BY for a sortable column.
-// HogQL ORDER BY resolves SELECT aliases by name, so the visible column name
-// (which is the alias for aliased entries, or the bare expression otherwise)
-// works directly — except for tuple-shaped role columns, where we sort by
-// the email element so the visual order matches the rendered cell.
-export function deriveAccountsOrderByExpr(column: string): string {
+// Resolve the visible column key back to the selected HogQL expression, except
+// for tuple-shaped role columns where we sort by the email element so the
+// visual order matches the rendered cell.
+export function deriveAccountsOrderByExpr(column: string, selectColumns: readonly string[]): string {
     if (TUPLE_SORT_COLUMNS.has(column)) {
         return `tupleElement(${column}, 2)`
     }
-    return column
+    return orderByForSelectKey(column, selectColumns)
 }
 
 const ROLE_LABELS: Record<AccountRoleKey, string> = {
@@ -310,6 +318,10 @@ export const accountsLogic = kea<accountsLogicType>([
                 return state
             },
         ],
+        queryColumnNames: [
+            (s) => [s.selectColumns],
+            (selectColumns: string[]): string[] => accountColumnDisplayNames(ensureAccountQueryColumns(selectColumns)),
+        ],
         hogqlQuery: [
             (s) => [
                 s.searchQuery,
@@ -331,9 +343,10 @@ export const accountsLogic = kea<accountsLogicType>([
                 sortOrder: AccountSortOrder,
                 selectColumns: string[]
             ): DataTableNode => {
+                const querySelectColumns = ensureAccountQueryColumns(selectColumns)
                 const source: AccountsQuery = {
                     kind: NodeKind.AccountsQuery,
-                    select: selectColumns,
+                    select: querySelectColumns,
                     tags: { ...CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS, name: 'customer_analytics_accounts_list' },
                 }
                 if (overviewMetrics.length > 0) {
@@ -356,13 +369,16 @@ export const accountsLogic = kea<accountsLogicType>([
                     source.filterExpression = tileFilter.expression
                 }
                 if (sortOrder) {
-                    const expr = deriveAccountsOrderByExpr(sortOrder.column)
+                    const expr = deriveAccountsOrderByExpr(sortOrder.column, querySelectColumns)
                     source.orderBy = [sortOrder.direction === 'asc' ? expr : `${expr} DESC`]
                 }
                 return {
                     kind: NodeKind.DataTableNode,
                     source,
                     full: true,
+                    hiddenColumns: selectColumns.includes(ACCOUNTS_HEALTH_SCORE_COLUMN)
+                        ? undefined
+                        : [ACCOUNTS_HEALTH_SCORE_COLUMN],
                     // Suppress DataTable's built-in sort indicator on column
                     // headers — our `SortableColumnHeader` renders its own (and
                     // correctly reflects sorts where the orderBy expression
@@ -429,6 +445,9 @@ export const accountsLogic = kea<accountsLogicType>([
             }
         },
         toggleSort: ({ column }) => {
+            if (!isAccountsColumnSortable(column)) {
+                return
+            }
             const current = values.sortOrder
             let next: AccountSortOrder
             if (!current || current.column !== column) {

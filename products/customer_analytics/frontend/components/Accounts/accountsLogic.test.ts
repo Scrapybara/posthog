@@ -14,6 +14,7 @@ import { accountsPartialUpdate, accountsRetrieve } from 'products/customer_analy
 import type { AccountApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import {
+    ACCOUNTS_HEALTH_SCORE_COLUMN,
     ACCOUNTS_HOGQL_DEFAULT_SELECT,
     ACCOUNTS_NAME_COLUMN,
     accountsColumnConfigLogic,
@@ -27,6 +28,21 @@ const orderByOf = (source: unknown): AccountsQuery['orderBy'] => (source as Acco
 jest.mock('products/customer_analytics/frontend/generated/api', () => ({
     accountsRetrieve: jest.fn(),
     accountsPartialUpdate: jest.fn(),
+}))
+
+jest.mock('lib/api', () => ({
+    __esModule: true,
+    default: {
+        query: () => Promise.resolve({ tables: [], fields: [], saved_queries: [] }),
+        columnConfigurations: {
+            list: () => Promise.resolve({ results: [] }),
+            create: () => Promise.resolve({ id: 'saved-1', columns: [] }),
+            update: () => Promise.resolve({ id: 'saved-1', columns: [] }),
+        },
+        dataWarehouseViewLinks: {
+            list: () => Promise.resolve({ results: [] }),
+        },
+    },
 }))
 
 const mockAccountsRetrieve = accountsRetrieve as jest.MockedFunction<typeof accountsRetrieve>
@@ -208,7 +224,7 @@ describe('accountsLogic', () => {
         it('toggleSort on a fresh column starts ascending', () => {
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toEqual({ column: 'notebook_count', direction: 'asc' })
-            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['notebook_count'])
+            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['accounts.notebooks.count'])
         })
 
         it('toggleSort cycles asc -> desc -> null on repeated clicks', () => {
@@ -216,7 +232,7 @@ describe('accountsLogic', () => {
             expect(logic.values.sortOrder?.direction).toBe('asc')
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toEqual({ column: 'notebook_count', direction: 'desc' })
-            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['notebook_count DESC'])
+            expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['accounts.notebooks.count DESC'])
             logic.actions.toggleSort('notebook_count')
             expect(logic.values.sortOrder).toBeNull()
             expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
@@ -252,6 +268,12 @@ describe('accountsLogic', () => {
             logic.actions.toggleSort('name')
             expect(orderByOf(logic.values.hogqlQuery.source)).toEqual(['name DESC'])
         })
+
+        it('does not sort by query-time health score', () => {
+            logic.actions.toggleSort(ACCOUNTS_HEALTH_SCORE_COLUMN)
+            expect(logic.values.sortOrder).toBeNull()
+            expect(orderByOf(logic.values.hogqlQuery.source)).toBeUndefined()
+        })
     })
 
     describe('selectColumns', () => {
@@ -261,10 +283,39 @@ describe('accountsLogic', () => {
             expect(config?.values.selectColumns).toContain(ACCOUNTS_NAME_COLUMN)
         })
 
-        it('hogqlQuery.source.select equals selectColumns verbatim — no pinned aliases', () => {
+        it('keeps health score in the query when hidden from visible columns', () => {
             const config = accountsColumnConfigLogic.findMounted()
+            config?.actions.setSelectColumns([ACCOUNTS_NAME_COLUMN, 'csm'])
+
             const source = logic.values.hogqlQuery.source as AccountsQuery
-            expect(source.select).toEqual(config?.values.selectColumns)
+            expect(config?.values.selectColumns).toEqual([ACCOUNTS_NAME_COLUMN, 'csm'])
+            expect(source.select).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, 'csm'])
+            expect(logic.values.hogqlQuery.hiddenColumns).toEqual([ACCOUNTS_HEALTH_SCORE_COLUMN])
+            expect(logic.values.queryColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, 'csm'])
+        })
+
+        it('does not collide with user expressions aliased as health_score', () => {
+            const config = accountsColumnConfigLogic.findMounted()
+            const userExpression = 'properties.plan AS health_score'
+            config?.actions.setSelectColumns([ACCOUNTS_NAME_COLUMN, userExpression])
+            logic.actions.toggleSort(userExpression)
+
+            const source = logic.values.hogqlQuery.source as AccountsQuery
+            expect(config?.values.visibleColumnNames).toEqual([ACCOUNTS_NAME_COLUMN, userExpression])
+            expect(source.select).toEqual([ACCOUNTS_NAME_COLUMN, ACCOUNTS_HEALTH_SCORE_COLUMN, userExpression])
+            expect(orderByOf(source)).toEqual(['properties.plan'])
+            expect(logic.values.hogqlQuery.hiddenColumns).toEqual([ACCOUNTS_HEALTH_SCORE_COLUMN])
+            expect(logic.values.queryColumnNames).toEqual([
+                ACCOUNTS_NAME_COLUMN,
+                ACCOUNTS_HEALTH_SCORE_COLUMN,
+                userExpression,
+            ])
+        })
+
+        it('does not hide health score when it is selected', () => {
+            const source = logic.values.hogqlQuery.source as AccountsQuery
+            expect(source.select).toEqual(ACCOUNTS_HOGQL_DEFAULT_SELECT)
+            expect(logic.values.hogqlQuery.hiddenColumns).toBeUndefined()
         })
 
         it('refuses to remove the name column via unselectColumn', () => {

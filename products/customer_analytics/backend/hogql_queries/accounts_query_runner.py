@@ -1,3 +1,5 @@
+import structlog
+
 from posthog.schema import AccountsQuery, AccountsQueryResponse, CachedAccountsQueryResponse
 
 from posthog.hogql import ast
@@ -11,9 +13,17 @@ from posthog.hogql_queries.query_runner import AnalyticsQueryRunner
 from posthog.models import User
 from posthog.rbac.user_access_control import UserAccessControl
 
+from products.customer_analytics.backend.hogql_queries.account_health_score import (
+    ACCOUNT_HEALTH_SCORE_COLUMN,
+    AccountHealthScoreCalculator,
+    no_data_health_score,
+)
+
+logger = structlog.get_logger(__name__)
+
 NAME_COLUMN = "name"
 
-DEFAULT_COLUMNS = (NAME_COLUMN, "created_at")
+DEFAULT_COLUMNS = (NAME_COLUMN, ACCOUNT_HEALTH_SCORE_COLUMN, "created_at")
 
 DEFAULT_ORDER_BY = "created_at DESC"
 
@@ -24,6 +34,11 @@ def _normalize_order_clause(raw: str) -> str:
     if stripped.startswith("-"):
         return f"{stripped[1:].strip()} DESC"
     return stripped
+
+
+def _is_health_score_order_clause(raw: str) -> bool:
+    parts = _normalize_order_clause(raw).split(None, 1)
+    return bool(parts) and parts[0] == ACCOUNT_HEALTH_SCORE_COLUMN
 
 
 # Account-properties JSON keys for the three assignable roles. The
@@ -77,8 +92,14 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
     def _resolve_column(self, raw: str) -> tuple[str, ast.Expr]:
         if raw == NAME_COLUMN:
             return NAME_COLUMN, self._name_tuple_expr()
+        if raw == ACCOUNT_HEALTH_SCORE_COLUMN:
+            return ACCOUNT_HEALTH_SCORE_COLUMN, ast.Alias(
+                alias=ACCOUNT_HEALTH_SCORE_COLUMN, expr=ast.Constant(value=None)
+            )
         expr = parse_expr(raw)
         column_name = expr.alias if isinstance(expr, ast.Alias) else raw
+        if column_name == ACCOUNT_HEALTH_SCORE_COLUMN:
+            column_name = raw
         return column_name, expr
 
     def _name_tuple_expr(self) -> ast.Expr:
@@ -127,7 +148,10 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
 
     def to_query(self) -> ast.SelectQuery:
         where_exprs = self._build_where_exprs()
-        order_clauses = self.query.orderBy or [DEFAULT_ORDER_BY]
+        raw_order_clauses = self.query.orderBy or [DEFAULT_ORDER_BY]
+        order_clauses = [clause for clause in raw_order_clauses if not _is_health_score_order_clause(clause)] or [
+            DEFAULT_ORDER_BY
+        ]
 
         return ast.SelectQuery(
             select=self._select_exprs,
@@ -238,18 +262,62 @@ class AccountsQueryRunner(AnalyticsQueryRunner[AccountsQueryResponse]):
             ]
             for row in self.paginator.results
         ]
+        if ACCOUNT_HEALTH_SCORE_COLUMN in self.columns and results:
+            self._add_health_scores(results, name_index)
+
+        types = [t for _, t in response.types] if response.types else []
+        if ACCOUNT_HEALTH_SCORE_COLUMN in self.columns:
+            while len(types) < len(self.columns):
+                types.append("Nullable(String)")
+            types[self.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)] = "JSON"
 
         return AccountsQueryResponse(
             kind="AccountsQuery",
             columns=list(self.columns),
             results=results,
-            types=[t for _, t in response.types] if response.types else [],
+            types=types,
             metricsResults=metrics_results,
             hogql=response.hogql or "",
             timings=response.timings,
             modifiers=self.modifiers,
             **self.paginator.response_params(),
         )
+
+    def _add_health_scores(self, results: list[list], name_index: int) -> None:
+        health_index = self.columns.index(ACCOUNT_HEALTH_SCORE_COLUMN)
+        external_ids_by_account_id: dict[str, str | None] = {}
+        for row in results:
+            if len(row) <= name_index:
+                continue
+            cell = row[name_index]
+            if not isinstance(cell, dict) or not isinstance(cell.get("id"), str):
+                continue
+            external_id = cell.get("external_id")
+            external_ids_by_account_id[cell["id"]] = external_id if isinstance(external_id, str) else None
+
+        try:
+            scores = AccountHealthScoreCalculator(
+                team=self.team,
+                user=self.user,
+                timings=self.timings,
+                modifiers=self.modifiers,
+            ).score_accounts(external_ids_by_account_id)
+        except Exception:
+            logger.exception(
+                "account_health_score.enrichment_failed",
+                team_id=self.team.id,
+                account_count=len(external_ids_by_account_id),
+            )
+            scores = {
+                account_id: no_data_health_score("Health score could not be calculated for this page.")
+                for account_id in external_ids_by_account_id
+            }
+        for row in results:
+            if len(row) <= max(name_index, health_index):
+                continue
+            cell = row[name_index]
+            if isinstance(cell, dict) and isinstance(cell.get("id"), str):
+                row[health_index] = scores.get(cell["id"])
 
     def _compute_metrics_results(self, metrics: list[str]) -> list[float | int | None]:
         try:

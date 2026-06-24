@@ -66,6 +66,79 @@ class TestPropertyDefinitionAPI(APIBaseTest):
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["property_type"] == "DateTime"
 
+    def test_list_events_using_property(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        event_definition = EventDefinition.objects.create(team=self.team, name="missing_event_definition")
+        EventProperty.objects.create(team=self.team, event="missing_event_definition", property="first_visit")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 3
+        assert response.json()["results"] == [
+            {
+                "id": str(EventDefinition.objects.get(team=self.team, name="$pageview").id),
+                "name": "$pageview",
+                "last_seen_at": None,
+            },
+            {"id": None, "name": "another_event", "last_seen_at": None},
+            {
+                "id": str(event_definition.id),
+                "name": "missing_event_definition",
+                "last_seen_at": None,
+            },
+        ]
+
+    def test_list_events_using_property_is_project_scoped(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        other_team = Team.objects.create(organization=self.organization)
+        EventProperty.objects.create(team=other_team, event="other_team_event", property="first_visit")
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "other_team_event" not in [event["name"] for event in response.json()["results"]]
+
+    def test_list_events_using_property_paginates_before_loading_event_definitions(self):
+        property_definition = PropertyDefinition.objects.create(team=self.team, name="high_cardinality_property")
+        for index in range(5):
+            event_name = f"event_{index}"
+            EventDefinition.objects.create(team=self.team, name=event_name)
+            EventProperty.objects.create(team=self.team, event=event_name, property=property_definition.name)
+
+        response = self.client.get(
+            f"/api/projects/{self.team.pk}/property_definitions/{property_definition.id}/events/?limit=2&offset=2"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 5
+        assert [event["name"] for event in response.json()["results"]] == ["event_2", "event_3"]
+
+    def test_list_events_using_property_includes_project_scoped_event_properties(self):
+        property_definition = PropertyDefinition.objects.get(team=self.team, name="first_visit")
+        other_team = Team.objects.create(organization=self.organization, project=self.project)
+        event_definition = EventDefinition.objects.create(
+            team=other_team, project=self.project, name="other_environment_event"
+        )
+        EventProperty.objects.create(
+            team=other_team, project=self.project, event="other_environment_event", property="first_visit"
+        )
+
+        response = self.client.get(
+            f"/api/projects/{self.project.pk}/property_definitions/{property_definition.id}/events/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert {
+            "id": str(event_definition.id),
+            "name": "other_environment_event",
+            "last_seen_at": None,
+        } in response.json()["results"]
+
     def test_list_property_definitions(self):
         response = self.client.get(f"/api/projects/{self.team.pk}/property_definitions/")
         assert response.status_code == status.HTTP_200_OK

@@ -21,6 +21,7 @@ class EventProperty(models.Model):
         ]
         indexes = [
             models.Index(fields=["project"], name="posthog_eve_proj_id_dd2337d2"),
+            models.Index(fields=["project", "property", "event"], name="ph_eve_proj_prop_event_idx"),
             models.Index(fields=["team", "event"]),
         ]
 

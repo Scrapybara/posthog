@@ -8,7 +8,7 @@ from django.utils.timezone import now
 from dateutil.relativedelta import relativedelta
 
 from posthog.constants import TREND_FILTER_TYPE_ACTIONS
-from posthog.models import Person, PropertyDefinition
+from posthog.models import EventProperty, Person, PropertyDefinition
 from posthog.models.filters.mixins.utils import cached_property
 from posthog.models.utils import UUIDT
 from posthog.utils import get_absolute_path
@@ -30,6 +30,10 @@ class WebDataGenerator(DataGenerator):
         PropertyDefinition.objects.get_or_create(team=self.team, name="purchase", is_numerical=True)
         PropertyDefinition.objects.get_or_create(team=self.team, name="$current_url")
         PropertyDefinition.objects.get_or_create(team=self.team, name="$browser")
+        EventProperty.objects.get_or_create(team=self.team, event="$pageview", property="$current_url")
+        EventProperty.objects.get_or_create(team=self.team, event="$pageview", property="$browser")
+        EventProperty.objects.get_or_create(team=self.team, event="$autocapture", property="$current_url")
+        EventProperty.objects.get_or_create(team=self.team, event="$autocapture", property="$browser")
 
     def create_actions_dashboards(self):
         homepage = Action.objects.create(

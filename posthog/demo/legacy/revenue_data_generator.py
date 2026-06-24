@@ -5,7 +5,7 @@ from django.utils.timezone import now
 from dateutil.relativedelta import relativedelta
 
 from posthog.constants import TREND_FILTER_TYPE_ACTIONS
-from posthog.models import EventDefinition, Person, PropertyDefinition
+from posthog.models import EventDefinition, EventProperty, Person, PropertyDefinition
 
 from products.actions.backend.models.action import Action
 from products.dashboards.backend.models.dashboard import Dashboard
@@ -22,6 +22,9 @@ class RevenueDataGenerator(DataGenerator):
         PropertyDefinition.objects.get_or_create(team=self.team, name="plan")
         PropertyDefinition.objects.get_or_create(team=self.team, name="first_visit")
         PropertyDefinition.objects.get_or_create(team=self.team, name="purchase_value", is_numerical=True)
+        EventProperty.objects.get_or_create(team=self.team, event="$pageview", property="first_visit")
+        EventProperty.objects.get_or_create(team=self.team, event="purchase", property="plan")
+        EventProperty.objects.get_or_create(team=self.team, event="purchase", property="purchase_value")
 
     def populate_person_events(self, person: Person, distinct_id: str, index: int):
         if random.randint(0, 10) <= 4:

@@ -1,4 +1,4 @@
-import { actions, afterMount, kea, key, listeners, path, props, reducers, selectors } from 'kea'
+import { actions, afterMount, connect, kea, key, listeners, path, props, reducers, selectors } from 'kea'
 import { loaders } from 'kea-loaders'
 import { router } from 'kea-router'
 
@@ -6,8 +6,11 @@ import api from 'lib/api'
 import { TaxonomicFilterGroupType } from 'lib/components/TaxonomicFilter/types'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { Scene } from 'scenes/sceneTypes'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
+import { propertyDefinitionsEventsRetrieve } from '~/generated/core/api'
+import type { PropertyDefinitionEventUsageResponseApi } from '~/generated/core/api.schemas'
 import { updatePropertyDefinitions } from '~/models/propertyDefinitionsModel'
 import { getFilterLabel } from '~/taxonomy/helpers'
 import { Breadcrumb, Definition, EventDefinitionMetrics, ObjectMediaPreview, PropertyDefinition } from '~/types'
@@ -16,6 +19,8 @@ import { DataManagementTab } from '../DataManagementScene'
 import { eventDefinitionsTableLogic } from '../events/eventDefinitionsTableLogic'
 import { propertyDefinitionsTableLogic } from '../properties/propertyDefinitionsTableLogic'
 import type { definitionLogicType } from './definitionLogicType'
+
+export const PROPERTY_USAGE_EVENTS_PER_PAGE = 100
 
 export const createNewDefinition = (isEvent: boolean): Definition => ({
     id: 'new',
@@ -36,10 +41,15 @@ export const definitionLogic = kea<definitionLogicType>([
     path(['scenes', 'data-management', 'definition', 'definitionViewLogic']),
     props({} as DefinitionLogicProps),
     key((props) => props.id || 'new'),
+    connect(() => ({
+        values: [teamLogic, ['currentProjectId']],
+    })),
     actions({
         setDefinition: (definition: Partial<Definition>, options: SetDefinitionProps = {}) => ({ definition, options }),
         loadDefinition: (id: Definition['id']) => ({ id }),
         loadMetrics: (id: Definition['id']) => ({ id }),
+        loadPropertyUsageEvents: (id: Definition['id'], page = 1) => ({ id, page }),
+        setPropertyUsageEventsPage: (page: number) => ({ page }),
         setDefinitionMissing: true,
         loadPreviews: true,
         createMediaPreview: (uploadedMediaId: string, metadata?: Record<string, any>) => ({
@@ -53,6 +63,12 @@ export const definitionLogic = kea<definitionLogicType>([
             false,
             {
                 setDefinitionMissing: () => true,
+            },
+        ],
+        propertyUsageEventsPage: [
+            1,
+            {
+                setPropertyUsageEventsPage: (_, { page }) => page,
             },
         ],
     })),
@@ -113,6 +129,21 @@ export const definitionLogic = kea<definitionLogicType>([
 
                     // For properties, we currently don't have metrics in the same way as events.
                     return null
+                },
+            },
+        ],
+        propertyUsageEvents: [
+            { count: 0, results: [] } as PropertyDefinitionEventUsageResponseApi,
+            {
+                loadPropertyUsageEvents: async ({ id, page }) => {
+                    if (values.isEvent || !id || id === 'new') {
+                        return { count: 0, results: [] }
+                    }
+
+                    return await propertyDefinitionsEventsRetrieve(String(values.currentProjectId), String(id), {
+                        limit: PROPERTY_USAGE_EVENTS_PER_PAGE,
+                        offset: (page - 1) * PROPERTY_USAGE_EVENTS_PER_PAGE,
+                    })
                 },
             },
         ],
@@ -186,6 +217,13 @@ export const definitionLogic = kea<definitionLogicType>([
         loadDefinitionSuccess: () => {
             if (values.isEvent && values.definition.id && values.definition.id !== 'new') {
                 actions.loadPreviews()
+            } else if (values.isProperty && values.definition.id && values.definition.id !== 'new') {
+                actions.setPropertyUsageEventsPage(1)
+            }
+        },
+        setPropertyUsageEventsPage: ({ page }) => {
+            if (values.isProperty && values.definition.id && values.definition.id !== 'new') {
+                actions.loadPropertyUsageEvents(values.definition.id, page)
             }
         },
         createMediaPreviewSuccess: () => {

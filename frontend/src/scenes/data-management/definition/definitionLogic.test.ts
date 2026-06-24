@@ -15,7 +15,15 @@ describe('definitionLogic', () => {
         useMocks({
             get: {
                 '/api/projects/:team/event_definitions/:id': mockEventDefinitions[0],
+                '/api/projects/:team/event_definitions/:id/metrics/': {},
+                '/api/projects/:team/object_media_previews': { results: [] },
                 '/api/projects/:team/property_definitions/:id': mockEventPropertyDefinition,
+                '/api/projects/:team/property_definitions/:id/events/': {
+                    count: 1,
+                    results: [
+                        { id: mockEventDefinitions[0].id, name: mockEventDefinitions[0].name, last_seen_at: null },
+                    ],
+                },
             },
         })
         initKeaTests()
@@ -49,9 +57,24 @@ describe('definitionLogic', () => {
             router.actions.push(urls.propertyDefinition('1'))
             logic = definitionLogic({ id: '1' })
             logic.mount()
-            await expectLogic(logic).toDispatchActions(['loadDefinition', 'loadDefinitionSuccess']).toMatchValues({
-                definition: mockEventPropertyDefinition,
-            })
+            await expectLogic(logic)
+                .toDispatchActions([
+                    'loadDefinition',
+                    'loadDefinitionSuccess',
+                    'setPropertyUsageEventsPage',
+                    'loadPropertyUsageEvents',
+                    'loadPropertyUsageEventsSuccess',
+                ])
+                .toMatchValues({
+                    definition: mockEventPropertyDefinition,
+                    propertyUsageEvents: {
+                        count: 1,
+                        results: [
+                            { id: mockEventDefinitions[0].id, name: mockEventDefinitions[0].name, last_seen_at: null },
+                        ],
+                    },
+                    propertyUsageEventsPage: 1,
+                })
         })
 
         it('load new definition on mount', async () => {

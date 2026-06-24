@@ -17,6 +17,11 @@
     animation-delay: calc(var(--index) * 25ms);
 }
 
+.QuestionInput__textarea.LemonTextArea {
+    max-height: min(40vh, 20rem);
+    overflow-y: auto !important;
+}
+
 @keyframes QuestionInput__QuestionSuggestion__slide-in-fade-down {
     from {
         opacity: 0;

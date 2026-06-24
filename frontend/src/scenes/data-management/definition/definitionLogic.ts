@@ -1,4 +1,4 @@
-import { actions, afterMount, kea, key, listeners, path, props, reducers, selectors } from 'kea'
+import { actions, afterMount, connect, kea, key, listeners, path, props, reducers, selectors } from 'kea'
 import { loaders } from 'kea-loaders'
 import { router } from 'kea-router'
 
@@ -6,8 +6,11 @@ import api from 'lib/api'
 import { TaxonomicFilterGroupType } from 'lib/components/TaxonomicFilter/types'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { Scene } from 'scenes/sceneTypes'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
+import { propertyDefinitionsEventsRetrieve } from '~/generated/core/api'
+import type { PropertyDefinitionEventUsageResponseApi } from '~/generated/core/api.schemas'
 import { updatePropertyDefinitions } from '~/models/propertyDefinitionsModel'
 import { getFilterLabel } from '~/taxonomy/helpers'
 import { Breadcrumb, Definition, EventDefinitionMetrics, ObjectMediaPreview, PropertyDefinition } from '~/types'
@@ -16,6 +19,8 @@ import { DataManagementTab } from '../DataManagementScene'
 import { eventDefinitionsTableLogic } from '../events/eventDefinitionsTableLogic'
 import { propertyDefinitionsTableLogic } from '../properties/propertyDefinitionsTableLogic'
 import type { definitionLogicType } from './definitionLogicType'
+
+export const PROPERTY_DEFINITION_EVENTS_LIMIT = 10
 
 export const createNewDefinition = (isEvent: boolean): Definition => ({
     id: 'new',
@@ -36,10 +41,14 @@ export const definitionLogic = kea<definitionLogicType>([
     path(['scenes', 'data-management', 'definition', 'definitionViewLogic']),
     props({} as DefinitionLogicProps),
     key((props) => props.id || 'new'),
+    connect(() => ({
+        values: [teamLogic, ['currentProjectId']],
+    })),
     actions({
         setDefinition: (definition: Partial<Definition>, options: SetDefinitionProps = {}) => ({ definition, options }),
         loadDefinition: (id: Definition['id']) => ({ id }),
         loadMetrics: (id: Definition['id']) => ({ id }),
+        loadPropertyEvents: (id: Definition['id'], offset = 0) => ({ id, offset }),
         setDefinitionMissing: true,
         loadPreviews: true,
         createMediaPreview: (uploadedMediaId: string, metadata?: Record<string, any>) => ({
@@ -53,6 +62,21 @@ export const definitionLogic = kea<definitionLogicType>([
             false,
             {
                 setDefinitionMissing: () => true,
+            },
+        ],
+        propertyEventsOffset: [
+            0,
+            {
+                loadDefinition: () => 0,
+                loadPropertyEvents: (_, { offset }) => offset,
+            },
+        ],
+        propertyEventsLoadFailed: [
+            false,
+            {
+                loadPropertyEvents: () => false,
+                loadPropertyEventsSuccess: () => false,
+                loadPropertyEventsFailure: () => true,
             },
         ],
     })),
@@ -103,6 +127,21 @@ export const definitionLogic = kea<definitionLogicType>([
                 },
             },
         ],
+        propertyEvents: [
+            null as PropertyDefinitionEventUsageResponseApi | null,
+            {
+                loadPropertyEvents: async ({ id, offset }) => {
+                    if (values.isEvent || id === 'new') {
+                        return null
+                    }
+
+                    return await propertyDefinitionsEventsRetrieve(String(values.currentProjectId), id, {
+                        limit: PROPERTY_DEFINITION_EVENTS_LIMIT,
+                        offset,
+                    })
+                },
+            },
+        ],
         metrics: [
             null as EventDefinitionMetrics | null,
             {
@@ -149,6 +188,16 @@ export const definitionLogic = kea<definitionLogicType>([
         isEvent: [() => [router.selectors.location], ({ pathname }) => pathname.includes(urls.eventDefinitions())],
         isProperty: [(s) => [s.isEvent], (isEvent) => !isEvent],
         singular: [(s) => [s.isEvent], (isEvent): string => (isEvent ? 'event' : 'property')],
+        propertyEventsNextOffset: [
+            (s) => [s.propertyEvents, s.propertyEventsOffset],
+            (propertyEvents, propertyEventsOffset): number | null =>
+                propertyEvents?.next ? propertyEventsOffset + PROPERTY_DEFINITION_EVENTS_LIMIT : null,
+        ],
+        propertyEventsPreviousOffset: [
+            (s) => [s.propertyEvents, s.propertyEventsOffset],
+            (propertyEvents, propertyEventsOffset): number | null =>
+                propertyEvents?.previous ? Math.max(propertyEventsOffset - PROPERTY_DEFINITION_EVENTS_LIMIT, 0) : null,
+        ],
         breadcrumbs: [
             (s) => [s.definition, s.isEvent],
             (definition, isEvent): Breadcrumb[] => {
@@ -183,9 +232,11 @@ export const definitionLogic = kea<definitionLogicType>([
         ],
     }),
     listeners(({ actions, values }) => ({
-        loadDefinitionSuccess: () => {
-            if (values.isEvent && values.definition.id && values.definition.id !== 'new') {
+        loadDefinitionSuccess: ({ definition }) => {
+            if (values.isEvent && definition.id && definition.id !== 'new') {
                 actions.loadPreviews()
+            } else if (definition.id && definition.id !== 'new') {
+                actions.loadPropertyEvents(definition.id)
             }
         },
         createMediaPreviewSuccess: () => {
@@ -206,7 +257,9 @@ export const definitionLogic = kea<definitionLogicType>([
             actions.setDefinition(createNewDefinition(values.isEvent))
         } else {
             actions.loadDefinition(props.id)
-            actions.loadMetrics(props.id)
+            if (values.isEvent) {
+                actions.loadMetrics(props.id)
+            }
         }
     }),
 ])

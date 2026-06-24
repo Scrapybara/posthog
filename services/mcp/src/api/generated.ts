@@ -40439,6 +40439,39 @@ export namespace Schemas {
       role?: string | null;
     }
 
+    export interface PropertyDefinitionEventUsage {
+      /** Event definition ID. */
+      id: string;
+      /** Event name. */
+      name: string;
+      /**
+         * Last time this event definition was seen by ingestion. This is event-level freshness, not a per-property volume or last-seen timestamp.
+         * @nullable
+         */
+      last_seen_at: string | null;
+    }
+
+    export interface PropertyDefinitionEventUsageResponse {
+      /** Number of current event definitions whose event-property metadata includes this property. */
+      count: number;
+      /**
+         * URL for the next page of event definitions, or null when there is no next page.
+         * @nullable
+         */
+      next: string | null;
+      /**
+         * URL for the previous page of event definitions, or null when there is no previous page.
+         * @nullable
+         */
+      previous: string | null;
+      /** Current event definitions that have been seen with this property. */
+      results: PropertyDefinitionEventUsage[];
+      /** Metadata source used for the association. `event_property_metadata` is populated asynchronously during ingestion from distinct event/property pairs. */
+      source: string;
+      /** Freshness semantics for the result set. The list is metadata-backed, not a live event-data scan: rows mean the property has been seen on the event at least once, deleted event definitions are omitted, and an empty result means no current event definition is known to use this property. */
+      freshness: string;
+    }
+
     export type PropertyType = typeof PropertyType[keyof typeof PropertyType];
 
 
@@ -58845,6 +58878,20 @@ export namespace Schemas {
       Group: 'group',
       Session: 'session',
     } as const;
+
+    export type PropertyDefinitionsEventsRetrieveParams = {
+    /**
+     * Maximum number of event definitions to return. Defaults to 10, maximum 100.
+     * @minimum 1
+     * @maximum 100
+     */
+    limit?: number;
+    /**
+     * Number of matching event definitions to skip before returning results.
+     * @minimum 0
+     */
+    offset?: number;
+    };
 
     export type QueryLogRetrieve200 = { [key: string]: unknown };
 

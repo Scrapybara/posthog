@@ -70,6 +70,8 @@ import type {
     ProjectSecretAPIKeyApi,
     ProjectSecretApiKeysListParams,
     PromotedProductIntentApi,
+    PropertyDefinitionEventUsageResponseApi,
+    PropertyDefinitionsEventsRetrieveParams,
     PropertyDefinitionsListParams,
     SharingConfigurationApi,
     UserApi,
@@ -2863,6 +2865,41 @@ export const propertyDefinitionsDestroy = async (
         ...options,
         method: 'DELETE',
     })
+}
+
+export const getPropertyDefinitionsEventsRetrieveUrl = (
+    projectId: string,
+    id: string,
+    params?: PropertyDefinitionsEventsRetrieveParams
+) => {
+    const normalizedParams = new URLSearchParams()
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined) {
+            normalizedParams.append(key, value === null ? 'null' : String(value))
+        }
+    })
+
+    const stringifiedParams = normalizedParams.toString()
+
+    return stringifiedParams.length > 0
+        ? `/api/projects/${projectId}/property_definitions/${id}/events/?${stringifiedParams}`
+        : `/api/projects/${projectId}/property_definitions/${id}/events/`
+}
+
+export const propertyDefinitionsEventsRetrieve = async (
+    projectId: string,
+    id: string,
+    params?: PropertyDefinitionsEventsRetrieveParams,
+    options?: RequestInit
+): Promise<PropertyDefinitionEventUsageResponseApi> => {
+    return apiMutator<PropertyDefinitionEventUsageResponseApi>(
+        getPropertyDefinitionsEventsRetrieveUrl(projectId, id, params),
+        {
+            ...options,
+            method: 'GET',
+        }
+    )
 }
 
 export const getPropertyDefinitionsBulkUpdateTagsCreateUrl = (projectId: string) => {

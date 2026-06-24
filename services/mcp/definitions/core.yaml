@@ -530,6 +530,9 @@ tools:
     property-definitions-destroy:
         operation: property_definitions_destroy
         enabled: false
+    property-definitions-events-retrieve:
+        operation: property_definitions_events_retrieve
+        enabled: false
     property-definitions-list:
         operation: property_definitions_list
         enabled: false

@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import json
 import dataclasses
+from collections.abc import Sequence
 from typing import Any, Optional, Self, Union, cast
 
 from django.db import connection, models
-from django.db.models import Manager, QuerySet
+from django.db.models import F, Manager, QuerySet, Subquery
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 
@@ -20,7 +23,7 @@ from posthog.api.utils import action
 from posthog.constants import GROUP_TYPES_LIMIT
 from posthog.event_usage import report_user_action
 from posthog.filters import TermSearchFilterBackend, term_search_filter_sql
-from posthog.models import EventProperty, PropertyDefinition, User
+from posthog.models import EventDefinition, EventProperty, PropertyDefinition, User
 from posthog.models.activity_logging.activity_log import Detail, log_activity
 from posthog.models.utils import UUIDT
 from posthog.settings import EE_AVAILABLE
@@ -41,6 +44,65 @@ EXCLUDED_EVENT_CORE_PROPERTIES = [
 class SeenTogetherQuerySerializer(serializers.Serializer):
     event_names: serializers.ListField = serializers.ListField(child=serializers.CharField(), required=True)
     property_name: serializers.CharField = serializers.CharField(required=True)
+
+
+class PropertyDefinitionEventUsageQuerySerializer(serializers.Serializer):
+    limit = serializers.IntegerField(
+        min_value=1,
+        max_value=100,
+        default=10,
+        required=False,
+        help_text="Maximum number of event definitions to return. Defaults to 10, maximum 100.",
+    )
+    offset = serializers.IntegerField(
+        min_value=0,
+        default=0,
+        required=False,
+        help_text="Number of matching event definitions to skip before returning results.",
+    )
+
+
+class PropertyDefinitionEventUsageSerializer(serializers.Serializer):
+    id = serializers.UUIDField(help_text="Event definition ID.")
+    name = serializers.CharField(help_text="Event name.")
+    last_seen_at = serializers.DateTimeField(
+        allow_null=True,
+        help_text=(
+            "Last time this event definition was seen by ingestion. This is event-level freshness, "
+            "not a per-property volume or last-seen timestamp."
+        ),
+    )
+
+
+class PropertyDefinitionEventUsageResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(
+        help_text="Number of current event definitions whose event-property metadata includes this property."
+    )
+    next = serializers.CharField(
+        allow_null=True,
+        help_text="URL for the next page of event definitions, or null when there is no next page.",
+    )
+    previous = serializers.CharField(
+        allow_null=True,
+        help_text="URL for the previous page of event definitions, or null when there is no previous page.",
+    )
+    results = PropertyDefinitionEventUsageSerializer(
+        many=True,
+        help_text="Current event definitions that have been seen with this property.",
+    )
+    source = serializers.CharField(
+        help_text=(
+            "Metadata source used for the association. `event_property_metadata` is populated asynchronously "
+            "during ingestion from distinct event/property pairs."
+        )
+    )
+    freshness = serializers.CharField(
+        help_text=(
+            "Freshness semantics for the result set. The list is metadata-backed, not a live event-data scan: "
+            "rows mean the property has been seen on the event at least once, deleted event definitions are omitted, "
+            "and an empty result means no current event definition is known to use this property."
+        )
+    )
 
 
 class PropertyDefinitionQuerySerializer(serializers.Serializer):
@@ -562,6 +624,11 @@ class NotCountingLimitOffsetPaginator(LimitOffsetPagination):
         return list(queryset)
 
 
+class PropertyDefinitionEventUsagePaginator(LimitOffsetPagination):
+    default_limit = 10
+    max_limit = 100
+
+
 @extend_schema(extensions={"x-product": "core"})
 class PropertyDefinitionViewSet(
     TeamAndOrgViewSetMixin,
@@ -911,6 +978,80 @@ class PropertyDefinitionViewSet(
         results = {event_name: event_name in seen_events for event_name in event_names}
 
         return response.Response(results)
+
+    @extend_schema(
+        parameters=[PropertyDefinitionEventUsageQuerySerializer],
+        responses={200: PropertyDefinitionEventUsageResponseSerializer},
+    )
+    @action(methods=["GET"], detail=True, url_path="events", required_scopes=["property_definition:read"])
+    def events(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
+        property_definition: PropertyDefinition = self.safely_get_object(PropertyDefinition.objects.none())
+        self.check_object_permissions(request, property_definition)
+
+        query_serializer = PropertyDefinitionEventUsageQuerySerializer(data=request.GET)
+        query_serializer.is_valid(raise_exception=True)
+
+        if property_definition.type != PropertyDefinition.Type.EVENT:
+            return response.Response(self._events_response([], 0, None, None))
+
+        event_names = (
+            EventProperty.objects.alias(
+                effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
+            )
+            .filter(
+                effective_project_id=self.project_id,
+                property=property_definition.name,
+            )
+            .values("event")
+            .distinct()
+        )
+
+        event_definitions = (
+            EventDefinition.objects.alias(
+                effective_project_id=Coalesce("project_id", "team_id", output_field=models.BigIntegerField())
+            )
+            .filter(
+                effective_project_id=self.project_id,
+                name__in=Subquery(event_names),
+            )
+            .only("id", "name", "last_seen_at")
+            .order_by(F("last_seen_at").desc(nulls_last=True), "name")
+        )
+
+        paginator = PropertyDefinitionEventUsagePaginator()
+        page = paginator.paginate_queryset(event_definitions, request, view=self)
+        objects = page if page is not None else list(event_definitions)
+        serializer = PropertyDefinitionEventUsageSerializer(objects, many=True)
+        results = cast(list[dict[str, Any]], serializer.data)
+
+        return response.Response(
+            self._events_response(
+                results,
+                cast(int, paginator.count),
+                paginator.get_next_link(),
+                paginator.get_previous_link(),
+            )
+        )
+
+    @staticmethod
+    def _events_response(
+        results: Sequence[dict[str, Any]],
+        count: int,
+        next_url: str | None,
+        previous_url: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "count": count,
+            "next": next_url,
+            "previous": previous_url,
+            "results": results,
+            "source": "event_property_metadata",
+            "freshness": (
+                "Updated asynchronously from ingestion metadata. Rows mean this property has been seen on the event "
+                "at least once; deleted event definitions are omitted. No results means no current event definition is "
+                "known to use this property."
+            ),
+        }
 
     def destroy(self, request: request.Request, *args: Any, **kwargs: Any) -> response.Response:
         instance: PropertyDefinition = self.get_object()

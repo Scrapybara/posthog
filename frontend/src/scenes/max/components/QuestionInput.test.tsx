@@ -76,4 +76,11 @@ describe('QuestionInput slash command autocomplete', () => {
         fireEvent.change(input, { target: { value: '/' } })
         await waitFor(() => expect(slashCommandItem()).toBeInTheDocument())
     })
+
+    it('keeps long prompts scrollable inside the input', () => {
+        const input = screen.getByRole('textbox')
+
+        expect(input).toHaveClass('max-h-[min(40vh,16rem)]')
+        expect(input).toHaveClass('overflow-y-auto')
+    })
 })

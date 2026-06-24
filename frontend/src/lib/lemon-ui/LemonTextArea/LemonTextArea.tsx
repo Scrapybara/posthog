@@ -13,6 +13,7 @@ interface LemonTextAreaPropsBase extends Pick<
     value?: string
     placeholder?: string
     className?: string
+    textareaClassName?: string
     /** Whether input field is disabled */
     disabled?: boolean
     ref?: React.Ref<HTMLTextAreaElement>
@@ -54,6 +55,7 @@ export type LemonTextAreaProps = LemonTextAreaWithEnterProps | LemonTextAreaWith
 export const LemonTextArea = React.forwardRef<HTMLTextAreaElement, LemonTextAreaProps>(function LemonTextArea(
     {
         className,
+        textareaClassName,
         onChange,
         onPressEnter,
         onPressCmdEnter,
@@ -80,7 +82,12 @@ export const LemonTextArea = React.forwardRef<HTMLTextAreaElement, LemonTextArea
             <TextareaAutosize
                 minRows={minRows}
                 ref={textRef}
-                className={cn('LemonTextArea w-full', hasFooter ? 'rounded-t' : 'rounded', className)}
+                className={cn(
+                    'LemonTextArea w-full',
+                    hasFooter ? 'rounded-t' : 'rounded',
+                    className,
+                    textareaClassName
+                )}
                 onKeyDown={(e) => {
                     if (stopPropagation) {
                         e.stopPropagation()

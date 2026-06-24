@@ -365,6 +365,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                             '!border-none !bg-transparent min-h-16 py-2 pl-2 resize-none',
                                             handsFreeFlagEnabled ? 'pr-20' : 'pr-12'
                                         )}
+                                        textareaClassName="max-h-[min(40vh,16rem)] overflow-y-auto show-scrollbar-on-hover"
                                         hideFocus
                                     />
                                 </div>

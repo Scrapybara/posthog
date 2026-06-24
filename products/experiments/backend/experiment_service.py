@@ -10,7 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
-from django.db.models import Case, Count, F, Prefetch, Q, QuerySet, Value, When
+from django.db.models import Case, CharField, Count, F, IntegerField, Prefetch, Q, QuerySet, Value, When
 from django.db.models.functions import Coalesce, Now, NullIf
 from django.utils import timezone
 
@@ -458,6 +458,16 @@ class ExperimentService:
         "-duration",
         "status",
         "-status",
+        "conclusion",
+        "-conclusion",
+    }
+
+    EXPERIMENT_CONCLUSION_SORT_ORDER = {
+        "won": 1,
+        "lost": 2,
+        "inconclusive": 3,
+        "stopped_early": 4,
+        "invalid": 5,
     }
 
     ELIGIBLE_FLAGS_ORDER_ALLOWLIST = {
@@ -2526,13 +2536,32 @@ class ExperimentService:
                 # Match the frontend column's `first_name || email` sorter — treat an
                 # empty `first_name` as missing and fall back to `email`, so users with
                 # a blank first name aren't bunched at one end of the list.
-                prefix = "-" if order_value.startswith("-") else ""
+                order_expression = (
+                    F("created_by_display").desc() if order_value.startswith("-") else F("created_by_display").asc()
+                )
                 queryset = queryset.annotate(
                     created_by_display=Coalesce(
                         NullIf(F("created_by__first_name"), Value("")),
                         F("created_by__email"),
+                        Value(""),
+                        output_field=CharField(),
                     )
-                ).order_by(f"{prefix}created_by_display")
+                ).order_by(order_expression, "-created_at", "id")
+            elif order_value in ["conclusion", "-conclusion"]:
+                conclusion_sort_key = Case(
+                    *[
+                        When(conclusion=conclusion, then=Value(sort_order))
+                        for conclusion, sort_order in self.EXPERIMENT_CONCLUSION_SORT_ORDER.items()
+                    ],
+                    default=Value(len(self.EXPERIMENT_CONCLUSION_SORT_ORDER) + 1),
+                    output_field=IntegerField(),
+                )
+                order_expression = (
+                    F("conclusion_sort_key").desc() if order_value.startswith("-") else F("conclusion_sort_key").asc()
+                )
+                queryset = queryset.annotate(conclusion_sort_key=conclusion_sort_key).order_by(
+                    order_expression, "-created_at", "id"
+                )
             else:
                 queryset = queryset.order_by(order_value)
         else:

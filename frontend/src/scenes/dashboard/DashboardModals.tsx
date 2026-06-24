@@ -4,6 +4,7 @@ import { router } from 'kea-router'
 import { AddWidgetModal } from '@posthog/products-dashboards/frontend/widgets/AddWidgetModal'
 
 import { ButtonTileCardModal } from 'lib/components/Cards/ButtonTileCard/ButtonTileCardModal'
+import { SectionHeaderModal } from 'lib/components/Cards/SectionHeader/SectionHeaderModal'
 import { TextCardModal } from 'lib/components/Cards/TextCard/TextCardModal'
 import { SharingModal } from 'lib/components/Sharing/SharingModal'
 import { SubscriptionsModal } from 'lib/components/Subscriptions/SubscriptionsModal'
@@ -28,6 +29,8 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
         subscriptionId,
         showTextTileModal,
         textTileId,
+        showSectionHeaderModal,
+        sectionHeaderId,
         showButtonTileModal,
         buttonTileId,
         terraformModalOpen,
@@ -63,6 +66,12 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
                         onClose={() => push(urls.dashboard(dashboard.id))}
                         dashboard={dashboard}
                         textTileId={textTileId}
+                    />
+                    <SectionHeaderModal
+                        isOpen={showSectionHeaderModal}
+                        onClose={() => push(urls.dashboard(dashboard.id))}
+                        dashboard={dashboard}
+                        sectionHeaderId={sectionHeaderId}
                     />
                     <ButtonTileCardModal
                         isOpen={showButtonTileModal}

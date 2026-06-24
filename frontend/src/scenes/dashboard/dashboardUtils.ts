@@ -4,6 +4,7 @@ import { lemonToast } from '@posthog/lemon-ui'
 import { getDashboardWidgetCatalogEntry } from '@posthog/products-dashboards/frontend/widget_types/catalog'
 
 import api, { ApiMethodOptions, getJSONOrNull } from 'lib/api'
+import { isSectionHeaderTile } from 'lib/components/Cards/SectionHeader/sectionHeaderMarkdown'
 import type { Dayjs } from 'lib/dayjs'
 import { currentSessionId } from 'lib/internalMetrics'
 import { objectClean, shouldCancelQuery, toParams } from 'lib/utils'
@@ -102,7 +103,7 @@ export function getDashboardTileDisplayName(tile: DashboardTile<QueryBasedInsigh
         return catalogEntry?.headerTitle ?? catalogEntry?.label ?? tile.widget.widget_type
     }
     if (tile.text) {
-        return 'Text card'
+        return isSectionHeaderTile(tile) ? 'Section header' : 'Text card'
     }
     if (tile.button_tile) {
         return tile.button_tile.text || 'Button'

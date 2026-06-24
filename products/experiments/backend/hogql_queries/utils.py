@@ -107,6 +107,26 @@ def get_experiment_stats_method(experiment) -> str:
         return stats_method
 
 
+def resolve_baseline_variant_key(variant_keys: list[str], configured_key: str = CONTROL_VARIANT_KEY) -> str:
+    """Resolve the effective baseline variant key against the variants actually present.
+
+    The configured baseline (``stats_config.baseline_variant_key``) can drift out of sync
+    with the flag's variants — e.g. the chosen baseline variant is renamed or removed on the
+    feature flag directly, bypassing the experiment-update validation that normally blocks
+    dangling baselines. Rather than erroring the whole analysis when that happens, fall back
+    in order of preference: the configured key, then the conventional ``control`` variant,
+    then the first available variant. The experiment-update path still validates and rejects
+    dangling baselines; this is the read-time safety net.
+    """
+    if configured_key in variant_keys:
+        return configured_key
+    if CONTROL_VARIANT_KEY in variant_keys:
+        return CONTROL_VARIANT_KEY
+    if variant_keys:
+        return variant_keys[0]
+    return configured_key
+
+
 def split_baseline_and_test_variants(
     variants: list[V],
     baseline_key: str = CONTROL_VARIANT_KEY,

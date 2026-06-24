@@ -18,6 +18,7 @@ from products.experiments.backend.hogql_queries.experiment_query_runner import E
 from products.experiments.backend.hogql_queries.utils import (
     get_bayesian_experiment_result,
     get_frequentist_experiment_result,
+    resolve_baseline_variant_key,
     split_baseline_and_test_variants,
 )
 from products.experiments.backend.models.experiment import Experiment
@@ -399,6 +400,41 @@ class TestStatsConfig(APIBaseTest):
         runner = ExperimentQueryRunner(query=query, team=self.team)
 
         self.assertEqual(runner.baseline_variant_key, expected_baseline)
+
+    @parameterized.expand(
+        [
+            # configured baseline present -> used as-is
+            ("configured_present", ["control", "test"], "test", "test"),
+            ("configured_present_control", ["control", "test"], "control", "control"),
+            # configured baseline missing, control present -> falls back to control
+            ("missing_falls_back_to_control", ["control", "test-a", "test-b"], "removed", "control"),
+            # configured baseline missing and no control -> falls back to first variant
+            ("missing_no_control_first_variant", ["variant-a", "variant-b"], "removed", "variant-a"),
+            # no variants at all -> returns the configured key unchanged (degenerate)
+            ("no_variants", [], "control", "control"),
+            # default (None configured) resolves to control when present
+            ("none_configured_control_present", ["control", "test"], None, "control"),
+        ]
+    )
+    def test_resolve_baseline_variant_key(self, _name, variant_keys, configured, expected):
+        if configured is None:
+            self.assertEqual(resolve_baseline_variant_key(variant_keys), expected)
+        else:
+            self.assertEqual(resolve_baseline_variant_key(variant_keys, configured), expected)
+
+    def test_resolve_then_split_recovers_when_baseline_removed(self):
+        # When the configured baseline variant was removed from the flag, resolving first
+        # keeps split_baseline_and_test_variants working instead of raising "No control variant".
+        variants = [
+            self.create_variant("control", sum_val=100.0, sum_squares=10500.0, samples=1000),
+            self.create_variant("test", sum_val=120.0, sum_squares=14500.0, samples=1000),
+        ]
+        resolved = resolve_baseline_variant_key([v.key for v in variants], "removed-baseline")
+        self.assertEqual(resolved, "control")
+
+        baseline, test_variants = split_baseline_and_test_variants(variants, resolved)
+        self.assertEqual(baseline.key, "control")
+        self.assertEqual([v.key for v in test_variants], ["test"])
 
 
 class TestSequentialStatsConfig(APIBaseTest):

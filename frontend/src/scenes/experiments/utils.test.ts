@@ -40,6 +40,7 @@ import {
     isLegacyExperiment,
     isLegacyExperimentQuery,
     percentageDistribution,
+    resolveBaselineVariantKey,
 } from './utils'
 
 describe('utils', () => {
@@ -1381,5 +1382,30 @@ describe('getEventCountQuery', () => {
         const query = getEventCountQuery(metric, true)
 
         expect(query).toBeNull()
+    })
+})
+
+describe('resolveBaselineVariantKey', () => {
+    it('returns the configured key when present among the variants', () => {
+        expect(resolveBaselineVariantKey(['control', 'test'], 'test')).toBe('test')
+        expect(resolveBaselineVariantKey(['control', 'test'], 'control')).toBe('control')
+    })
+
+    it('falls back to control when the configured key was removed', () => {
+        expect(resolveBaselineVariantKey(['control', 'test-a', 'test-b'], 'removed')).toBe('control')
+    })
+
+    it('falls back to the first variant when neither configured nor control are present', () => {
+        expect(resolveBaselineVariantKey(['variant-a', 'variant-b'], 'removed')).toBe('variant-a')
+    })
+
+    it('defaults to control when nothing is configured', () => {
+        expect(resolveBaselineVariantKey(['control', 'test'])).toBe('control')
+        expect(resolveBaselineVariantKey(['control', 'test'], null)).toBe('control')
+    })
+
+    it('returns control as a safe default when there are no variants', () => {
+        expect(resolveBaselineVariantKey([], 'control')).toBe('control')
+        expect(resolveBaselineVariantKey([])).toBe('control')
     })
 })

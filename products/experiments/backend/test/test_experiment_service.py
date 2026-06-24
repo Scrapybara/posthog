@@ -5030,6 +5030,54 @@ class TestExperimentService(APIBaseTest):
                 },
             )
 
+    @parameterized.expand(
+        [
+            ("draft",),
+            ("running",),
+            ("completed",),
+        ]
+    )
+    def test_update_baseline_variant_key_allowed_across_states(self, state: str) -> None:
+        key = f"baseline-switch-{state}"
+        name = f"Switch baseline {state}"
+        if state == "completed":
+            experiment = self._create_ended_experiment(name=name, feature_flag_key=key)
+        else:
+            experiment = self._create_launchable_experiment(name=name, feature_flag_key=key)
+            if state == "running":
+                self._service().launch_experiment(experiment)
+        experiment.refresh_from_db()
+
+        # The default flag has control/test variants; switching the analysis baseline to an
+        # existing variant is allowed regardless of lifecycle state.
+        self._service().update_experiment(
+            experiment,
+            {"stats_config": {**(experiment.stats_config or {}), "baseline_variant_key": "test"}},
+        )
+        experiment.refresh_from_db()
+        assert experiment.stats_config is not None
+        assert experiment.stats_config["baseline_variant_key"] == "test"
+
+    def test_duplicate_experiment_preserves_baseline_variant_key(self) -> None:
+        self._create_flag(
+            key="baseline-dup-source",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 33},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 33},
+            ],
+        )
+        service = self._service()
+        source = service.create_experiment(
+            name="Baseline dup source",
+            feature_flag_key="baseline-dup-source",
+            stats_config={"baseline_variant_key": "variant-a"},
+        )
+
+        clone = service.duplicate_experiment(source, feature_flag_key="baseline-dup-clone")
+        assert clone.stats_config is not None
+        assert clone.stats_config["baseline_variant_key"] == "variant-a"
+
 
 class TestValidateExperimentParametersExcludedVariants:
     def _base_params(self) -> dict[str, Any]:

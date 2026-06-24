@@ -29,6 +29,7 @@ def compute_metric_fingerprint(
     exposure_criteria: dict | None = None,
     only_count_matured_users: bool = False,
     excluded_variants: list[str] | None = None,
+    baseline_variant_key: str | None = None,
 ) -> str:
     """
     Compute fingerprint for a metric.
@@ -41,6 +42,8 @@ def compute_metric_fingerprint(
         only_count_matured_users
         excluded_variants: Variant keys excluded from analysis — changing the set
             invalidates cached results since it alters which data is computed
+        baseline_variant_key: Variant key used as the analysis baseline — changing it
+            invalidates cached results since it alters each comparison result
 
     Returns:
         SHA256 hash string representing the metric fingerprint
@@ -73,6 +76,9 @@ def compute_metric_fingerprint(
 
     if excluded_variants:
         fingerprint_data["excluded_variants"] = sorted(set(excluded_variants))
+
+    if baseline_variant_key:
+        fingerprint_data["baseline_variant_key"] = baseline_variant_key
 
     # Create deterministic JSON string with sorted keys at all levels
     json_str = json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":"))

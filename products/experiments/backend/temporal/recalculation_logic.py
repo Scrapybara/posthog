@@ -442,6 +442,8 @@ def _calculate_experiment_metric_for_recalculation_sync(
             get_experiment_stats_method(experiment),
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=(experiment.stats_config or {}).get("baseline_variant_key"),
         )
         recalc_fp = compute_recalc_fingerprint(config_fp, recalculation_id)
 

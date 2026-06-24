@@ -59,6 +59,7 @@ from products.experiments.backend.hogql_queries.utils import (
     get_experiment_stats_method,
     get_frequentist_experiment_result,
     get_variant_results,
+    resolve_baseline_variant_key,
     split_baseline_and_test_variants,
 )
 from products.experiments.backend.metric_utils import get_default_metric_title
@@ -505,7 +506,11 @@ class ExperimentQueryRunner(QueryRunner):
 
     def _calculate_statistics_for_variants(self, variants: list[ExperimentStatsBase]) -> ExperimentQueryResponse:
         """Calculate statistical analysis results for a set of variants."""
-        control_variant, test_variants = split_baseline_and_test_variants(variants, self.baseline_variant_key)
+        # Resolve against the variants actually present so a baseline that was removed from the
+        # flag (bypassing experiment-update validation) degrades to control/first instead of
+        # erroring the whole scorecard.
+        baseline_key = resolve_baseline_variant_key([variant.key for variant in variants], self.baseline_variant_key)
+        control_variant, test_variants = split_baseline_and_test_variants(variants, baseline_key)
 
         if self.stats_method == "frequentist":
             return get_frequentist_experiment_result(

@@ -360,6 +360,7 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
                     instance.exposure_criteria,
                     only_count_matured_users=instance.only_count_matured_users,
                     excluded_variants=(instance.parameters or {}).get("excluded_variants"),
+                    baseline_variant_key=(instance.stats_config or {}).get("baseline_variant_key"),
                 )
 
         return data

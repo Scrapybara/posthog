@@ -16,6 +16,7 @@ import { LemonMarkdown } from 'lib/lemon-ui/LemonMarkdown'
 import { DashboardPlacement, DashboardTile, QueryBasedInsightModel } from '~/types'
 
 import { markdownToTextCardDoc, TEXT_CARD_MARKDOWN_READONLY_EXTENSIONS } from './textCardMarkdown'
+import { isDashboardSectionHeaderTextTile } from './textCardUtils'
 
 interface TextCardProps extends React.HTMLAttributes<HTMLDivElement>, Resizeable {
     textTile: DashboardTile<QueryBasedInsightModel>
@@ -95,6 +96,7 @@ function TextCardInternal(
     const shouldHideMoreButton = placement === DashboardPlacement.Public || showEditingControls === false
 
     const isTransparent = textTile.transparent_background
+    const isSectionHeader = isDashboardSectionHeaderTextTile(textTile)
 
     return (
         <div
@@ -102,14 +104,15 @@ function TextCardInternal(
                 'DashboardTileCard TextCard rounded flex flex-col',
                 !isTransparent && 'bg-surface-primary border',
                 isTransparent && showResizeHandles && 'border border-dashed border-border',
+                isSectionHeader && 'TextCard--section-header',
                 className
             )}
-            data-attr="text-card"
+            data-attr={isSectionHeader ? 'section-header-card' : 'text-card'}
             {...divProps}
             ref={ref}
         >
             {moreButtonOverlay && !shouldHideMoreButton && (
-                <div className="absolute right-4 top-4">
+                <div className={clsx('absolute', isSectionHeader ? 'right-1 top-1' : 'right-4 top-4')}>
                     <More overlay={moreButtonOverlay} />
                 </div>
             )}
@@ -118,7 +121,18 @@ function TextCardInternal(
                 className={clsx('TextCard__body w-full', onDragHandleMouseDown && 'cursor-grab')}
                 onMouseDown={onDragHandleMouseDown}
             >
-                <TextContent text={text.body} className={shouldHideMoreButton ? 'p-4' : 'p-4 pr-14'} />
+                <TextContent
+                    text={text.body}
+                    className={
+                        isSectionHeader
+                            ? shouldHideMoreButton
+                                ? 'px-1 py-2'
+                                : 'py-2 pl-1 pr-10'
+                            : shouldHideMoreButton
+                              ? 'p-4'
+                              : 'p-4 pr-14'
+                    }
+                />
             </div>
 
             {canEnterEditModeFromEdge && !showResizeHandles && onEnterEditModeFromEdge && (

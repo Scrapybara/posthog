@@ -47,7 +47,7 @@ function DashboardEmptyActions({
     dashboardWidgetsEnabled: boolean
     onAddInsight: () => void
     onAddWidget: () => void
-    push: (path: string) => void
+    push: (path: string, searchParams?: Record<string, string>) => void
     onOpenAiWithPrompt: (prompt: string) => void
 }): JSX.Element {
     const chipDisabledReason = !canEdit ? DASHBOARD_CANNOT_EDIT_MESSAGE : aiDisabledReason || undefined
@@ -66,6 +66,21 @@ function DashboardEmptyActions({
                               placement: 'bottom-end',
                               overlay: (
                                   <>
+                                      <AccessControlAction
+                                          resourceType={AccessControlResourceType.Dashboard}
+                                          minAccessLevel={AccessControlLevel.Editor}
+                                          userAccessLevel={dashboard.user_access_level}
+                                      >
+                                          <LemonButton
+                                              fullWidth
+                                              onClick={() => {
+                                                  push(urls.dashboardTextTile(dashboard.id, 'new'), { type: 'section' })
+                                              }}
+                                              data-attr="add-section-header-to-dashboard"
+                                          >
+                                              Add section header
+                                          </LemonButton>
+                                      </AccessControlAction>
                                       <AccessControlAction
                                           resourceType={AccessControlResourceType.Dashboard}
                                           minAccessLevel={AccessControlLevel.Editor}

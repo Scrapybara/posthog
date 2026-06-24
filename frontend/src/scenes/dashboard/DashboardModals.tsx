@@ -5,6 +5,7 @@ import { AddWidgetModal } from '@posthog/products-dashboards/frontend/widgets/Ad
 
 import { ButtonTileCardModal } from 'lib/components/Cards/ButtonTileCard/ButtonTileCardModal'
 import { TextCardModal } from 'lib/components/Cards/TextCard/TextCardModal'
+import { DashboardTextTileKind, getDashboardSectionHeaderLayouts } from 'lib/components/Cards/TextCard/textCardUtils'
 import { SharingModal } from 'lib/components/Sharing/SharingModal'
 import { SubscriptionsModal } from 'lib/components/Subscriptions/SubscriptionsModal'
 import { TerraformExportModal } from 'lib/components/TerraformExporter/TerraformExportModal'
@@ -34,11 +35,14 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
         addWidgetModalOpen,
         dashboardWidgetsEnabled,
         addWidgetTileLoading,
+        layouts,
     } = useValues(dashboardLogic)
     const { setTerraformModalOpen, setAddWidgetModalOpen, addWidgetTiles } = useActions(dashboardLogic)
     const { updateDashboardSuccess } = useActions(dashboardsModel)
     const { push } = useActions(router)
+    const { searchParams } = useValues(router)
     const { user } = useValues(userLogic)
+    const textTileKind: DashboardTextTileKind = searchParams.type === 'section' ? 'section' : 'text'
 
     return (
         <>
@@ -63,6 +67,10 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
                         onClose={() => push(urls.dashboard(dashboard.id))}
                         dashboard={dashboard}
                         textTileId={textTileId}
+                        textTileKind={textTileKind}
+                        defaultLayouts={
+                            textTileKind === 'section' ? getDashboardSectionHeaderLayouts(layouts) : undefined
+                        }
                     />
                     <ButtonTileCardModal
                         isOpen={showButtonTileModal}

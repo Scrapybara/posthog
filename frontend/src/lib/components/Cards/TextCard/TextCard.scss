@@ -18,3 +18,35 @@
         max-width: 100%;
     }
 }
+
+.TextCard--section-header {
+    justify-content: center;
+    border-radius: 0;
+    border-bottom: 1px solid var(--color-border-primary);
+
+    .TextCard__body {
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+    }
+
+    .RichMarkdownEditor,
+    .LemonMarkdown {
+        overflow: hidden;
+    }
+
+    .RichMarkdownEditor__content {
+        h1,
+        h2,
+        h3,
+        p {
+            margin: 0;
+        }
+
+        h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            line-height: 1.75rem;
+        }
+    }
+}

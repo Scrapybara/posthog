@@ -7,6 +7,38 @@
  * PostHog API - generated
  * OpenAPI spec version: 1.0.0
  */
+export interface ConversationAttachmentCreateApi {
+    /** Conversation UUID the pending image attachment belongs to. */
+    conversation_id: string
+    /** PNG or JPEG image file. Maximum size is 4 MiB. */
+    file: Blob
+}
+
+/**
+ * * `image/png` - image/png
+ * * `image/jpeg` - image/jpeg
+ */
+export type ContentTypeEnumApi = (typeof ContentTypeEnumApi)[keyof typeof ContentTypeEnumApi]
+
+export const ContentTypeEnumApi = {
+    ImagePng: 'image/png',
+    ImageJpeg: 'image/jpeg',
+} as const
+
+export interface ConversationAttachmentApi {
+    /** Attachment identifier to include when sending a message. */
+    id: string
+    /** Sanitized display filename. */
+    filename: string
+    /** Server-detected image MIME type.
+     *
+     * * `image/png` - image/png
+     * * `image/jpeg` - image/jpeg */
+    content_type: ContentTypeEnumApi
+    /** Validated image size in bytes. */
+    byte_size: number
+}
+
 export interface DocsSearchRequestApi {
     /** Natural-language description of what to find in the PostHog documentation. Inkeep performs hybrid (semantic + full-text) RAG, so phrase the query the way a user would ask the question. */
     query: string

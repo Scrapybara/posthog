@@ -30,11 +30,16 @@ import {
 import { initKeaTests } from '~/test/init'
 import { Conversation, ConversationDetail, ConversationStatus, ConversationType } from '~/types'
 
+import {
+    conversationAttachmentsCreate,
+    conversationAttachmentsDestroy,
+} from 'products/posthog_ai/frontend/generated/api'
+
 import { EnhancedToolCall } from './max-constants'
 import { maxContextLogic } from './maxContextLogic'
 import { maxGlobalLogic } from './maxGlobalLogic'
 import { maxLogic } from './maxLogic'
-import { MAX_DASHBOARD_CONTEXT_WAIT_MS, maxThreadLogic } from './maxThreadLogic'
+import { MAX_AI_IMAGE_ATTACHMENT_BYTES, MAX_DASHBOARD_CONTEXT_WAIT_MS, maxThreadLogic } from './maxThreadLogic'
 import { MaxContextType } from './maxTypes'
 import {
     MOCK_CONVERSATION,
@@ -54,11 +59,31 @@ jest.mock(
     { virtual: true }
 )
 
+jest.mock('products/posthog_ai/frontend/generated/api', () => ({
+    conversationAttachmentsCreate: jest.fn(),
+    conversationAttachmentsDestroy: jest.fn(),
+}))
+
 describe('maxThreadLogic', () => {
     let logic: ReturnType<typeof maxThreadLogic.build>
     let maxLogicInstance: ReturnType<typeof maxLogic.build>
 
     beforeEach(() => {
+        Object.defineProperty(URL, 'createObjectURL', {
+            configurable: true,
+            value: jest.fn(() => 'blob:preview'),
+        })
+        Object.defineProperty(URL, 'revokeObjectURL', {
+            configurable: true,
+            value: jest.fn(),
+        })
+        ;(conversationAttachmentsCreate as jest.Mock).mockResolvedValue({
+            id: 'attachment-1',
+            filename: 'screenshot.png',
+            content_type: 'image/png',
+            byte_size: 3,
+        })
+        ;(conversationAttachmentsDestroy as jest.Mock).mockResolvedValue(undefined)
         useMocks({
             ...maxMocks,
             get: {
@@ -384,6 +409,176 @@ describe('maxThreadLogic', () => {
         expect(streamSpy).toHaveBeenCalledTimes(1)
     })
 
+    describe('image attachments', () => {
+        const imageFile = (name = 'screenshot.png', type = 'image/png', size = 3): File =>
+            new File([new Uint8Array(size)], name, { type })
+
+        it('uploads pending screenshots and sends only attachment ids in the stream payload', async () => {
+            const streamSpy = mockStream()
+            const file = imageFile()
+
+            logic.actions.addPendingAttachmentFiles([file])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(conversationAttachmentsCreate).toHaveBeenCalledWith(
+                expect.any(String),
+                expect.objectContaining({
+                    conversation_id: MOCK_CONVERSATION_ID,
+                    file,
+                }),
+                expect.any(Object)
+            )
+            expect(logic.values.pendingAttachments).toEqual([
+                expect.objectContaining({
+                    id: 'attachment-1',
+                    status: 'ready',
+                    filename: 'screenshot.png',
+                    contentType: 'image/png',
+                    byteSize: 3,
+                }),
+            ])
+
+            logic.actions.askMax('What is in this screenshot?', true, undefined, undefined, undefined, true)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            const streamPayload = streamSpy.mock.calls[0][0]
+            expect(streamPayload).toEqual(
+                expect.objectContaining({
+                    content: 'What is in this screenshot?',
+                    attachment_ids: ['attachment-1'],
+                })
+            )
+            expect(streamPayload).not.toHaveProperty('attachments')
+            expect(streamPayload).not.toHaveProperty('file')
+            expect(logic.values.threadRaw[0]).toEqual(
+                expect.objectContaining({
+                    type: AssistantMessageType.Human,
+                    content: 'What is in this screenshot?',
+                    attachments: [
+                        {
+                            id: 'attachment-1',
+                            conversation_id: MOCK_CONVERSATION_ID,
+                            filename: 'screenshot.png',
+                            content_type: 'image/png',
+                            byte_size: 3,
+                        },
+                    ],
+                })
+            )
+            expect(logic.values.pendingAttachments).toEqual([])
+        })
+
+        it('blocks submission while uploads are pending or failed', async () => {
+            mockStream()
+            ;(conversationAttachmentsCreate as jest.Mock).mockImplementation(() => new Promise(() => {}))
+
+            logic.actions.addPendingAttachmentFiles([imageFile()])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(logic.values.submissionDisabledReason).toBe('Wait for image upload to finish')
+            logic.actions.askMax('try too early', true, undefined, undefined, undefined, true)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(api.conversations.stream).not.toHaveBeenCalled()
+
+            ;(conversationAttachmentsCreate as jest.Mock).mockRejectedValue(
+                new ApiError('bad file', 400, undefined, { file: 'bad file' })
+            )
+            logic.actions.retryPendingAttachmentUpload(logic.values.pendingAttachments[0].localId)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(logic.values.submissionDisabledReason).toBe('Remove or retry failed image uploads')
+        })
+
+        it('does not block internal continuations on pending image uploads', async () => {
+            const streamSpy = mockStream()
+            ;(conversationAttachmentsCreate as jest.Mock).mockImplementation(() => new Promise(() => {}))
+
+            logic.actions.addPendingAttachmentFiles([imageFile()])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+            expect(logic.values.pendingAttachments[0].status).toBe('uploading')
+
+            logic.actions.askMax(null)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            const streamPayload = streamSpy.mock.calls.find(([payload]) => payload?.content === null)?.[0]
+            expect(streamPayload).toEqual(expect.objectContaining({ content: null }))
+            expect(streamPayload.attachment_ids).toBeUndefined()
+            expect(streamPayload.attachments).toBeUndefined()
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+        })
+
+        it('does not send ready pending images from non-composer askMax callers', async () => {
+            const streamSpy = mockStream()
+
+            logic.actions.addPendingAttachmentFiles([imageFile()])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(logic.values.pendingAttachments[0].status).toBe('ready')
+
+            logic.actions.askMax('hands-free turn')
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            const streamPayload = streamSpy.mock.calls.find(([payload]) => payload?.content === 'hands-free turn')?.[0]
+            expect(streamPayload).toEqual(expect.objectContaining({ content: 'hands-free turn' }))
+            expect(streamPayload.attachment_ids).toBeUndefined()
+            expect(streamPayload.attachments).toBeUndefined()
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+        })
+
+        it('deletes removed pending attachments and allows the same image to be re-added', async () => {
+            const file = imageFile()
+
+            logic.actions.addPendingAttachmentFiles([file])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            const attachment = logic.values.pendingAttachments[0]
+
+            logic.actions.removePendingAttachment(attachment)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(conversationAttachmentsDestroy).toHaveBeenCalledWith(expect.any(String), 'attachment-1')
+            expect(logic.values.pendingAttachments).toEqual([])
+            expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+
+            ;(conversationAttachmentsCreate as jest.Mock).mockResolvedValue({
+                id: 'attachment-2',
+                filename: 'screenshot.png',
+                content_type: 'image/png',
+                byte_size: 3,
+            })
+            logic.actions.addPendingAttachmentFiles([file])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(logic.values.pendingAttachments).toEqual([
+                expect.objectContaining({
+                    id: 'attachment-2',
+                    status: 'ready',
+                }),
+            ])
+        })
+
+        it('validates type, per-file size, count, and total size before upload', async () => {
+            const toastSpy = jest.spyOn(lemonToast, 'error').mockImplementation(jest.fn())
+
+            logic.actions.addPendingAttachmentFiles([imageFile('not-gif.gif', 'image/gif')])
+            logic.actions.addPendingAttachmentFiles([
+                imageFile('too-large.png', 'image/png', MAX_AI_IMAGE_ATTACHMENT_BYTES + 1),
+            ])
+            logic.actions.addPendingAttachmentFiles([
+                imageFile('one.png', 'image/png', 3 * 1024 * 1024),
+                imageFile('two.png', 'image/png', 3 * 1024 * 1024),
+                imageFile('three.png', 'image/png', 3 * 1024 * 1024),
+                imageFile('four.png', 'image/png', 3 * 1024 * 1024),
+                imageFile('five.png', 'image/png', 1),
+            ])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(toastSpy).toHaveBeenCalledWith('not-gif.gif must be a PNG or JPEG image.')
+            expect(toastSpy).toHaveBeenCalledWith('too-large.png must be 4.0 MiB or smaller.')
+            expect(toastSpy).toHaveBeenCalledWith('You can attach up to 4 images.')
+            expect(conversationAttachmentsCreate).toHaveBeenCalledTimes(4)
+        })
+    })
+
     describe('compiledContext integration', () => {
         let maxContextLogicInstance: ReturnType<typeof maxContextLogic.build>
 
@@ -697,6 +892,35 @@ describe('maxThreadLogic', () => {
             expect(queuedPayload).not.toHaveProperty('agent_mode')
             expect(queuedPayload).not.toHaveProperty('billing_context')
             expect(queuedPayload).not.toHaveProperty('ui_context')
+        })
+
+        it('queues uploaded attachment ids and clears pending attachment chips after enqueue', async () => {
+            const enqueueSpy = jest.spyOn(api.conversations.queue, 'enqueue').mockResolvedValue({
+                messages: [],
+                max_queue_messages: 2,
+            })
+            mockStream()
+
+            logic.actions.addPendingAttachmentFiles([
+                new File([new Uint8Array(3)], 'screenshot.png', { type: 'image/png' }),
+            ])
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(logic.values.pendingAttachments).toHaveLength(1)
+
+            logic.actions.setConversation(MOCK_IN_PROGRESS_CONVERSATION)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            logic.actions.askMax('Queued prompt with image', true, undefined, undefined, undefined, true)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(enqueueSpy).toHaveBeenCalledWith(
+                MOCK_CONVERSATION_ID,
+                expect.objectContaining({
+                    content: 'Queued prompt with image',
+                    attachment_ids: ['attachment-1'],
+                })
+            )
+            expect(logic.values.pendingAttachments).toEqual([])
         })
 
         it('includes ui_context and agent_mode when set', async () => {

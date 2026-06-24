@@ -1,14 +1,27 @@
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from langchain_core import messages
 
 from posthog.schema import AssistantMessage, AssistantToolCallMessage, ContextMessage, FailureMessage, HumanMessage
 
+from posthog.models.team.team import Team
+
+from products.posthog_ai.backend.attachments import resolve_message_attachments
+
 from ee.hogai.utils.types.base import AssistantMessageUnion
 
 
-def convert_human_message_to_openai_message(message: HumanMessage) -> messages.HumanMessage:
-    return messages.HumanMessage(content=message.content, id=message.id)
+def convert_human_message_to_openai_message(message: HumanMessage, team: Team | None = None) -> messages.HumanMessage:
+    attachment_refs = getattr(message, "attachments", None)
+    if team is None or not attachment_refs:
+        return messages.HumanMessage(content=message.content, id=message.id)
+    content: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+    content.extend(
+        attachment.as_openai_block()
+        for attachment in resolve_message_attachments(team=team, attachment_refs=attachment_refs)
+    )
+    return messages.HumanMessage(content=content, id=message.id)
 
 
 def convert_context_message_to_openai_message(message: ContextMessage) -> messages.HumanMessage:
@@ -41,10 +54,10 @@ def convert_failure_message_to_openai_message(message: FailureMessage) -> messag
 
 
 def convert_to_openai_message(
-    message: AssistantMessageUnion, tool_result_map: Mapping[str, AssistantToolCallMessage]
+    message: AssistantMessageUnion, tool_result_map: Mapping[str, AssistantToolCallMessage], team: Team | None = None
 ) -> list[messages.BaseMessage]:
     if isinstance(message, HumanMessage):
-        return [convert_human_message_to_openai_message(message)]
+        return [convert_human_message_to_openai_message(message, team)]
     if isinstance(message, ContextMessage):
         return [convert_context_message_to_openai_message(message)]
     elif isinstance(message, AssistantMessage):
@@ -57,11 +70,12 @@ def convert_to_openai_message(
 def convert_to_openai_messages(
     conversation: Sequence[AssistantMessageUnion],
     tool_result_map: Mapping[str, AssistantToolCallMessage],
+    team: Team | None = None,
 ) -> list[messages.BaseMessage]:
     history: list[messages.BaseMessage] = []
     for message in conversation:
         try:
-            history.extend(convert_to_openai_message(message, tool_result_map))
+            history.extend(convert_to_openai_message(message, tool_result_map, team))
         except ValueError:
             continue
     return history

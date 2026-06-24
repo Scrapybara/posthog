@@ -145,7 +145,7 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
             messages_to_replace = updated_messages
 
         # Calculate the initial window.
-        langchain_messages = self._construct_messages(
+        langchain_messages = await database_sync_to_async(self._construct_messages)(
             messages_to_replace or state.messages, state.root_conversation_start_id, state.root_tool_calls_count
         )
         window_id = state.root_conversation_start_id
@@ -181,7 +181,9 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
             messages_to_replace = insertion_result.messages
 
             # Update the window
-            langchain_messages = self._construct_messages(messages_to_replace, window_id, state.root_tool_calls_count)
+            langchain_messages = await database_sync_to_async(self._construct_messages)(
+                messages_to_replace, window_id, state.root_tool_calls_count
+            )
 
         system_prompts = cast(list[BaseMessage], system_prompts)
         assert len(system_prompts) > 0
@@ -361,7 +363,7 @@ class AgentExecutable(BaseAgentLoopRootExecutable):
         tool_result_messages: Mapping[str, AssistantToolCallMessage],
     ) -> list[BaseMessage]:
         """Convert a conversation window to a list of Langchain messages."""
-        return convert_to_anthropic_messages(messages, tool_result_messages)
+        return convert_to_anthropic_messages(messages, tool_result_messages, self._team)
 
     def _add_cache_control_to_last_message(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """Add cache control to the last message."""

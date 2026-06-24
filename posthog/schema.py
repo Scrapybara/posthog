@@ -56,6 +56,7 @@ from posthog.schema_enums import (
     ChartDisplayType as ChartDisplayType,
     ColorMode as ColorMode,
     Compare as Compare,
+    ContentType as ContentType,
     ConversionRateInputType as ConversionRateInputType,
     CoreEventCategory as CoreEventCategory,
     CorrelationType as CorrelationType,
@@ -1499,6 +1500,20 @@ class HogQueryResponse(BaseModel):
     coloredBytecode: list | None = None
     results: Any
     stdout: str | None = None
+
+
+class HumanMessageAttachment(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    byte_size: float = Field(..., description="Validated image size in bytes.")
+    content_type: ContentType = Field(..., description="Server-detected image MIME type.")
+    conversation_id: str = Field(..., description="Conversation UUID this attachment belongs to.")
+    filename: str = Field(..., description="Sanitized display filename.")
+    id: str = Field(
+        ...,
+        description=("Attachment identifier, scoped to a single PostHog AI conversation."),
+    )
 
 
 class InsightsThresholdBounds(BaseModel):
@@ -25499,6 +25514,7 @@ class HumanMessage(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    attachments: list[HumanMessageAttachment] | None = None
     content: str
     id: str | None = None
     parent_tool_call_id: str | None = None

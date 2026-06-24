@@ -90,9 +90,23 @@ export interface BaseAssistantMessage {
     parent_tool_call_id?: string
 }
 
+export interface HumanMessageAttachment {
+    /** Attachment identifier, scoped to a single PostHog AI conversation. */
+    id: string
+    /** Conversation UUID this attachment belongs to. */
+    conversation_id: string
+    /** Sanitized display filename. */
+    filename: string
+    /** Server-detected image MIME type. */
+    content_type: 'image/png' | 'image/jpeg'
+    /** Validated image size in bytes. */
+    byte_size: number
+}
+
 export interface HumanMessage extends BaseAssistantMessage {
     type: AssistantMessageType.Human
     content: string
+    attachments?: HumanMessageAttachment[]
     ui_context?: MaxUIContext
     trace_id?: string
 }

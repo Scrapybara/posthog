@@ -12672,6 +12672,18 @@ export namespace Schemas {
       Base64: 'base64',
     } as const;
 
+    /**
+     * * `image/png` - image/png
+     * * `image/jpeg` - image/jpeg
+     */
+    export type ContentTypeEnum = typeof ContentTypeEnum[keyof typeof ContentTypeEnum];
+
+
+    export const ContentTypeEnum = {
+      ImagePng: 'image/png',
+      ImageJpeg: 'image/jpeg',
+    } as const;
+
     export interface ContextGeneration {
       /**
          * ID of the Task currently generating this folder's CONTEXT.md, or null if none.
@@ -12799,6 +12811,27 @@ export namespace Schemas {
        * Combines metadata from conversation.approval_decisions with payload from checkpoint
        * interrupts (single source of truth for payload data). */
       readonly pending_approvals: readonly ConversationPendingApprovalsItem[];
+    }
+
+    export interface ConversationAttachment {
+      /** Attachment identifier to include when sending a message. */
+      id: string;
+      /** Sanitized display filename. */
+      filename: string;
+      /** Server-detected image MIME type.
+       *
+       * * `image/png` - image/png
+       * * `image/jpeg` - image/jpeg */
+      content_type: ContentTypeEnum;
+      /** Validated image size in bytes. */
+      byte_size: number;
+    }
+
+    export interface ConversationAttachmentCreate {
+      /** Conversation UUID the pending image attachment belongs to. */
+      conversation_id: string;
+      /** PNG or JPEG image file. Maximum size is 4 MiB. */
+      file: Blob;
     }
 
     export interface ConversationMinimal {
@@ -26718,6 +26751,11 @@ export namespace Schemas {
       agent_mode?: AgentModeEnum;
       is_sandbox?: boolean;
       resume_payload?: unknown;
+      /**
+         * Pending image attachment IDs to include with this message.
+         * @maxItems 4
+         */
+      attachment_ids?: string[];
     }
 
     export interface MessageCategory {

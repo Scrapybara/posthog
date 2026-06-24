@@ -8,7 +8,54 @@ import { apiMutator } from '../../../../frontend/src/lib/api-orval-mutator'
  * PostHog API - generated
  * OpenAPI spec version: 1.0.0
  */
-import type { DocsSearchRequestApi, DocsSearchResponseApi, McpToolsCreate200 } from './api.schemas'
+import type {
+    ConversationAttachmentApi,
+    ConversationAttachmentCreateApi,
+    DocsSearchRequestApi,
+    DocsSearchResponseApi,
+    McpToolsCreate200,
+} from './api.schemas'
+
+export const getConversationAttachmentsCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/conversation_attachments/`
+}
+
+/**
+ * Upload a pending PNG or JPEG image attachment for a PostHog AI conversation.
+ */
+export const conversationAttachmentsCreate = async (
+    projectId: string,
+    conversationAttachmentCreateApi: ConversationAttachmentCreateApi,
+    options?: RequestInit
+): Promise<ConversationAttachmentApi> => {
+    const formData = new FormData()
+    formData.append(`conversation_id`, conversationAttachmentCreateApi.conversation_id)
+    formData.append(`file`, conversationAttachmentCreateApi.file)
+
+    return apiMutator<ConversationAttachmentApi>(getConversationAttachmentsCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        body: formData,
+    })
+}
+
+export const getConversationAttachmentsDestroyUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/conversation_attachments/${id}/`
+}
+
+/**
+ * Delete a pending PostHog AI image attachment and remove its private object-storage file.
+ */
+export const conversationAttachmentsDestroy = async (
+    projectId: string,
+    id: string,
+    options?: RequestInit
+): Promise<void> => {
+    return apiMutator<void>(getConversationAttachmentsDestroyUrl(projectId, id), {
+        ...options,
+        method: 'DELETE',
+    })
+}
 
 export const getMcpToolsCreateUrl = (projectId: string, toolName: string) => {
     return `/api/projects/${projectId}/mcp_tools/${toolName}/`

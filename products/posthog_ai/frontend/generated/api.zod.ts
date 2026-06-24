@@ -10,6 +10,14 @@
 import * as zod from 'zod'
 
 /**
+ * Upload a pending PNG or JPEG image attachment for a PostHog AI conversation.
+ */
+export const ConversationAttachmentsCreateBody = /* @__PURE__ */ zod.object({
+    conversation_id: zod.uuid().describe('Conversation UUID the pending image attachment belongs to.'),
+    file: zod.instanceof(File).describe('PNG or JPEG image file. Maximum size is 4 MiB.'),
+})
+
+/**
  * Run a hybrid (semantic + full-text) RAG search over the PostHog documentation via Inkeep. Returns a markdown body with title, URL, and excerpt for each match for the agent to cite back to the user.
  * @summary Search PostHog documentation
  */

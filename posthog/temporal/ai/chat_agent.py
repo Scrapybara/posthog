@@ -225,12 +225,14 @@ async def process_chat_agent_activity(inputs: ChatAgentWorkflowInputs) -> None:
 
             trace_id = str(uuid4())
             ui_context = queued_message_data.get("ui_context")
+            attachment_refs = queued_message_data.get("attachment_refs") or []
             try:
                 queued_human_message = HumanMessage.model_validate(
                     {
                         "content": content,
                         "ui_context": ui_context,
                         "trace_id": trace_id,
+                        "attachments": attachment_refs,
                     }
                 )
             except pydantic.ValidationError:

@@ -1,13 +1,21 @@
 from posthog.test.base import BaseTest
+from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage
 from parameterized import parameterized
 
-from posthog.schema import AssistantMessage, AssistantMessageMetadata
+from posthog.schema import (
+    AssistantMessage,
+    AssistantMessageMetadata,
+    HumanMessage as SchemaHumanMessage,
+)
+
+from products.posthog_ai.backend.attachments import ResolvedAttachment
 
 from ee.hogai.utils.anthropic import (
     add_cache_control,
     convert_assistant_message_to_anthropic_message,
+    convert_human_message_to_anthropic_message,
     get_anthropic_thinking_from_assistant_message,
 )
 
@@ -141,3 +149,81 @@ class TestAnthropicUtils(BaseTest):
             self.assertIn("deterministic PostHog code", provenance_text)
         else:
             self.assertEqual(len(result), 1)
+
+    @patch("ee.hogai.utils.anthropic.resolve_message_attachments")
+    def test_convert_human_message_with_image_attachment(self, mock_resolve):
+        image_data = b"png-bytes"
+        mock_resolve.return_value = [
+            ResolvedAttachment(
+                id="attachment-id",
+                filename="screenshot.png",
+                content_type="image/png",
+                byte_size=len(image_data),
+                data=image_data,
+            )
+        ]
+        message = SchemaHumanMessage(
+            content="what is in this screenshot?",
+            attachments=[
+                {
+                    "id": "attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "screenshot.png",
+                    "content_type": "image/png",
+                    "byte_size": len(image_data),
+                }
+            ],
+        )
+
+        result = convert_human_message_to_anthropic_message(message, self.team)
+
+        assert isinstance(result.content, list)
+        self.assertEqual(result.content[0], {"type": "text", "text": "what is in this screenshot?"})
+        self.assertEqual(result.content[1]["type"], "image")
+        self.assertEqual(result.content[1]["source"]["media_type"], "image/png")
+        self.assertEqual(result.content[1]["source"]["data"], "cG5nLWJ5dGVz")
+
+    @patch("ee.hogai.utils.anthropic.resolve_message_attachments")
+    def test_convert_human_message_preserves_multiple_image_attachment_order(self, mock_resolve):
+        mock_resolve.return_value = [
+            ResolvedAttachment(
+                id="first-attachment-id",
+                filename="first.png",
+                content_type="image/png",
+                byte_size=5,
+                data=b"first",
+            ),
+            ResolvedAttachment(
+                id="second-attachment-id",
+                filename="second.jpg",
+                content_type="image/jpeg",
+                byte_size=6,
+                data=b"second",
+            ),
+        ]
+        message = SchemaHumanMessage(
+            content="compare these screenshots",
+            attachments=[
+                {
+                    "id": "first-attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "first.png",
+                    "content_type": "image/png",
+                    "byte_size": 5,
+                },
+                {
+                    "id": "second-attachment-id",
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "filename": "second.jpg",
+                    "content_type": "image/jpeg",
+                    "byte_size": 6,
+                },
+            ],
+        )
+
+        result = convert_human_message_to_anthropic_message(message, self.team)
+
+        assert isinstance(result.content, list)
+        self.assertEqual(result.content[0], {"type": "text", "text": "compare these screenshots"})
+        self.assertEqual(result.content[1]["source"]["data"], "Zmlyc3Q=")
+        self.assertEqual(result.content[2]["source"]["data"], "c2Vjb25k")

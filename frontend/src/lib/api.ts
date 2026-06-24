@@ -6495,10 +6495,12 @@ const api = {
                 trace_id: string
                 agent_mode?: AgentMode | null
                 resume_payload?: {
-                    action: 'approve' | 'reject'
-                    proposal_id: string
+                    action: 'approve' | 'reject' | 'form' | 'dismiss_form'
+                    proposal_id?: string
                     feedback?: string
+                    form_answers?: Record<string, any>
                 } | null
+                attachment_ids?: string[]
             },
             options?: ApiMethodOptions
         ): Promise<Response> {
@@ -6537,6 +6539,7 @@ const api = {
                     ui_context?: MaxUIContext
                     billing_context?: MaxBillingContext | null
                     agent_mode?: AgentMode | null
+                    attachment_ids?: string[]
                 }
             ): Promise<ConversationQueueResponse> {
                 return new ApiRequest().conversation(conversationId).withAction('queue').create({ data })

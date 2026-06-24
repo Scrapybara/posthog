@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.db import IntegrityError, models
 from django.utils import timezone
 
+from posthog.models.scoping.root_mixin import TeamScopedRootMixin
 from posthog.models.team.team import Team
 from posthog.models.user import User
 from posthog.models.utils import CreatedMetaFields, DeletedMetaFields, UpdatedMetaFields, UUIDModel, UUIDTModel
@@ -116,6 +117,54 @@ class Conversation(UUIDTModel, DeletedMetaFields):
         blank=True,
         help_text="Permanent link to current TaskRun for sandbox conversations.",
     )
+
+
+class ConversationAttachment(TeamScopedRootMixin, CreatedMetaFields, UpdatedMetaFields, DeletedMetaFields, UUIDModel):
+    class AttachmentStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ATTACHED = "attached", "Attached"
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    conversation_id = models.UUIDField(help_text="Conversation UUID this attachment is scoped to.")
+    original_filename = models.CharField(
+        max_length=255,
+        help_text="Sanitized display filename supplied by the user.",
+    )
+    content_type = models.CharField(
+        max_length=32,
+        help_text="Server-detected image MIME type. Only image/png and image/jpeg are supported.",
+    )
+    byte_size = models.PositiveIntegerField(help_text="Validated object size in bytes.")
+    object_key = models.CharField(
+        max_length=512,
+        unique=True,
+        help_text="Private object-storage key for the uploaded image.",
+    )
+    attachment_status = models.CharField(
+        max_length=20,
+        choices=AttachmentStatus.choices,
+        default=AttachmentStatus.PENDING,
+        help_text="Lifecycle state of the attachment.",
+    )
+    attached_at = models.DateTimeField(null=True, blank=True, help_text="When the attachment was sent in a message.")
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="User that removed the attachment, if removed explicitly.",
+    )
+
+    class Meta:
+        db_table = "posthog_ai_conversationattachment"
+        indexes = [
+            models.Index(
+                fields=["team", "conversation_id", "deleted", "attachment_status"],
+                name="phai_att_team_conv_status_idx",
+            ),
+            models.Index(fields=["team", "created_by", "deleted"], name="phai_att_team_user_del_idx"),
+        ]
 
 
 class ConversationCheckpoint(UUIDTModel):

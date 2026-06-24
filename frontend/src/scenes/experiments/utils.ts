@@ -34,6 +34,7 @@ import {
     Experiment,
     ExperimentMetricGoal,
     ExperimentMetricMathType,
+    ExperimentStatsMethod,
     FeatureFlagType,
     FilterType,
     FunnelConversionWindowTimeUnit,
@@ -45,10 +46,38 @@ import {
     UniversalFiltersGroupValue,
 } from '~/types'
 
-import { EXPERIMENT_VARIANT_MULTIPLE } from './constants'
+import { DEFAULT_BAYESIAN_CI_LEVEL, DEFAULT_FREQUENTIST_ALPHA, EXPERIMENT_VARIANT_MULTIPLE } from './constants'
 import { SharedMetric } from './SharedMetrics/sharedMetricLogic'
 
 const MULTIPLE_VARIANT_WARNING_THRESHOLD = 0.5 // on the 0-100 scale (0.5 = 0.5%)
+
+/**
+ * Resolve an experiment's configured statistics method, defaulting to Bayesian when unset.
+ */
+export function getExperimentStatsMethod(experiment: Experiment): ExperimentStatsMethod {
+    return experiment.stats_config?.method || ExperimentStatsMethod.Bayesian
+}
+
+/**
+ * Resolve the configured statistics level (as a 0-1 fraction) for an experiment. Bayesian stores
+ * the credible-interval level directly (`ci_level`); frequentist stores the significance level
+ * (`alpha`), so the displayed confidence level is `1 - alpha`. Falls back to the 95% default when
+ * the setting is unset. Pass `statsMethod` to resolve the level for a specific method (e.g. to match
+ * a result's method) instead of the experiment's configured method.
+ */
+export function getExperimentStatsLevel(experiment: Experiment, statsMethod?: ExperimentStatsMethod): number {
+    const method = statsMethod ?? getExperimentStatsMethod(experiment)
+    return method === ExperimentStatsMethod.Bayesian
+        ? (experiment.stats_config?.bayesian?.ci_level ?? DEFAULT_BAYESIAN_CI_LEVEL)
+        : 1 - (experiment.stats_config?.frequentist?.alpha ?? DEFAULT_FREQUENTIST_ALPHA)
+}
+
+/**
+ * Format a 0-1 statistics level as a whole-number percentage, e.g. 0.9 -> "90%".
+ */
+export function formatStatsLevelPercent(level: number): string {
+    return `${(level * 100).toFixed(0)}%`
+}
 
 export function filterLowMultipleVariant<T extends { variant: string; percentage: number }>(variants: T[]): T[] {
     return variants.filter(

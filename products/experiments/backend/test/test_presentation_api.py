@@ -354,6 +354,42 @@ class TestExperimentCRUD(APILicensedTest):
         assert experiment.end_date is not None
         self.assertEqual(experiment.end_date.strftime("%Y-%m-%dT%H:%M"), end_date)
 
+    @parameterized.expand(
+        [
+            ("bayesian_90", {"method": "bayesian", "bayesian": {"ci_level": 0.9}}),
+            ("bayesian_95", {"method": "bayesian", "bayesian": {"ci_level": 0.95}}),
+            ("bayesian_99", {"method": "bayesian", "bayesian": {"ci_level": 0.99}}),
+            ("bayesian_default_unset", {"method": "bayesian"}),
+            ("frequentist_90", {"method": "frequentist", "frequentist": {"alpha": 0.1}}),
+            ("frequentist_99", {"method": "frequentist", "frequentist": {"alpha": 0.01}}),
+        ]
+    )
+    def test_stats_config_level_round_trips_through_api(self, name: str, stats_config: dict) -> None:
+        # The displayed credible/confidence level is derived on the frontend from stats_config,
+        # so the configured level must survive the create + read serialization round-trip.
+        create_response = self.client.post(
+            f"/api/projects/{self.team.id}/experiments/",
+            {
+                "name": f"Experiment {name}",
+                "feature_flag_key": f"stats-config-{name}",
+                "parameters": None,
+                "filters": {"events": [{"order": 0, "id": "$pageview"}]},
+                "stats_config": stats_config,
+            },
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        experiment_id = create_response.json()["id"]
+
+        get_response = self.client.get(f"/api/projects/{self.team.id}/experiments/{experiment_id}/")
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        returned_config = get_response.json()["stats_config"]
+
+        self.assertEqual(returned_config.get("method"), stats_config["method"])
+        if "bayesian" in stats_config:
+            self.assertEqual(returned_config["bayesian"]["ci_level"], stats_config["bayesian"]["ci_level"])
+        if "frequentist" in stats_config:
+            self.assertEqual(returned_config["frequentist"]["alpha"], stats_config["frequentist"]["alpha"])
+
     @patch("products.experiments.backend.experiment_service.report_user_action")
     def test_creating_experiment_reports_user_action(self, mock_report_user_action):
         ff_key = "tracked-experiment"

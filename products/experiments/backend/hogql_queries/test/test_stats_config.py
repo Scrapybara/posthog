@@ -228,6 +228,104 @@ class TestStatsConfig(APIBaseTest):
         variant = cast(ExperimentVariantResultBayesian, result.variant_results[0])
         assert variant.credible_interval is not None
 
+    @parameterized.expand(
+        [
+            ("config_none", None),
+            ("config_empty", {}),
+            ("bayesian_key_empty", {"bayesian": {}}),
+        ]
+    )
+    def test_bayesian_missing_ci_level_matches_explicit_95(self, _name, stats_config) -> None:
+        # The frontend labels the credible interval "95%" when the level is unset, so the calculated
+        # interval for a missing config must match the explicit 0.95 configuration exactly.
+        metric = self.create_mean_metric()
+        control = self.create_variant("control", sum_val=1000.0, sum_squares=105000.0, samples=1000)
+        test = self.create_variant("test", sum_val=1200.0, sum_squares=145000.0, samples=1000)
+
+        result_default = get_bayesian_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config=stats_config
+        )
+        result_95 = get_bayesian_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config={"bayesian": {"ci_level": 0.95}}
+        )
+
+        assert result_default.variant_results is not None and result_95.variant_results is not None
+        default_ci = cast(ExperimentVariantResultBayesian, result_default.variant_results[0]).credible_interval
+        explicit_ci = cast(ExperimentVariantResultBayesian, result_95.variant_results[0]).credible_interval
+        assert default_ci is not None and explicit_ci is not None
+        self.assertAlmostEqual(default_ci[0], explicit_ci[0], places=10)
+        self.assertAlmostEqual(default_ci[1], explicit_ci[1], places=10)
+
+    @parameterized.expand([("level_90", 0.90), ("level_95", 0.95), ("level_99", 0.99)])
+    def test_bayesian_supported_levels_widen_with_level(self, _name, ci_level) -> None:
+        metric = self.create_mean_metric()
+        control = self.create_variant("control", sum_val=1000.0, sum_squares=105000.0, samples=1000)
+        test = self.create_variant("test", sum_val=1200.0, sum_squares=145000.0, samples=1000)
+
+        result = get_bayesian_experiment_result(
+            metric=metric,
+            control_variant=control,
+            test_variants=[test],
+            stats_config={"bayesian": {"ci_level": ci_level}},
+        )
+        result_90 = get_bayesian_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config={"bayesian": {"ci_level": 0.90}}
+        )
+
+        assert result.variant_results is not None and result_90.variant_results is not None
+        ci = cast(ExperimentVariantResultBayesian, result.variant_results[0]).credible_interval
+        ci_90 = cast(ExperimentVariantResultBayesian, result_90.variant_results[0]).credible_interval
+        assert ci is not None and ci_90 is not None
+        # A higher credible level can never produce a narrower interval than the 90% baseline.
+        self.assertGreaterEqual((ci[1] - ci[0]) + 1e-9, ci_90[1] - ci_90[0])
+
+    @parameterized.expand(
+        [
+            ("config_none", None),
+            ("config_empty", {}),
+            ("frequentist_key_empty", {"frequentist": {}}),
+        ]
+    )
+    def test_frequentist_missing_alpha_matches_explicit_005(self, _name, stats_config) -> None:
+        # Unset alpha is labeled "95%" on the frontend, so it must match the explicit alpha=0.05 interval.
+        metric = self.create_mean_metric()
+        control = self.create_variant("control", sum_val=1000.0, sum_squares=105000.0, samples=1000)
+        test = self.create_variant("test", sum_val=1200.0, sum_squares=145000.0, samples=1000)
+
+        result_default = get_frequentist_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config=stats_config
+        )
+        result_005 = get_frequentist_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config={"frequentist": {"alpha": 0.05}}
+        )
+
+        assert result_default.variant_results is not None and result_005.variant_results is not None
+        default_ci = cast(ExperimentVariantResultFrequentist, result_default.variant_results[0]).confidence_interval
+        explicit_ci = cast(ExperimentVariantResultFrequentist, result_005.variant_results[0]).confidence_interval
+        assert default_ci is not None and explicit_ci is not None
+        self.assertAlmostEqual(default_ci[0], explicit_ci[0], places=10)
+        self.assertAlmostEqual(default_ci[1], explicit_ci[1], places=10)
+
+    @parameterized.expand([("alpha_10", 0.10), ("alpha_05", 0.05), ("alpha_01", 0.01)])
+    def test_frequentist_supported_levels_widen_as_alpha_shrinks(self, _name, alpha) -> None:
+        metric = self.create_mean_metric()
+        control = self.create_variant("control", sum_val=1000.0, sum_squares=105000.0, samples=1000)
+        test = self.create_variant("test", sum_val=1200.0, sum_squares=145000.0, samples=1000)
+
+        result = get_frequentist_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config={"frequentist": {"alpha": alpha}}
+        )
+        result_10 = get_frequentist_experiment_result(
+            metric=metric, control_variant=control, test_variants=[test], stats_config={"frequentist": {"alpha": 0.10}}
+        )
+
+        assert result.variant_results is not None and result_10.variant_results is not None
+        ci = cast(ExperimentVariantResultFrequentist, result.variant_results[0]).confidence_interval
+        ci_10 = cast(ExperimentVariantResultFrequentist, result_10.variant_results[0]).confidence_interval
+        assert ci is not None and ci_10 is not None
+        # Smaller alpha (higher confidence) can never produce a narrower interval than the 90% baseline.
+        self.assertGreaterEqual((ci[1] - ci[0]) + 1e-9, ci_10[1] - ci_10[0])
+
     @parameterized.expand(INSUFFICIENT_DATA_CASES)
     def test_frequentist_insufficient_data_returns_raw_values_without_stats(self, _name, data):
         metric = self.create_mean_metric()

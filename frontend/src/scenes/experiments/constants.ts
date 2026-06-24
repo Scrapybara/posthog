@@ -36,6 +36,12 @@ export const CONFIDENCE_LEVEL_OPTIONS = [
     { value: 0.99, label: '99%' },
 ]
 
+// Defaults used when an experiment hasn't explicitly configured its statistics level.
+// Bayesian stores the credible-interval level directly (ci_level); frequentist stores the
+// significance level (alpha), so the displayed confidence level is 1 - alpha.
+export const DEFAULT_BAYESIAN_CI_LEVEL = 0.95
+export const DEFAULT_FREQUENTIST_ALPHA = 0.05
+
 export const EXPERIMENT_MIN_EXPOSURES_FOR_RESULTS = 50
 export const EXPERIMENT_MIN_METRIC_VALUE_FOR_RESULTS = 10
 

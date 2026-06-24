@@ -18,6 +18,7 @@ import { CONCLUSION_DISPLAY_CONFIG } from '../constants'
 import { experimentLogic, previousRefreshAnalytics } from '../experimentLogic'
 import { getExperimentStatus, isExperimentPaused } from '../experimentsLogic'
 import { modalsLogic } from '../modalsLogic'
+import { formatStatsLevelPercent, getExperimentStatsLevel } from '../utils'
 import { ExperimentDuration } from './ExperimentDuration'
 import { ExperimentReloadAction } from './ExperimentReloadAction'
 import { RunningTime } from './RunningTime'
@@ -134,9 +135,7 @@ export function Info(): JSX.Element {
                             <span>
                                 {statsMethod === ExperimentStatsMethod.Bayesian ? 'Bayesian' : 'Frequentist'}
                                 {' / '}
-                                {statsMethod === ExperimentStatsMethod.Bayesian
-                                    ? `${((experiment.stats_config?.bayesian?.ci_level ?? 0.95) * 100).toFixed(0)}%`
-                                    : `${((1 - (experiment.stats_config?.frequentist?.alpha ?? 0.05)) * 100).toFixed(0)}%`}
+                                {formatStatsLevelPercent(getExperimentStatsLevel(experiment))}
                             </span>
                         </div>
                     </div>

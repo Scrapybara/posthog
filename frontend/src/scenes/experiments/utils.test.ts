@@ -19,6 +19,7 @@ import {
     AccessControlLevel,
     Experiment,
     ExperimentMetricMathType,
+    ExperimentStatsMethod,
     FeatureFlagBucketingIdentifier,
     FeatureFlagEvaluationRuntime,
     FeatureFlagType,
@@ -32,7 +33,9 @@ import {
     exposureConfigToFilter,
     featureFlagEligibleForExperiment,
     filterToExposureConfig,
+    formatStatsLevelPercent,
     getEventCountQuery,
+    getExperimentStatsLevel,
     getOrderedMetricsWithResults,
     getViewRecordingFilters,
     getViewRecordingFiltersLegacy,
@@ -1381,5 +1384,94 @@ describe('getEventCountQuery', () => {
         const query = getEventCountQuery(metric, true)
 
         expect(query).toBeNull()
+    })
+
+    describe('getExperimentStatsLevel', () => {
+        const buildExperiment = (statsConfig: Experiment['stats_config']): Experiment =>
+            ({ stats_config: statsConfig }) as Experiment
+
+        it.each([
+            ['bayesian 90%', { method: ExperimentStatsMethod.Bayesian, bayesian: { ci_level: 0.9 } }, 0.9],
+            ['bayesian 95%', { method: ExperimentStatsMethod.Bayesian, bayesian: { ci_level: 0.95 } }, 0.95],
+            ['bayesian 99%', { method: ExperimentStatsMethod.Bayesian, bayesian: { ci_level: 0.99 } }, 0.99],
+            [
+                'bayesian missing ci_level defaults to 95%',
+                { method: ExperimentStatsMethod.Bayesian, bayesian: {} },
+                0.95,
+            ],
+            ['bayesian missing bayesian key defaults to 95%', { method: ExperimentStatsMethod.Bayesian }, 0.95],
+            [
+                'frequentist 90% (alpha 0.1)',
+                { method: ExperimentStatsMethod.Frequentist, frequentist: { alpha: 0.1 } },
+                0.9,
+            ],
+            [
+                'frequentist 95% (alpha 0.05)',
+                { method: ExperimentStatsMethod.Frequentist, frequentist: { alpha: 0.05 } },
+                0.95,
+            ],
+            [
+                'frequentist 99% (alpha 0.01)',
+                { method: ExperimentStatsMethod.Frequentist, frequentist: { alpha: 0.01 } },
+                0.99,
+            ],
+            [
+                'frequentist missing alpha defaults to 95%',
+                { method: ExperimentStatsMethod.Frequentist, frequentist: {} },
+                0.95,
+            ],
+            [
+                'frequentist missing frequentist key defaults to 95%',
+                { method: ExperimentStatsMethod.Frequentist },
+                0.95,
+            ],
+        ])('resolves the configured level for %s', (_name, statsConfig, expected) => {
+            expect(getExperimentStatsLevel(buildExperiment(statsConfig as Experiment['stats_config']))).toBeCloseTo(
+                expected,
+                10
+            )
+        })
+
+        it.each([
+            ['undefined stats_config', undefined],
+            ['null stats_config', null],
+            ['empty stats_config', {}],
+        ])('defaults to Bayesian 95% when %s', (_name, statsConfig) => {
+            expect(getExperimentStatsLevel(buildExperiment(statsConfig as Experiment['stats_config']))).toBeCloseTo(
+                0.95,
+                10
+            )
+        })
+
+        it('honors an explicit statsMethod override (e.g. matching a result method)', () => {
+            // Experiment is configured Bayesian, but the override forces frequentist resolution.
+            const experiment = buildExperiment({
+                method: ExperimentStatsMethod.Bayesian,
+                bayesian: { ci_level: 0.9 },
+                frequentist: { alpha: 0.2 },
+            } as Experiment['stats_config'])
+
+            expect(getExperimentStatsLevel(experiment)).toBeCloseTo(0.9, 10)
+            expect(getExperimentStatsLevel(experiment, ExperimentStatsMethod.Frequentist)).toBeCloseTo(0.8, 10)
+        })
+    })
+
+    describe('formatStatsLevelPercent', () => {
+        it.each([
+            [0.9, '90%'],
+            [0.95, '95%'],
+            [0.99, '99%'],
+            [0.8, '80%'],
+            [0.5, '50%'],
+        ])('formats %p as %s', (level, expected) => {
+            expect(formatStatsLevelPercent(level)).toBe(expected)
+        })
+
+        it('formats the label shown for a Bayesian 90% experiment', () => {
+            const experiment = {
+                stats_config: { method: ExperimentStatsMethod.Bayesian, bayesian: { ci_level: 0.9 } },
+            } as Experiment
+            expect(formatStatsLevelPercent(getExperimentStatsLevel(experiment))).toBe('90%')
+        })
     })
 })

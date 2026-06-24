@@ -11,6 +11,7 @@ import { StatsMethodSelector } from '../components/StatsMethodSelector'
 import { CONFIDENCE_LEVEL_OPTIONS } from '../constants'
 import { experimentLogic } from '../experimentLogic'
 import { modalsLogic } from '../modalsLogic'
+import { getExperimentStatsLevel } from '../utils'
 import {
     DEFAULT_SEQUENTIAL_TUNING_PARAMETER,
     MAX_SEQUENTIAL_TUNING_PARAMETER,
@@ -35,9 +36,7 @@ export function StatsMethodModal(): JSX.Element {
 
     // For Bayesian: ci_level (default 0.95)
     // For Frequentist: confidence = 1 - alpha (default alpha 0.05 = 95% confidence)
-    const currentConfidenceLevel = isBayesian
-        ? (experiment.stats_config?.bayesian?.ci_level ?? 0.95)
-        : 1 - (experiment.stats_config?.frequentist?.alpha ?? 0.05)
+    const currentConfidenceLevel = getExperimentStatsLevel(experiment)
 
     const handleConfidenceLevelChange = (value: number): void => {
         if (isBayesian) {

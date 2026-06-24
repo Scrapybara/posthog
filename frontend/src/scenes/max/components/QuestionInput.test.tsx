@@ -21,7 +21,7 @@ jest.mock(
     { virtual: true }
 )
 
-describe('QuestionInput slash command autocomplete', () => {
+describe('QuestionInput', () => {
     let maxLogicInstance: ReturnType<typeof maxLogic.build>
     let threadLogicInstance: ReturnType<typeof maxThreadLogic.build>
 
@@ -60,6 +60,12 @@ describe('QuestionInput slash command autocomplete', () => {
     })
 
     const slashCommandItem = (): HTMLElement | null => screen.queryByText('/init')
+
+    it('keeps long prompts scrollable inside the textarea', () => {
+        const input = screen.getByRole('textbox')
+
+        expect(input).toHaveClass('QuestionInput__Textarea')
+    })
 
     it('reopens the popover after Escape dismisses it and a fresh slash is typed', async () => {
         const input = screen.getByRole('textbox') as HTMLTextAreaElement

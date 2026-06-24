@@ -2,19 +2,23 @@ import { useActions, useValues } from 'kea'
 
 import { getSeriesColor } from 'lib/colors'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
+import { LemonTag } from 'lib/lemon-ui/LemonTag'
 import { Lettermark, LettermarkColor } from 'lib/lemon-ui/Lettermark'
 import { alphabet, formatPercentage } from 'lib/utils'
 
 import type { FeatureFlagType } from '~/types'
 
+import { resolveBaselineVariantKey } from '../../baseline'
 import { TrafficPreview } from '../../ExperimentForm/VariantDistributionEditor'
 import { VariantsPanelCreateFeatureFlag } from '../../ExperimentForm/VariantsPanelCreateFeatureFlag'
 import { experimentWizardLogic } from '../experimentWizardLogic'
 
 const ReadOnlyVariantsStep = ({ flag }: { flag: FeatureFlagType }): JSX.Element => {
+    const { experiment } = useValues(experimentWizardLogic)
     const variants = flag.filters?.multivariate?.variants || []
     const rolloutPercentage = flag.filters.groups?.[0]?.rollout_percentage ?? 100
     const variantRolloutSum = variants.reduce((sum, { rollout_percentage }) => sum + rollout_percentage, 0)
+    const baselineVariantKey = resolveBaselineVariantKey(variants, experiment)
 
     return (
         <>
@@ -65,7 +69,12 @@ const ReadOnlyVariantsStep = ({ flag }: { flag: FeatureFlagType }): JSX.Element 
                                             </div>
                                         </td>
                                         <td className="py-2 pr-2">
-                                            <div className="flex items-center h-10 px-2 font-medium">{variant.key}</div>
+                                            <div className="flex items-center h-10 px-2 font-medium gap-2">
+                                                {variant.key}
+                                                {variant.key === baselineVariantKey && (
+                                                    <LemonTag type="muted">Baseline</LemonTag>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="py-2">
                                             <div className="flex items-center h-10 px-2">

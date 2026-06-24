@@ -26,6 +26,7 @@ import {
     PropertyOperator,
 } from '~/types'
 
+import { isBaselineVariantKeyValid, resolveBaselineVariantKey } from './baseline'
 import { filterToMetricConfig } from './metricQueryUtils'
 import { getNiceTickValues } from './MetricsView/shared/utils'
 import {
@@ -43,6 +44,41 @@ import {
 } from './utils'
 
 describe('utils', () => {
+    describe('baseline variants', () => {
+        const variants = [
+            { key: 'variant-a', rollout_percentage: 50 },
+            { key: 'variant-b', rollout_percentage: 50 },
+        ]
+
+        it.each([
+            {
+                name: 'uses explicit baseline',
+                experiment: { stats_config: { baseline_variant_key: 'variant-b' } },
+                expected: 'variant-b',
+                variants,
+            },
+            {
+                name: 'falls back to first variant when control is absent',
+                experiment: {},
+                expected: 'variant-a',
+                variants,
+            },
+            {
+                name: 'falls back to control when present',
+                experiment: {},
+                expected: 'control',
+                variants: [{ key: 'control', rollout_percentage: 50 }, ...variants],
+            },
+        ])('$name', ({ experiment, expected, variants }) => {
+            expect(resolveBaselineVariantKey(variants, experiment as Pick<Experiment, 'stats_config'>)).toBe(expected)
+        })
+
+        it('marks a removed explicit baseline invalid', () => {
+            expect(isBaselineVariantKeyValid(variants, 'control')).toBe(false)
+            expect(isBaselineVariantKeyValid(variants, 'variant-a')).toBe(true)
+        })
+    })
+
     describe('percentageDistribution', () => {
         it('given variant count, calculates correct rollout percentages', async () => {
             expect(percentageDistribution(1)).toEqual([100])
@@ -570,11 +606,9 @@ describe('checkFeatureFlagEligibility', () => {
     }
     it('throws an error for a remote configuration feature flag', () => {
         const featureFlag = { ...baseFeatureFlag, is_remote_configuration: true }
-        expect(() => featureFlagEligibleForExperiment(featureFlag)).toThrow(
-            'Feature flag must use multiple variants with control as the first variant.'
-        )
+        expect(() => featureFlagEligibleForExperiment(featureFlag)).toThrow('Feature flag must use multiple variants.')
     })
-    it('throws an error for a feature flag without control as the first variant', () => {
+    it('returns true for a feature flag without control as the first variant', () => {
         const featureFlag = {
             ...baseFeatureFlag,
             filters: {
@@ -587,9 +621,7 @@ describe('checkFeatureFlagEligibility', () => {
                 },
             },
         }
-        expect(() => featureFlagEligibleForExperiment(featureFlag)).toThrow(
-            'Feature flag must have control as the first variant.'
-        )
+        expect(featureFlagEligibleForExperiment(featureFlag)).toEqual(true)
     })
     it('throws an error for a feature flag with only one variant', () => {
         const featureFlag = {
@@ -599,9 +631,7 @@ describe('checkFeatureFlagEligibility', () => {
                 multivariate: { variants: [{ key: 'test', rollout_percentage: 50 }] },
             },
         }
-        expect(() => featureFlagEligibleForExperiment(featureFlag)).toThrow(
-            'Feature flag must use multiple variants with control as the first variant.'
-        )
+        expect(() => featureFlagEligibleForExperiment(featureFlag)).toThrow('Feature flag must use multiple variants.')
     })
     it('returns true for a feature flag with control and test variants', () => {
         const featureFlag = {

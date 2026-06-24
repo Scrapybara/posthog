@@ -111,15 +111,15 @@ def split_baseline_and_test_variants(
     variants: list[V],
     baseline_key: str = CONTROL_VARIANT_KEY,
 ) -> tuple[V, list[V]]:
-    control_variants = [variant for variant in variants if variant.key == baseline_key]
-    if not control_variants:
-        raise ValueError("No control variant found")
-    if len(control_variants) > 1:
-        raise ValueError("Multiple control variants found")
-    control_variant = control_variants[0]
+    baseline_variants = [variant for variant in variants if variant.key == baseline_key]
+    if not baseline_variants:
+        raise ValueError(f"Baseline variant '{baseline_key}' not found")
+    if len(baseline_variants) > 1:
+        raise ValueError(f"Multiple baseline variants found for '{baseline_key}'")
+    baseline_variant = baseline_variants[0]
     test_variants = [variant for variant in variants if variant.key != baseline_key]
 
-    return control_variant, test_variants
+    return baseline_variant, test_variants
 
 
 # Maps SQL aliases produced by experiment_query_builder.py SELECT clauses to

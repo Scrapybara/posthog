@@ -13,6 +13,7 @@ from django.db import close_old_connections, transaction
 from django.utils import timezone
 
 import structlog
+from rest_framework.exceptions import ValidationError
 from temporalio.exceptions import ApplicationError
 
 from posthog.schema import ExperimentQuery
@@ -26,6 +27,7 @@ from posthog.models.scoping import team_scope
 from posthog.ph_client import ph_scoped_capture
 from posthog.sync import database_sync_to_async
 
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -436,12 +438,19 @@ def _calculate_experiment_metric_for_recalculation_sync(
         if not experiment.start_date:
             return _fail(recalculation_id, metric_uuid, "discovery", f"Experiment {experiment_id} has no start_date")
 
+        try:
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
+        except ValidationError as error:
+            return _fail(recalculation_id, metric_uuid, "discovery", str(error.detail))
+
         config_fp = compute_metric_fingerprint(
             metric_dict,
             experiment.start_date,
             get_experiment_stats_method(experiment),
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=baseline_variant_key,
         )
         recalc_fp = compute_recalc_fingerprint(config_fp, recalculation_id)
 

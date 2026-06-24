@@ -15,6 +15,19 @@ import {
 
 import { VariantsPanelLinkFeatureFlag } from './VariantsPanelLinkFeatureFlag'
 
+jest.mock('lib/lemon-ui/LemonSelect', () => ({
+    LemonSelect: ({ value, options, onChange, disabledReason }: any) => (
+        <button
+            aria-label="Baseline variant"
+            type="button"
+            disabled={!!disabledReason}
+            onClick={() => onChange?.((options.find((option: any) => option.value !== value) ?? options[0])?.value)}
+        >
+            Select baseline variant
+        </button>
+    ),
+}))
+
 describe('VariantsPanelLinkFeatureFlag', () => {
     const mockSetShowFeatureFlagSelector = jest.fn()
 
@@ -213,7 +226,7 @@ describe('VariantsPanelLinkFeatureFlag', () => {
             expect(screen.getByText('test')).toBeInTheDocument()
         })
 
-        it('highlights control variant with primary tag', () => {
+        it('highlights the resolved baseline variant with primary tag', () => {
             render(
                 <VariantsPanelLinkFeatureFlag
                     linkedFeatureFlag={baseFeatureFlag}
@@ -223,6 +236,35 @@ describe('VariantsPanelLinkFeatureFlag', () => {
 
             const controlTag = screen.getByText('control').closest('.LemonTag')
             expect(controlTag).toHaveClass('LemonTag--primary')
+        })
+
+        it('highlights an explicitly selected non-control baseline variant', () => {
+            render(
+                <VariantsPanelLinkFeatureFlag
+                    linkedFeatureFlag={baseFeatureFlag}
+                    setShowFeatureFlagSelector={mockSetShowFeatureFlagSelector}
+                    baselineVariantKey="test"
+                />
+            )
+
+            expect(screen.getByText('test').closest('.LemonTag')).toHaveClass('LemonTag--primary')
+            expect(screen.getByText('control').closest('.LemonTag')).not.toHaveClass('LemonTag--primary')
+        })
+
+        it('emits baseline variant changes', async () => {
+            const onBaselineVariantChange = jest.fn()
+            render(
+                <VariantsPanelLinkFeatureFlag
+                    linkedFeatureFlag={baseFeatureFlag}
+                    setShowFeatureFlagSelector={mockSetShowFeatureFlagSelector}
+                    baselineVariantKey="control"
+                    onBaselineVariantChange={onBaselineVariantChange}
+                />
+            )
+
+            await userEvent.click(screen.getByLabelText('Baseline variant'))
+
+            expect(onBaselineVariantChange).toHaveBeenCalledWith('test')
         })
 
         it('renders multiple variants', () => {

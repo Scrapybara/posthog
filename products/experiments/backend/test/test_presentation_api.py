@@ -123,8 +123,8 @@ class TestExperimentCRUD(APILicensedTest):
         response = self.client.get(f"/api/projects/{self.team.id}/experiments/eligible_feature_flags/?order=key")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.json()["count"], 1)
-        self.assertEqual([flag["key"] for flag in response.json()["results"]], ["eligible-flag"])
+        self.assertEqual(response.json()["count"], 2)
+        self.assertEqual([flag["key"] for flag in response.json()["results"]], ["eligible-flag", "wrong-order-flag"])
 
     @parameterized.expand(
         [
@@ -1992,7 +1992,7 @@ class TestExperimentCRUD(APILicensedTest):
         self.assertIsNotNone(get_data["feature_flag"])
         self.assertEqual(get_data["feature_flag"]["key"], "test-flag-serialization")
 
-    def test_creating_invalid_multivariate_experiment_no_control(self):
+    def test_creating_multivariate_experiment_without_control_uses_first_variant_default_baseline(self):
         ff_key = "a-b-test"
         response = self.client.post(
             f"/api/projects/{self.team.id}/experiments/",
@@ -2004,7 +2004,6 @@ class TestExperimentCRUD(APILicensedTest):
                 "feature_flag_key": ff_key,
                 "parameters": {
                     "feature_flag_variants": [
-                        # no control
                         {
                             "key": "test_0",
                             "name": "Control Group",
@@ -2018,7 +2017,7 @@ class TestExperimentCRUD(APILicensedTest):
                         {
                             "key": "test_2",
                             "name": "Test Variant",
-                            "rollout_percentage": 33,
+                            "rollout_percentage": 34,
                         },
                     ]
                 },
@@ -2032,12 +2031,12 @@ class TestExperimentCRUD(APILicensedTest):
             },
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        detail = response.json()["detail"]
-        self.assertIn("must contain a variant with key 'control'", detail)
-        self.assertIn("'test_0'", detail)
-        self.assertIn("'test_1'", detail)
-        self.assertIn("'test_2'", detail)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(
+            [variant["key"] for variant in response.json()["parameters"]["feature_flag_variants"]],
+            ["test_0", "test_1", "test_2"],
+        )
+        self.assertEqual(response.json()["stats_config"], {"method": "bayesian"})
 
     @parameterized.expand(
         [
@@ -2046,10 +2045,7 @@ class TestExperimentCRUD(APILicensedTest):
             ("cOnTrOl",),
         ]
     )
-    def test_creating_experiment_normalizes_capitalized_control_key(self, control_key: str):
-        # LLM callers often emit `Control` or `CONTROL` from natural-language input.
-        # The serializer should rewrite it to lowercase `control` instead of rejecting,
-        # since intent is unambiguous and the runtime treats `control` as a reserved key.
+    def test_creating_experiment_preserves_capitalized_variant_keys(self, control_key: str):
         ff_key = f"case-insensitive-{control_key.lower()}-{control_key}"
         response = self.client.post(
             f"/api/projects/{self.team.id}/experiments/",
@@ -2069,20 +2065,13 @@ class TestExperimentCRUD(APILicensedTest):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         variants = response.json()["parameters"]["feature_flag_variants"]
-        self.assertEqual([v["key"] for v in variants], ["control", "test"])
-        # The persisted flag should also use lowercase `control`.
+        self.assertEqual([v["key"] for v in variants], [control_key, "test"])
+        self.assertEqual(response.json()["stats_config"], {"method": "bayesian"})
         flag = FeatureFlag.objects.get(key=ff_key)
         flag_keys = [v["key"] for v in flag.filters["multivariate"]["variants"]]
-        self.assertEqual(flag_keys, ["control", "test"])
+        self.assertEqual(flag_keys, [control_key, "test"])
 
     def test_creating_experiment_does_not_collapse_when_control_already_present(self):
-        # If both `control` and `Control` are passed, normalization must NOT run —
-        # otherwise it would rewrite `Control` → `control` and produce two duplicate
-        # entries. The downstream FeatureFlagSerializer may then accept (variants
-        # preserved) or reject (duplicate-key error) — both prove the normalization
-        # path was skipped. The signal we actively check against: the response must
-        # not be the missing-control error, since that would only fire if our
-        # rewrite logic got confused.
         ff_key = "control-and-capital-control"
         response = self.client.post(
             f"/api/projects/{self.team.id}/experiments/",
@@ -2100,16 +2089,65 @@ class TestExperimentCRUD(APILicensedTest):
             format="json",
         )
 
-        # Must land on a deterministic outcome — not silently bypass.
-        self.assertIn(response.status_code, [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST])
-        if response.status_code == status.HTTP_201_CREATED:
-            variants = response.json()["parameters"]["feature_flag_variants"]
-            self.assertEqual([v["key"] for v in variants], ["control", "Control"])
-        else:
-            # 400 path: the error must NOT be the missing-control message,
-            # which would only fire if normalization had wrongly rewritten things.
-            detail = str(response.json())
-            self.assertNotIn("must contain a variant with key 'control'", detail)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        variants = response.json()["parameters"]["feature_flag_variants"]
+        self.assertEqual([v["key"] for v in variants], ["control", "Control"])
+
+    def test_patch_baseline_variant_uses_effective_stats_config_for_parameter_validation(self):
+        ff_key = "baseline-patch"
+        create_response = self.client.post(
+            f"/api/projects/{self.team.id}/experiments/",
+            {
+                "name": "Baseline patch",
+                "description": "",
+                "feature_flag_key": ff_key,
+                "parameters": {
+                    "feature_flag_variants": [
+                        {"key": "control", "name": "Control", "split_percent": 34},
+                        {"key": "test_1", "name": "Test 1", "split_percent": 33},
+                        {"key": "test_2", "name": "Test 2", "split_percent": 33},
+                    ]
+                },
+                "stats_config": {"baseline_variant_key": "test_1"},
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED, create_response.content)
+        experiment_id = create_response.json()["id"]
+        self.assertEqual(create_response.json()["stats_config"]["baseline_variant_key"], "test_1")
+
+        baseline_response = self.client.patch(
+            f"/api/projects/{self.team.id}/experiments/{experiment_id}/",
+            {"stats_config": {"baseline_variant_key": "test_2"}},
+            format="json",
+        )
+        self.assertEqual(baseline_response.status_code, status.HTTP_200_OK, baseline_response.content)
+        self.assertEqual(baseline_response.json()["stats_config"]["baseline_variant_key"], "test_2")
+
+        exclude_control_response = self.client.patch(
+            f"/api/projects/{self.team.id}/experiments/{experiment_id}/",
+            {
+                "parameters": {
+                    "feature_flag_variants": [
+                        {"key": "control", "name": "Control", "split_percent": 34},
+                        {"key": "test_1", "name": "Test 1", "split_percent": 33},
+                        {"key": "test_2", "name": "Test 2", "split_percent": 33},
+                    ],
+                    "excluded_variants": ["control"],
+                }
+            },
+            format="json",
+        )
+        self.assertEqual(exclude_control_response.status_code, status.HTTP_200_OK, exclude_control_response.content)
+        self.assertEqual(exclude_control_response.json()["parameters"]["excluded_variants"], ["control"])
+
+        invalid_baseline_response = self.client.patch(
+            f"/api/projects/{self.team.id}/experiments/{experiment_id}/",
+            {"stats_config": {"baseline_variant_key": "control"}},
+            format="json",
+        )
+        self.assertEqual(invalid_baseline_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("baseline variant cannot be excluded", str(invalid_baseline_response.json()))
 
     def test_creating_updating_experiment_with_group_aggregation(self):
         ff_key = "a-b-tests"
@@ -2674,7 +2712,7 @@ class TestExperimentCRUD(APILicensedTest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertFalse(response.json()["only_count_matured_users"])
 
-    def test_create_experiment_with_feature_flag_missing_control(self):
+    def test_create_experiment_with_feature_flag_missing_control_uses_first_variant_fallback(self):
         feature_flag = FeatureFlag.objects.create(
             team=self.team,
             name="Beta feature",
@@ -2699,8 +2737,8 @@ class TestExperimentCRUD(APILicensedTest):
             },
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.json()["detail"], "Feature flag must have a variant with key 'control'")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(response.json()["feature_flag"]["id"], feature_flag.id)
 
     def test_create_experiment_with_feature_flag_insufficient_variants(self):
         feature_flag = FeatureFlag.objects.create(
@@ -2729,7 +2767,7 @@ class TestExperimentCRUD(APILicensedTest):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             response.json()["detail"],
-            "Feature flag must have at least 2 variants (control and at least one test variant)",
+            "Feature flag must have at least 2 variants",
         )
 
     def test_create_experiment_with_parameters_insufficient_variants(self):
@@ -2749,7 +2787,7 @@ class TestExperimentCRUD(APILicensedTest):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             response.json()["detail"],
-            "Feature flag must have at least 2 variants (control and at least one test variant)",
+            "Feature flag must have at least 2 variants",
         )
 
     def test_create_experiment_with_valid_existing_feature_flag(self):
@@ -3939,9 +3977,9 @@ class TestExperimentCRUD(APILicensedTest):
         initial_metrics = response.json()["metrics"]
 
         expected_initial_fingerprints = {
-            "mean": "d2e1f06570c3ec0af658c6255890c0ee509e0a275cbc80f630d8e8718a1b8c25",
-            "funnel": "dc70f252171bb66b8b40a28ba702ad2907c61d0962b54f332dee96afd67b240c",
-            "ratio": "ac46d8229e2ec5558200082a3f5d2e4e6e5041585d4f07dbd28930ee90fad235",
+            "mean": "607f5af3a25d3dfee559f463bdd727cb9fe92b908ed522b1d26265141d17c570",
+            "funnel": "b8b120ce490435909f1c5b2ca67704f5a1f1341d06526428f67fadab385e396e",
+            "ratio": "0a934a60662bc632b073b1b21b316ebe37cafd4fceb05110387ceb2161ab3fe7",
         }
 
         for metric in initial_metrics:
@@ -4006,9 +4044,9 @@ class TestExperimentCRUD(APILicensedTest):
         updated_metrics = response.json()["metrics"]
 
         expected_updated_fingerprints = {
-            "mean": "d6a393e5456b71c16961c45e07eb17cb86e4f7972549033f9883c99430248c02",
-            "funnel": "9f7888cb2f7f9c3dac2b6482a964eef6911f97e376ed53305ed6653f7f70ce9b",
-            "ratio": "1b83a833a62ff9c2f01ba86be1f3e578b97749d3264e08ff9e76d863865e3ff3",
+            "mean": "068f0ca101f753e0f7cb81038b25ebdfcf5be42a7b38fd290fdecc67292a590b",
+            "funnel": "1fd9f577e3ae62e95ceb048447634cb23770c37633301e70b85ca8392970004e",
+            "ratio": "21eba637596ff315a267a7e5898b9132b9b2f6f5a17fb6161dcafad322dcb9aa",
         }
 
         for metric in updated_metrics:

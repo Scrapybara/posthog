@@ -1285,11 +1285,10 @@ class ExperimentVariant(BaseModel):
     key: str = Field(
         ...,
         description=(
-            "Variant key. Exactly one variant in feature_flag_variants must use key"
-            " 'control' (lowercase, exactly) — that is the baseline used for analysis"
-            " and the special key the experiment runtime expects. Other variants use"
-            " keys like 'test', 'variant_a', 'variant_b'. Map natural-language names"
-            " ('original', 'A', 'baseline') to 'control'."
+            "Variant key. Keys are preserved as provided and are not renamed. The"
+            " experiment baseline is selected with stats_config.baseline_variant_key;"
+            " when unset, experiments default to 'control' if present, otherwise the"
+            " first configured variant."
         ),
     )
     name: str | None = Field(default=None, description="Human-readable variant name.")
@@ -4884,9 +4883,7 @@ class ExperimentParameters(BaseModel):
     feature_flag_variants: list[ExperimentVariant] | None = Field(
         default=None,
         description=(
-            "Experiment variants. If specified, must include a variant with key"
-            " 'control' (lowercase). Defaults to a 50/50 control/test split when"
-            " omitted. Minimum 2, maximum 20."
+            "Experiment variants. Defaults to a 50/50 control/test split when omitted. Minimum 2, maximum 20."
         ),
     )
     minimum_detectable_effect: float | None = Field(

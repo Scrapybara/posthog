@@ -22,16 +22,13 @@ from rest_framework.exceptions import ValidationError
 from posthog.models.scoping import team_scope
 from posthog.models.user import User
 
-from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
-from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
 from products.experiments.backend.models.experiment import (
     Experiment,
     ExperimentMetricResult,
     ExperimentMetricsRecalculation,
 )
 from products.experiments.backend.result_serialization import strip_step_sessions
-from products.experiments.backend.temporal.recalc_fingerprint import compute_recalc_fingerprint
-from products.experiments.backend.temporal.recalculation_logic import discover_experiment_metrics, find_metric_dict
+from products.experiments.backend.temporal.recalculation_logic import discover_experiment_metrics
 
 # How long an active (PENDING/IN_PROGRESS) row blocks new recalculations. Beyond this, the row is treated as
 # stale and a fresh recalc is allowed. Sized to be safely above the workflow's worst-case end-to-end runtime
@@ -208,51 +205,21 @@ def get_recalculation_by_id(experiment: Experiment, recalculation_id: str) -> Ex
         ).first()
 
 
-def _recalc_fingerprints_for_run(experiment: Experiment, recalc: ExperimentMetricsRecalculation) -> dict[str, str]:
-    """Recompute each metric's per-run recalc fingerprint (strategy 'a': no extra storage).
-
-    Returns ``{metric_uuid: recalc_fp}`` for metrics still resolvable on the experiment. A uuid present on the job
-    but no longer on the experiment is skipped (metric removed mid-run).
-
-    Divergence hazard: the fingerprint is derived from mutable experiment fields (start_date, exposure_criteria,
-    stats method, only_count_matured_users). If any of these change between the workflow's writes and a later
-    read, the recomputed fingerprints will not match the on-disk ones and the corresponding result rows become
-    unreachable (until the experiment fields revert). This is the explicit trade-off of "no FK on
-    ExperimentMetricResult" — the snapshot lives in the fingerprint, not in a stored column.
-    """
-    stats_method = get_experiment_stats_method(experiment)
-    fingerprints: dict[str, str] = {}
-    for metric_uuid in recalc.metric_uuids or []:
-        metric_dict = find_metric_dict(experiment, metric_uuid)
-        if metric_dict is None:
-            continue
-        config_fp = compute_metric_fingerprint(
-            metric_dict,
-            experiment.start_date,
-            stats_method,
-            experiment.exposure_criteria,
-            only_count_matured_users=experiment.only_count_matured_users,
-        )
-        fingerprints[metric_uuid] = compute_recalc_fingerprint(config_fp, str(recalc.id))
-    return fingerprints
-
-
 def get_run_results(recalc: ExperimentMetricsRecalculation) -> list[dict]:
     """Return the ExperimentMetricResult rows that belong to THIS run.
 
-    Scopes by recomputing each metric's recalc fingerprint and filtering ``fingerprint__in`` — never returns
-    rows from a previous run or from the timeseries workflow (which uses config fingerprints).
-
-    See `_recalc_fingerprints_for_run` for the fingerprint-divergence hazard: if experiment fields that feed
-    the fingerprint change after the run wrote its rows, this can return [] for what is on-disk a successful
-    run. Symptom: "results disappeared after editing exposure_criteria / start_date / stats config."
+    Scopes by the run's stored metric UUIDs and query_to. The result table is unique on
+    ``(experiment, metric_uuid, query_to)``, so this survives later experiment config edits
+    that would otherwise change recomputed fingerprints.
     """
-    fingerprints = _recalc_fingerprints_for_run(recalc.experiment, recalc)
-    if not fingerprints:
+    metric_uuids = recalc.metric_uuids or []
+    if not metric_uuids or recalc.query_to is None:
         return []
 
     rows = ExperimentMetricResult.objects.filter(
-        experiment=recalc.experiment, fingerprint__in=list(fingerprints.values())
+        experiment=recalc.experiment,
+        metric_uuid__in=metric_uuids,
+        query_to=recalc.query_to,
     )
     return [
         {

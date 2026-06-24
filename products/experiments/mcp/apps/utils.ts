@@ -27,6 +27,10 @@ export interface ExperimentData {
         feature_flag_variants?: ExperimentVariant[]
         [key: string]: unknown
     }
+    stats_config?: {
+        baseline_variant_key?: string
+        [key: string]: unknown
+    } | null
     metrics?: ExperimentMetric[]
     metrics_secondary?: ExperimentMetric[]
     filters?: Record<string, unknown>
@@ -48,6 +52,15 @@ export function getStatus(exp: ExperimentData): { label: string; variant: Status
         return { label: 'Complete', variant: 'success' }
     }
     return { label: 'Running', variant: 'info' }
+}
+
+export function getBaselineVariantKey(exp: ExperimentData): string | undefined {
+    const variants = exp.parameters?.feature_flag_variants ?? []
+    const explicitBaselineVariantKey = exp.stats_config?.baseline_variant_key
+    if (explicitBaselineVariantKey) {
+        return explicitBaselineVariantKey
+    }
+    return variants.some((variant) => variant.key === 'control') ? 'control' : variants[0]?.key
 }
 
 export type ConclusionVariant = 'success' | 'destructive' | 'default'

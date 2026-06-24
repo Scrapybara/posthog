@@ -33,15 +33,16 @@ CREATE_EXPERIMENT_TOOL_DESCRIPTION = dedent("""
 
     # Prerequisites
     **IMPORTANT**: Before creating an experiment, you must first create a multivariate feature flag
-    using the `create_feature_flag` tool with at least two variants (control and test).
-    The first variant MUST be named "control".
+    using the `create_feature_flag` tool with at least two variants. Experiments default
+    to using the variant keyed "control" as the baseline when present, otherwise the
+    first configured variant is used.
 
     # Experiment Types
     - **product**: For backend/API changes, server-side experiments
     - **web**: For frontend UI changes, client-side experiments
 
     # Workflow
-    1. Create a multivariate feature flag with `create_feature_flag` (variants: control + test)
+    1. Create a multivariate feature flag with `create_feature_flag` (at least two variants)
     2. Create the experiment with this tool, linking it to the feature flag
     3. Configure metrics in the PostHog UI
     4. Launch the experiment when ready
@@ -67,7 +68,6 @@ class CreateExperimentToolArgs(BaseModel):
         - The flag must already exist (create it first with create_feature_flag)
         - The flag must have multivariate variants defined
         - The flag must have at least 2 variants
-        - The first variant MUST be named "control"
         - The flag cannot already be used by another experiment
 
         Example: "pricing-page-experiment"
@@ -95,6 +95,14 @@ class CreateExperimentToolArgs(BaseModel):
         - "web": For frontend UI changes, client-side experiments
         """).strip(),
     )
+    baseline_variant_key: str | None = Field(
+        default=None,
+        description=dedent("""
+        Optional variant key to use as the statistical baseline. Must match one of the linked
+        feature flag's variant keys. If omitted, analysis uses "control" when present,
+        otherwise the first configured variant.
+        """).strip(),
+    )
 
 
 class CreateExperimentTool(MaxTool):
@@ -111,6 +119,7 @@ class CreateExperimentTool(MaxTool):
         feature_flag_key: str,
         description: str | None = None,
         type: Literal["product", "web"] = "product",
+        baseline_variant_key: str | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         if not name or not name.strip():
             return "Experiment name cannot be empty", {"error": "invalid_name"}
@@ -137,15 +146,6 @@ class CreateExperimentTool(MaxTool):
                 )
 
             variants = multivariate["variants"]
-            # Intentionally stricter than service validation for multi-variant flags:
-            # require control first for Max-created experiments.
-            # Single-variant flags are validated by the service with a clearer error.
-            if len(variants) >= 2 and variants[0].get("key") != "control":
-                raise ValueError(
-                    f"Feature flag '{feature_flag_key}' must have 'control' as the first variant. "
-                    f"Found '{variants[0].get('key')}' instead. Please update the feature flag variants."
-                )
-
             existing_experiment_with_flag = Experiment.objects.filter(feature_flag=feature_flag, deleted=False).first()
             if existing_experiment_with_flag:
                 raise ValueError(
@@ -171,6 +171,7 @@ class CreateExperimentTool(MaxTool):
                     "feature_flag_variants": feature_flag_variants,
                     "minimum_detectable_effect": 30,
                 },
+                stats_config={"baseline_variant_key": baseline_variant_key} if baseline_variant_key else None,
                 event_source=EventSource.POSTHOG_AI,
             )
 
@@ -218,7 +219,7 @@ EXPERIMENT_SUMMARY_TOOL_DESCRIPTION = dedent("""
     - **Exposures**: Sample size per variant, quality warnings for multiple exposures
     - **Metrics**: Each metric shows results per variant with statistical measures
     - **Significance**: Whether results are statistically significant
-    - **Effect size (delta)**: The percentage change from control
+    - **Effect size (delta)**: The percentage change from the baseline variant
 
     # Important notes
     - Analyze each metric separately - different metrics may favor different variants
@@ -399,7 +400,7 @@ The tool provides recording counts per variant and context for Max to analyze ac
 This tool is useful when:
 - Understanding how users interact with different experiment variants
 - Identifying usability issues or confusion in specific variants
-- Comparing user behavior patterns between control and test variants
+- Comparing user behavior patterns between the baseline and other variants
 - Getting qualitative insights to complement quantitative experiment results
 
 **Important:** This tool provides the context and recording counts. Use the filter_session_recordings tool to actually fetch and analyze the recordings for each variant.

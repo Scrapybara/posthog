@@ -40,7 +40,7 @@ Key decision points (covered in detail by `configuring-experiment-rollout`):
 - Overall rollout percentage (what % of all users enter the experiment)
 - Whether to persist the flag across authentication steps
 
-If the user doesn't mention rollout specifics, use defaults: 50/50 control/test, 100% rollout.
+If the user doesn't mention rollout specifics, use defaults: 50/50 control/test, 100% rollout, with `control` as the baseline.
 
 ### Step 3: How to measure impact?
 
@@ -78,9 +78,9 @@ Two different percentages — do NOT mix them up:
 
 Key details:
 
-- First variant must have key `"control"`. Minimum 2, maximum 20 variants.
+- Minimum 2, maximum 20 variants. For new experiments, use `control` as the conventional baseline unless the user names another existing variant, then pass that key as `stats_config.baseline_variant_key`.
 - `rollout_percentage` defaults to 100 if omitted.
-- Stats default to Bayesian. Only set `stats_config` if the user requests Frequentist.
+- Stats default to Bayesian. Set `stats_config` only for a non-default stats method or an explicit baseline variant.
 
 ## After creation
 

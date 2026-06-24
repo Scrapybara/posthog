@@ -7,6 +7,7 @@ from django.db.models import Q
 
 import structlog
 import temporalio.activity
+from rest_framework.exceptions import ValidationError
 
 from posthog.schema import ExperimentFunnelMetric, ExperimentMeanMetric, ExperimentQuery, ExperimentRatioMetric
 
@@ -27,6 +28,7 @@ from posthog.temporal.experiments.utils import (
     get_metric,
 )
 
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -70,6 +72,16 @@ def _get_experiment_regular_metrics_for_hour_sync(hour: int) -> list[ExperimentR
     )
 
     for experiment in experiments:
+        try:
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
+        except ValidationError as error:
+            logger.warning(
+                "Skipping experiment metric discovery because baseline variant is invalid",
+                experiment_id=experiment.id,
+                error=str(error.detail),
+            )
+            continue
+
         all_metrics = (experiment.metrics or []) + (experiment.metrics_secondary or [])
 
         for metric in all_metrics:
@@ -87,6 +99,8 @@ def _get_experiment_regular_metrics_for_hour_sync(hour: int) -> list[ExperimentR
                 get_experiment_stats_method(experiment),
                 experiment.exposure_criteria,
                 only_count_matured_users=experiment.only_count_matured_users,
+                excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+                baseline_variant_key=baseline_variant_key,
             )
 
             experiment_metrics.append(
@@ -322,6 +336,16 @@ def _get_experiment_saved_metrics_for_hour_sync(hour: int) -> list[ExperimentSav
     ).prefetch_related("experimenttosavedmetric_set__saved_metric")
 
     for experiment in experiments:
+        try:
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(experiment)
+        except ValidationError as error:
+            logger.warning(
+                "Skipping experiment saved metric discovery because baseline variant is invalid",
+                experiment_id=experiment.id,
+                error=str(error.detail),
+            )
+            continue
+
         for exp_to_saved_metric in experiment.experimenttosavedmetric_set.all():
             saved_metric = exp_to_saved_metric.saved_metric
             metric_uuid = saved_metric.query.get("uuid")
@@ -340,6 +364,8 @@ def _get_experiment_saved_metrics_for_hour_sync(hour: int) -> list[ExperimentSav
                 get_experiment_stats_method(experiment),
                 experiment.exposure_criteria,
                 only_count_matured_users=experiment.only_count_matured_users,
+                excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+                baseline_variant_key=baseline_variant_key,
             )
 
             experiment_metrics.append(

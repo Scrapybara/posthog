@@ -26,6 +26,7 @@ from posthog.models.team.team import Team
 from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 
 from products.ai_observability.backend.models.llm_prompt import LLMPrompt
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.facade.contracts import CreateExperimentInput
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
@@ -73,21 +74,6 @@ class ExperimentParametersField(serializers.JSONField):
             data = deepcopy(data)
             variants = data["feature_flag_variants"]
             if isinstance(variants, list):
-                # Normalize a case-insensitive 'control' key (e.g. 'Control', 'CONTROL') down
-                # to lowercase 'control'. The downstream validator and runtime treat 'control'
-                # as a special key, so a typo in casing was the leading cause of the
-                # "Feature flag variants must contain a control variant" error in MCP traces —
-                # most often from LLM-generated payloads. Only rewrite when no exact 'control'
-                # match already exists, so we never collapse two distinct keys into a duplicate.
-                existing_keys = {v.get("key") for v in variants if isinstance(v, dict)}
-                if "control" not in existing_keys:
-                    for variant in variants:
-                        if not isinstance(variant, dict):
-                            continue
-                        key = variant.get("key")
-                        if isinstance(key, str) and key != "control" and key.lower() == "control":
-                            variant["key"] = "control"
-                            break
                 for variant in variants:
                     if isinstance(variant, dict) and "split_percent" in variant:
                         # split_percent wins in case both keys present, as rollout_percentage deprecated
@@ -102,6 +88,49 @@ class ExperimentExposureCriteriaField(serializers.JSONField):
 
 @extend_schema_field(ExperimentRunningTimeCalculation)  # type: ignore[arg-type]
 class ExperimentRunningTimeCalculationField(serializers.JSONField):
+    pass
+
+
+@extend_schema_field(
+    {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "method": {
+                "type": "string",
+                "enum": ["bayesian", "frequentist"],
+                "description": "Statistical engine used for experiment analysis.",
+            },
+            "baseline_variant_key": {
+                "type": "string",
+                "description": (
+                    "Variant key all other variants are compared against. The key must exist in "
+                    "feature_flag_variants and must not be excluded from analysis."
+                ),
+            },
+            "version": {
+                "type": "integer",
+                "description": "Stats configuration version.",
+            },
+            "bayesian": {
+                "type": "object",
+                "additionalProperties": True,
+                "description": "Bayesian engine options.",
+            },
+            "frequentist": {
+                "type": "object",
+                "additionalProperties": True,
+                "description": "Frequentist engine options.",
+            },
+            "cuped": {
+                "type": "object",
+                "additionalProperties": True,
+                "description": "CUPED variance-reduction options.",
+            },
+        },
+    }
+)
+class ExperimentStatsConfigField(serializers.JSONField):
     pass
 
 
@@ -200,6 +229,16 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
         required=False,
         allow_null=True,
         help_text="Exposure configuration including filter test accounts and custom exposure events.",
+    )
+    stats_config = ExperimentStatsConfigField(
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Statistical analysis configuration. Supported keys include `method` (`bayesian` or `frequentist`) "
+            "and `baseline_variant_key`, the variant key all other variants are compared against. "
+            "When `baseline_variant_key` is omitted, analysis uses `control` if present, otherwise the first "
+            "configured variant. The baseline variant must exist and cannot be excluded from analysis."
+        ),
     )
     conclusion = serializers.ChoiceField(
         choices=["won", "lost", "inconclusive", "stopped_early", "invalid"],
@@ -344,6 +383,11 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
 
         # Update date ranges in saved metrics
         # Note: Action name refresh is handled by ExperimentToSavedMetricSerializer.to_representation
+        try:
+            baseline_variant_key = get_experiment_fingerprint_baseline_variant_key(instance)
+        except ValidationError:
+            baseline_variant_key = None
+
         for saved_metric in data.get("saved_metrics", []):
             if saved_metric.get("query"):
                 if saved_metric["query"].get("count_query", {}).get("dateRange"):
@@ -353,14 +397,16 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
 
                 # Add fingerprint to saved metric returned from API
                 # so that frontend knows what timeseries records to query
-                saved_metric["query"]["fingerprint"] = compute_metric_fingerprint(
-                    saved_metric["query"],
-                    instance.start_date,
-                    get_experiment_stats_method(instance),
-                    instance.exposure_criteria,
-                    only_count_matured_users=instance.only_count_matured_users,
-                    excluded_variants=(instance.parameters or {}).get("excluded_variants"),
-                )
+                if baseline_variant_key is not None:
+                    saved_metric["query"]["fingerprint"] = compute_metric_fingerprint(
+                        saved_metric["query"],
+                        instance.start_date,
+                        get_experiment_stats_method(instance),
+                        instance.exposure_criteria,
+                        only_count_matured_users=instance.only_count_matured_users,
+                        excluded_variants=(instance.parameters or {}).get("excluded_variants"),
+                        baseline_variant_key=baseline_variant_key,
+                    )
 
         return data
 
@@ -368,12 +414,27 @@ class ExperimentSerializer(UserAccessControlSerializerMixin, serializers.ModelSe
         ExperimentService.validate_saved_metrics_ids(value, self.context["team_id"])
         return value
 
+    def _stats_config_for_validation(self, data: dict | None = None) -> dict | None:
+        data = data or {}
+        if "stats_config" in data:
+            return data.get("stats_config")
+        if isinstance(self.initial_data, dict) and "stats_config" in self.initial_data:
+            return self.initial_data.get("stats_config")
+        if self.instance is not None:
+            return self.instance.stats_config
+        return None
+
     def validate(self, data):
         ExperimentService.validate_experiment_date_range(data.get("start_date"), data.get("end_date"))
+        if "parameters" in data or "stats_config" in data:
+            ExperimentService.validate_experiment_parameters(
+                data.get("parameters", self.instance.parameters if self.instance is not None else None),
+                self._stats_config_for_validation(data),
+            )
         return super().validate(data)
 
     def validate_parameters(self, value):
-        ExperimentService.validate_experiment_parameters(value)
+        ExperimentService.validate_experiment_parameters(value, self._stats_config_for_validation())
         return value
 
     def validate_running_time_calculation(self, value):
@@ -554,7 +615,7 @@ class CreateFromPromptInputSerializer(serializers.Serializer):
         max_length=CREATE_FROM_PROMPT_MAX_VERSIONS,
         help_text=(
             "Ordered list of prompt version numbers to assign to experiment variants. "
-            "The first entry is the control variant. Must contain between "
+            "The first entry becomes the conventional control baseline variant. Must contain between "
             f"{CREATE_FROM_PROMPT_MIN_VERSIONS} and {CREATE_FROM_PROMPT_MAX_VERSIONS} distinct versions."
         ),
     )

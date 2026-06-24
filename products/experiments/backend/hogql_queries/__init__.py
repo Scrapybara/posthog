@@ -1,4 +1,4 @@
-# The FF variant name for control
+# The conventional FF variant name used as the legacy default baseline
 CONTROL_VARIANT_KEY = "control"
 
 # The FF variant name for multiple variants

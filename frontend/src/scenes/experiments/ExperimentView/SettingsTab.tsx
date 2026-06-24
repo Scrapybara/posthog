@@ -1,7 +1,7 @@
 import { useActions, useValues } from 'kea'
 
 import { IconPencil } from '@posthog/icons'
-import { LemonButton, LemonCheckbox, LemonSelect, LemonTag, Link } from '@posthog/lemon-ui'
+import { LemonBanner, LemonButton, LemonCheckbox, LemonSelect, LemonTag, Link } from '@posthog/lemon-ui'
 
 import { LinkedHogFunctions } from 'scenes/hog-functions/list/LinkedHogFunctions'
 import { experimentsConfigLogic } from 'scenes/settings/environment/experimentsConfigLogic'
@@ -9,6 +9,7 @@ import { urls } from 'scenes/urls'
 
 import { ExperimentStatsMethod, PropertyFilterType, PropertyOperator } from '~/types'
 
+import { isBaselineVariantKeyValid, resolveBaselineVariantKey } from '../baseline'
 import { DEFAULT_LOOKBACK_DAYS } from '../constants'
 import { experimentLogic } from '../experimentLogic'
 import { modalsLogic } from '../modalsLogic'
@@ -18,7 +19,7 @@ import { resolveSequentialEnabled } from './sequential'
 import { StatsMethodModal } from './StatsMethodModal'
 
 export function SettingsTab(): JSX.Element {
-    const { experiment, statsMethod, variants } = useValues(experimentLogic)
+    const { experiment, statsMethod, variants, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings } = useActions(experimentLogic)
     const { openStatsEngineModal, openCupedModal } = useActions(modalsLogic)
     const { experimentsConfig } = useValues(experimentsConfigLogic)
@@ -46,6 +47,9 @@ export function SettingsTab(): JSX.Element {
     )
 
     const returnTo = urls.experiment(experiment.id)
+    const baselineVariantKey = resolveBaselineVariantKey(variants, experiment)
+    const explicitBaselineVariantKey = experiment.stats_config?.baseline_variant_key
+    const baselineVariantKeyIsValid = isBaselineVariantKeyValid(variants, explicitBaselineVariantKey)
 
     // Only show alerts section for saved experiments, as the alert relies on experiment.id for filtering
     const shouldShowSignificanceAlerts = typeof experiment.id === 'number'
@@ -89,19 +93,31 @@ export function SettingsTab(): JSX.Element {
             </div>
             <div>
                 <h2 className="font-semibold text-lg">Baseline variant</h2>
+                {!baselineVariantKeyIsValid && (
+                    <LemonBanner type="warning" className="mb-2">
+                        Baseline variant "{explicitBaselineVariantKey}" is no longer in this experiment's variants. Pick
+                        a valid baseline before refreshing results.
+                    </LemonBanner>
+                )}
                 <LemonSelect
-                    value={experiment.stats_config?.baseline_variant_key ?? 'control'}
+                    value={baselineVariantKeyIsValid ? baselineVariantKey : undefined}
                     options={variants.map((v) => ({
                         value: v.key,
                         label: v.key,
                     }))}
                     onChange={(value) => {
+                        if (experimentUpdateLoading) {
+                            return
+                        }
                         updateExperimentSettings({
                             stats_config: { ...experiment.stats_config, baseline_variant_key: value },
                         })
                     }}
+                    disabledReason={experimentUpdateLoading ? 'Saving baseline variant' : undefined}
                 />
-                <p className="text-muted text-xs mt-1">The variant all others are compared against.</p>
+                <p className="text-muted text-xs mt-1">
+                    The variant all others are compared against. Variant keys are not renamed.
+                </p>
             </div>
             <div>
                 <h2 className="font-semibold text-lg">Conversion windows</h2>
@@ -110,8 +126,12 @@ export function SettingsTab(): JSX.Element {
                         label="Require completed conversion or retention window"
                         checked={experiment.only_count_matured_users ?? false}
                         onChange={(checked) => {
+                            if (experimentUpdateLoading) {
+                                return
+                            }
                             updateExperimentSettings({ only_count_matured_users: checked })
                         }}
+                        disabledReason={experimentUpdateLoading ? 'Saving conversion window setting' : undefined}
                     />
                 </div>
                 <p className="text-muted text-xs mt-1">

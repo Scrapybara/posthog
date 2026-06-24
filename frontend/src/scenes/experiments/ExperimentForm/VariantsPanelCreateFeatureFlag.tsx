@@ -9,6 +9,7 @@ import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { LemonCheckbox } from 'lib/lemon-ui/LemonCheckbox'
 import { LemonField } from 'lib/lemon-ui/LemonField'
 import { LemonInput } from 'lib/lemon-ui/LemonInput'
+import { LemonSelect } from 'lib/lemon-ui/LemonSelect'
 import { LemonSlider } from 'lib/lemon-ui/LemonSlider'
 import { Lettermark, LettermarkColor } from 'lib/lemon-ui/Lettermark'
 import { Link } from 'lib/lemon-ui/Link/Link'
@@ -18,6 +19,7 @@ import { teamLogic } from 'scenes/teamLogic'
 
 import type { Experiment, MultivariateFlagVariant } from '~/types'
 
+import { resolveBaselineVariantKey } from '../baseline'
 import { NEW_EXPERIMENT } from '../constants'
 import { ensureIsPercent, isEvenlyDistributed } from '../utils'
 import {
@@ -39,6 +41,7 @@ interface VariantsPanelCreateFeatureFlagProps {
             ensure_experience_continuity?: boolean
             rollout_percentage?: number
         }
+        stats_config?: Experiment['stats_config']
     }) => void
     disabled?: boolean
     layout?: 'horizontal' | 'vertical'
@@ -91,6 +94,7 @@ export const VariantsPanelCreateFeatureFlag = ({
 }: VariantsPanelCreateFeatureFlagProps): JSX.Element => {
     const { currentTeam } = useValues(teamLogic)
     const [isCustomSplit, setIsCustomSplit] = useState(false)
+    const [baselineVariantEditIndex, setBaselineVariantEditIndex] = useState<number | null>(null)
 
     const variants = experiment.parameters?.feature_flag_variants || [
         { key: 'control', rollout_percentage: 50 },
@@ -104,6 +108,7 @@ export const VariantsPanelCreateFeatureFlag = ({
 
     const rolloutPercentage =
         experiment.parameters?.rollout_percentage ?? NEW_EXPERIMENT.parameters.rollout_percentage ?? 100
+    const baselineVariantKey = resolveBaselineVariantKey(variants, experiment)
 
     const updateRolloutPercentage = (value: number): void => {
         onChange({
@@ -131,17 +136,39 @@ export const VariantsPanelCreateFeatureFlag = ({
 
     const updateVariant = (index: number, updates: Partial<MultivariateFlagVariant>): void => {
         const newVariants = [...variants]
+        const previousKey = newVariants[index]?.key
         newVariants[index] = { ...newVariants[index], ...updates }
-        updateVariants(newVariants)
+        const updatesVariantKey = Object.prototype.hasOwnProperty.call(updates, 'key')
+        const isEditingBaselineVariant = previousKey === baselineVariantKey || baselineVariantEditIndex === index
+
+        if (updatesVariantKey && isEditingBaselineVariant) {
+            if (updates.key) {
+                setBaselineVariantEditIndex(null)
+                updateVariants(newVariants, updates.key)
+            } else {
+                setBaselineVariantEditIndex(index)
+                updateVariants(newVariants, baselineVariantKey)
+            }
+            return
+        }
+
+        updateVariants(newVariants, baselineVariantKey)
     }
 
-    const updateVariants = (newVariants: MultivariateFlagVariant[]): void => {
+    const updateVariants = (
+        newVariants: MultivariateFlagVariant[],
+        nextBaselineVariantKey = resolveBaselineVariantKey(newVariants, experiment)
+    ): void => {
         onChange({
             parameters: {
                 ...experiment.parameters,
                 feature_flag_variants: newVariants,
                 ensure_experience_continuity: ensureExperienceContinuity,
                 rollout_percentage: rolloutPercentage,
+            },
+            stats_config: {
+                ...experiment.stats_config,
+                baseline_variant_key: nextBaselineVariantKey,
             },
         })
     }
@@ -158,10 +185,32 @@ export const VariantsPanelCreateFeatureFlag = ({
     }
 
     const removeVariant = (index: number): void => {
-        if (variants.length <= 2 || index === 0) {
+        if (variants.length <= 2) {
             return
         }
-        updateVariants(distributeVariantsEvenly(variants.filter((_, i) => i !== index)))
+        const newVariants = distributeVariantsEvenly(variants.filter((_, i) => i !== index))
+        const removedBaselineVariant = variants[index].key === baselineVariantKey || baselineVariantEditIndex === index
+
+        if (removedBaselineVariant) {
+            setBaselineVariantEditIndex(null)
+        } else if (baselineVariantEditIndex !== null && index < baselineVariantEditIndex) {
+            setBaselineVariantEditIndex(baselineVariantEditIndex - 1)
+        }
+
+        updateVariants(
+            newVariants,
+            removedBaselineVariant ? resolveBaselineVariantKey(newVariants) : baselineVariantKey
+        )
+    }
+
+    const updateBaselineVariant = (baseline_variant_key: string): void => {
+        setBaselineVariantEditIndex(null)
+        onChange({
+            stats_config: {
+                ...experiment.stats_config,
+                baseline_variant_key,
+            },
+        })
     }
 
     return (
@@ -190,9 +239,27 @@ export const VariantsPanelCreateFeatureFlag = ({
                             {!disabled && !isEvenlyDistributed(variants) && (
                                 <LemonBanner type="warning" className="mb-3">
                                     In most cases, experiments work best with an equal split. If you want to limit
-                                    exposure to the test variant, adjust the rollout percentage instead.
+                                    exposure to a variant, adjust the rollout percentage instead.
                                 </LemonBanner>
                             )}
+                            <div className="mt-4">
+                                <LemonField.Pure label="Baseline variant">
+                                    <LemonSelect
+                                        value={baselineVariantKey}
+                                        options={variants.map((variant) => ({
+                                            value: variant.key,
+                                            label: variant.key,
+                                        }))}
+                                        onChange={updateBaselineVariant}
+                                        disabledReason={
+                                            disabled ? 'Cannot edit baseline variant in edit mode' : undefined
+                                        }
+                                    />
+                                </LemonField.Pure>
+                                <p className="text-muted text-xs mt-1">
+                                    The variant all others are compared against. Variant keys are not renamed.
+                                </p>
+                            </div>
                             <table className="w-full">
                                 <thead>
                                     <tr className="text-sm font-bold">
@@ -242,11 +309,7 @@ export const VariantsPanelCreateFeatureFlag = ({
                                                 <LemonInput
                                                     value={variant.key}
                                                     disabledReason={
-                                                        disabled
-                                                            ? 'Cannot edit feature flag in edit mode'
-                                                            : variant.key === 'control'
-                                                              ? 'Control variant cannot be changed'
-                                                              : null
+                                                        disabled ? 'Cannot edit feature flag in edit mode' : null
                                                     }
                                                     onChange={(value) =>
                                                         updateVariant(index, { key: value.replace(/\s+/g, '-') })
@@ -289,7 +352,7 @@ export const VariantsPanelCreateFeatureFlag = ({
                                                             })}
                                                         </div>
                                                     )}
-                                                    {!disabled && variants.length > 2 && index > 0 && (
+                                                    {!disabled && variants.length > 2 && (
                                                         <LemonButton
                                                             icon={<IconTrash />}
                                                             data-attr={`delete-prop-filter-${index}`}

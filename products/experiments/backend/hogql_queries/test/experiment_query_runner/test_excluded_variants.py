@@ -98,3 +98,13 @@ def test_fingerprint_changes_when_excluded_variants_change():
     assert fp_two != fp_one
     assert fp_two_reversed == fp_two, "Order of excluded keys must not affect fingerprint"
     assert fp_one != fp_one_other
+
+
+def test_fingerprint_changes_when_baseline_variant_changes():
+    metric = {"kind": "ExperimentMeanMetric", "source": {"kind": "EventsNode", "event": "$pageview"}}
+    start = "2026-01-01T00:00:00+00:00"
+
+    fp_control = compute_metric_fingerprint(metric, start, baseline_variant_key="control")
+    fp_test = compute_metric_fingerprint(metric, start, baseline_variant_key="test")
+
+    assert fp_control != fp_test

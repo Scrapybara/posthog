@@ -23,7 +23,9 @@ from posthog.models.team.extensions import get_or_create_team_extension
 from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
 from products.event_definitions.backend.models.event_definition import EventDefinition
+from products.experiments.backend.baseline import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.experiment_service import ExperimentService
+from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.models.experiment import (
     Experiment,
     ExperimentHoldout,
@@ -349,7 +351,7 @@ class TestExperimentService(APIBaseTest):
     # Flag validation errors
     # ------------------------------------------------------------------
 
-    def test_existing_flag_without_control_raises(self):
+    def test_existing_flag_without_control_uses_first_variant_default_baseline(self):
         self._create_flag(
             key="no-control",
             variants=[
@@ -359,10 +361,10 @@ class TestExperimentService(APIBaseTest):
         )
         service = self._service()
 
-        with self.assertRaises(ValidationError) as ctx:
-            service.create_experiment(name="Bad Flag", feature_flag_key="no-control")
+        experiment = service.create_experiment(name="No Control Flag", feature_flag_key="no-control")
 
-        assert "control" in str(ctx.exception)
+        assert experiment.stats_config == {"method": "bayesian"}
+        assert [variant["key"] for variant in experiment.feature_flag.variants] == ["baseline", "test"]
 
     def test_existing_flag_with_one_variant_raises(self):
         self._create_flag(
@@ -2072,12 +2074,30 @@ class TestExperimentService(APIBaseTest):
         assert groups[0]["properties"] == [{"key": "country", "value": "US", "type": "person"}]
         assert groups[0]["rollout_percentage"] == 50
 
-    def test_launch_experiment_flag_modified_to_invalid_raises(self):
-        """Flag modified after experiment creation to remove control variant. Launch should fail."""
+    def test_launch_experiment_flag_without_control_uses_first_variant_default_baseline(self):
         flag = self._create_flag(key="will-break")
         experiment = self._create_launchable_experiment(name="Will Break", feature_flag_key="will-break")
 
-        # Simulate someone modifying the flag to remove "control"
+        flag.filters["multivariate"]["variants"] = [
+            {"key": "variant_a", "rollout_percentage": 50},
+            {"key": "variant_b", "rollout_percentage": 50},
+        ]
+        flag.save()
+        experiment.feature_flag.refresh_from_db()
+
+        launched = self._service().launch_experiment(experiment)
+
+        assert launched.start_date is not None
+        assert launched.feature_flag.active is True
+
+    def test_launch_experiment_flag_modified_to_remove_explicit_baseline_raises(self):
+        flag = self._create_flag(key="explicit-baseline-will-break")
+        experiment = self._create_launchable_experiment(
+            name="Explicit Baseline Will Break",
+            feature_flag_key="explicit-baseline-will-break",
+            stats_config={"baseline_variant_key": "control"},
+        )
+
         flag.filters["multivariate"]["variants"] = [
             {"key": "variant_a", "rollout_percentage": 50},
             {"key": "variant_b", "rollout_percentage": 50},
@@ -2088,7 +2108,7 @@ class TestExperimentService(APIBaseTest):
         with self.assertRaises(ValidationError) as ctx:
             self._service().launch_experiment(experiment)
 
-        assert "control" in str(ctx.exception).lower()
+        assert "baseline_variant_key" in str(ctx.exception)
 
     def test_launch_experiment_flag_reduced_to_single_variant_raises(self):
         """Flag modified to have only 1 variant. Launch should fail."""
@@ -3246,9 +3266,9 @@ class TestExperimentService(APIBaseTest):
     # Eligible feature flags
     # ------------------------------------------------------------------
 
-    def test_get_eligible_feature_flags_only_returns_control_first_multivariate_flags(self) -> None:
+    def test_get_eligible_feature_flags_returns_multivariate_flags_with_at_least_two_variants(self) -> None:
         eligible_flag = self._create_flag(key="eligible-flag")
-        self._create_flag(
+        wrong_order_flag = self._create_flag(
             key="wrong-order-flag",
             variants=[
                 {"key": "test", "name": "Test", "rollout_percentage": 50},
@@ -3262,8 +3282,8 @@ class TestExperimentService(APIBaseTest):
 
         result = self._service().get_eligible_feature_flags(order="key")
 
-        assert result["count"] == 1
-        assert [flag.key for flag in result["results"]] == [eligible_flag.key]
+        assert result["count"] == 2
+        assert [flag.key for flag in result["results"]] == [eligible_flag.key, wrong_order_flag.key]
 
     def test_get_eligible_feature_flags_applies_search_and_pagination(self) -> None:
         self._create_flag(key="search-alpha")
@@ -4947,12 +4967,15 @@ class TestExperimentService(APIBaseTest):
             ("empty_stats_config", {}, VARIANT_KEYS, False),
             ("unknown_baseline_no_variant_keys", {"baseline_variant_key": "nonexistent"}, None, False),
             ("unknown_baseline_empty_variant_keys", {"baseline_variant_key": "nonexistent"}, [], False),
+            ("empty_baseline", {"baseline_variant_key": ""}, VARIANT_KEYS, True),
+            ("non_string_baseline", {"baseline_variant_key": 42}, VARIANT_KEYS, True),
+            ("non_object_stats_config", "bayesian", VARIANT_KEYS, True),
         ]
     )
     def test_validate_stats_config_baseline_variant_key(
         self,
         _name: str,
-        stats_config: dict | None,
+        stats_config: Any,
         variant_keys: list[str] | None,
         expect_error: bool,
     ) -> None:
@@ -5029,6 +5052,197 @@ class TestExperimentService(APIBaseTest):
                     }
                 },
             )
+
+    @parameterized.expand(
+        [
+            ("draft", None, None, True),
+            ("running", timezone.now(), None, True),
+            ("paused", timezone.now(), None, False),
+            ("completed", timezone.now() - timedelta(days=2), timezone.now() - timedelta(days=1), False),
+        ]
+    )
+    def test_update_experiment_allows_changing_valid_baseline_by_status(
+        self,
+        _name: str,
+        start_date,
+        end_date,
+        flag_active: bool,
+    ) -> None:
+        flag = self._create_flag(
+            key=f"baseline-status-{_name}",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 33},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 33},
+            ],
+        )
+        flag.active = flag_active
+        flag.save()
+        service = self._service()
+        experiment = service.create_experiment(
+            name=f"Baseline status {_name}",
+            feature_flag_key=flag.key,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        updated = service.update_experiment(
+            experiment,
+            {"stats_config": {**(experiment.stats_config or {}), "baseline_variant_key": "variant-a"}},
+        )
+
+        assert updated.stats_config["baseline_variant_key"] == "variant-a"
+
+    def test_implicit_default_baseline_does_not_change_metric_fingerprint(self) -> None:
+        flag = self._create_flag(
+            key="implicit-baseline-fingerprint",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 50},
+                {"key": "test", "name": "Test", "rollout_percentage": 50},
+            ],
+        )
+        service = self._service()
+        experiment = service.create_experiment(name="Implicit baseline fingerprint", feature_flag_key=flag.key)
+        metric = {"uuid": "metric-1", "kind": "ExperimentMetric", "metric_type": "mean"}
+
+        assert get_experiment_fingerprint_baseline_variant_key(experiment) is None
+        assert compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
+        ) == compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
+
+    def test_explicit_baseline_changes_metric_fingerprint(self) -> None:
+        flag = self._create_flag(
+            key="explicit-baseline-fingerprint",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 33},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 33},
+            ],
+        )
+        service = self._service()
+        experiment = service.create_experiment(
+            name="Explicit baseline fingerprint",
+            feature_flag_key=flag.key,
+            stats_config={"baseline_variant_key": "variant-a"},
+        )
+        metric = {"uuid": "metric-1", "kind": "ExperimentMetric", "metric_type": "mean"}
+
+        assert get_experiment_fingerprint_baseline_variant_key(experiment) == "variant-a"
+        assert compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
+        ) != compute_metric_fingerprint(
+            metric,
+            experiment.start_date,
+            "bayesian",
+            experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
+        )
+
+    def test_update_experiment_allows_excluding_control_when_explicit_baseline_is_different(self) -> None:
+        self._create_flag(
+            key="baseline-exclude-control",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "test-1", "name": "Test 1", "rollout_percentage": 33},
+                {"key": "test-2", "name": "Test 2", "rollout_percentage": 33},
+            ],
+        )
+        service = self._service()
+        experiment = service.create_experiment(
+            name="Exclude control with custom baseline",
+            feature_flag_key="baseline-exclude-control",
+            stats_config={"baseline_variant_key": "test-1"},
+        )
+
+        updated = service.update_experiment(
+            experiment,
+            {
+                "parameters": {
+                    "feature_flag_variants": [
+                        {"key": "control", "name": "Control", "rollout_percentage": 34},
+                        {"key": "test-1", "name": "Test 1", "rollout_percentage": 33},
+                        {"key": "test-2", "name": "Test 2", "rollout_percentage": 33},
+                    ],
+                    "excluded_variants": ["control"],
+                }
+            },
+        )
+
+        assert updated.parameters is not None
+        assert updated.parameters["excluded_variants"] == ["control"]
+        assert updated.stats_config["baseline_variant_key"] == "test-1"
+
+    def test_duplicate_experiment_preserves_custom_baseline(self) -> None:
+        self._create_flag(
+            key="dup-custom-baseline-source",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 34},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 33},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 33},
+            ],
+        )
+        service = self._service()
+        source = service.create_experiment(
+            name="Custom baseline source",
+            feature_flag_key="dup-custom-baseline-source",
+            stats_config={"baseline_variant_key": "variant-a"},
+        )
+
+        duplicate = service.duplicate_experiment(source, feature_flag_key="dup-custom-baseline-target")
+
+        assert duplicate.stats_config["baseline_variant_key"] == "variant-a"
+        assert [variant["key"] for variant in duplicate.feature_flag.variants] == [
+            "control",
+            "variant-a",
+            "variant-b",
+        ]
+
+    def test_duplicate_experiment_rejects_custom_baseline_missing_from_existing_target_flag(self) -> None:
+        self._create_flag(
+            key="dup-missing-baseline-source",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 50},
+                {"key": "variant-a", "name": "Variant A", "rollout_percentage": 50},
+            ],
+        )
+        self._create_flag(
+            key="dup-missing-baseline-target",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 50},
+                {"key": "variant-b", "name": "Variant B", "rollout_percentage": 50},
+            ],
+        )
+        service = self._service()
+        source = service.create_experiment(
+            name="Custom baseline source",
+            feature_flag_key="dup-missing-baseline-source",
+            stats_config={"baseline_variant_key": "variant-a"},
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            service.duplicate_experiment(source, feature_flag_key="dup-missing-baseline-target")
+
+        assert "baseline_variant_key" in str(ctx.exception)
 
 
 class TestValidateExperimentParametersExcludedVariants:

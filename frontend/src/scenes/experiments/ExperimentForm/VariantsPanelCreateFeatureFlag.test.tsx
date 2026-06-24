@@ -2,6 +2,7 @@ import '@testing-library/jest-dom'
 
 import { type RenderResult, cleanup, render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 
 import { MAX_EXPERIMENT_VARIANTS } from 'lib/constants'
 
@@ -22,6 +23,19 @@ jest.mock('scenes/feature-flags/JSONEditorInput', () => ({
             placeholder={placeholder}
             readOnly={readOnly}
         />
+    ),
+}))
+
+jest.mock('lib/lemon-ui/LemonSelect', () => ({
+    LemonSelect: ({ value, options, onChange, disabledReason }: any) => (
+        <button
+            aria-label="Baseline variant"
+            type="button"
+            disabled={!!disabledReason}
+            onClick={() => onChange?.((options.find((option: any) => option.value !== value) ?? options[0])?.value)}
+        >
+            Select baseline variant
+        </button>
     ),
 }))
 
@@ -129,6 +143,7 @@ describe('VariantsPanelCreateFeatureFlag', () => {
                         expect.objectContaining({ key: 'test-2' }),
                     ]),
                 }),
+                stats_config: expect.objectContaining({ baseline_variant_key: 'control' }),
             })
         })
 
@@ -138,13 +153,15 @@ describe('VariantsPanelCreateFeatureFlag', () => {
             const addButton = screen.getByRole('button', { name: /add variant/i })
             await userEvent.click(addButton)
 
-            expect(mockOnChange).toHaveBeenCalledWith({
-                parameters: expect.objectContaining({
-                    feature_flag_variants: expect.arrayContaining([
-                        expect.objectContaining({ rollout_percentage: expect.any(Number) }),
-                    ]),
-                }),
-            })
+            expect(mockOnChange).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    parameters: expect.objectContaining({
+                        feature_flag_variants: expect.arrayContaining([
+                            expect.objectContaining({ rollout_percentage: expect.any(Number) }),
+                        ]),
+                    }),
+                })
+            )
 
             // Check that percentages sum to 100
             const call = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0]
@@ -238,20 +255,21 @@ describe('VariantsPanelCreateFeatureFlag', () => {
 
             const deleteButtons = container.querySelectorAll('[data-attr^="delete-prop-filter"]')
 
-            // Click the first delete button (which is for the second variant, since control has no delete button)
+            // Click the first delete button, which removes the current baseline.
             await userEvent.click(deleteButtons[0] as Element)
 
             expect(mockOnChange).toHaveBeenCalledWith({
                 parameters: expect.objectContaining({
                     feature_flag_variants: expect.arrayContaining([
-                        expect.objectContaining({ key: 'control' }),
+                        expect.objectContaining({ key: 'test' }),
                         expect.objectContaining({ key: 'test-2' }),
                     ]),
                 }),
+                stats_config: expect.objectContaining({ baseline_variant_key: 'test' }),
             })
         })
 
-        it('does not show delete button for control variant', () => {
+        it('allows removing the current baseline when another variant remains', () => {
             const experimentWithThreeVariants = {
                 ...defaultExperiment,
                 parameters: {
@@ -268,11 +286,73 @@ describe('VariantsPanelCreateFeatureFlag', () => {
             )
 
             const rows = container.querySelectorAll('tbody tr')
-            const controlRow = rows[0] // First row (control variant)
+            const baselineRow = rows[0]
 
-            // Control variant should not have a delete button
-            const deleteButton = controlRow.querySelector('[data-attr^="delete-prop-filter"]')
-            expect(deleteButton).not.toBeInTheDocument()
+            expect(baselineRow.querySelector('[data-attr^="delete-prop-filter"]')).toBeInTheDocument()
+        })
+
+        it('updates the baseline when selecting a different variant', async () => {
+            renderComponent(defaultExperiment)
+
+            await userEvent.click(screen.getByLabelText('Baseline variant'))
+
+            expect(mockOnChange).toHaveBeenCalledWith({
+                stats_config: expect.objectContaining({ baseline_variant_key: 'test' }),
+            })
+        })
+
+        it('keeps an explicit baseline variant when editing another variant key', async () => {
+            const experimentWithTestBaseline = {
+                ...defaultExperiment,
+                stats_config: { baseline_variant_key: 'test' },
+            }
+
+            renderComponent(experimentWithTestBaseline)
+
+            const variantInputs = screen.getAllByPlaceholderText(/example-variant/)
+            await userEvent.clear(variantInputs[0])
+            await userEvent.type(variantInputs[0], 'baseline')
+
+            const lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0]
+            expect(lastCall.stats_config).toEqual(expect.objectContaining({ baseline_variant_key: 'test' }))
+        })
+
+        it('keeps the baseline attached when clearing and retyping its variant key', async () => {
+            const ControlledPanel = (): JSX.Element => {
+                const [experiment, setExperiment] = useState<Experiment>({
+                    ...defaultExperiment,
+                    stats_config: { baseline_variant_key: 'control' },
+                })
+
+                return (
+                    <VariantsPanelCreateFeatureFlag
+                        experiment={experiment}
+                        onChange={(updates) => {
+                            mockOnChange(updates)
+                            setExperiment((current) => ({
+                                ...current,
+                                ...updates,
+                                parameters: updates.parameters
+                                    ? { ...current.parameters, ...updates.parameters }
+                                    : current.parameters,
+                                stats_config: updates.stats_config
+                                    ? { ...current.stats_config, ...updates.stats_config }
+                                    : current.stats_config,
+                            }))
+                        }}
+                    />
+                )
+            }
+
+            render(<ControlledPanel />)
+
+            const variantInputs = screen.getAllByPlaceholderText(/example-variant/)
+            await userEvent.clear(variantInputs[0])
+            await userEvent.type(variantInputs[0], 'baseline')
+
+            const lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0]
+            expect(lastCall.parameters.feature_flag_variants[0].key).toBe('baseline')
+            expect(lastCall.stats_config).toEqual(expect.objectContaining({ baseline_variant_key: 'baseline' }))
         })
     })
 
@@ -293,14 +373,16 @@ describe('VariantsPanelCreateFeatureFlag', () => {
             const balanceButton = screen.getByTestId('distribute-variants-equally')
             await userEvent.click(balanceButton)
 
-            expect(mockOnChange).toHaveBeenCalledWith({
-                parameters: expect.objectContaining({
-                    feature_flag_variants: [
-                        expect.objectContaining({ key: 'control', rollout_percentage: 50 }),
-                        expect.objectContaining({ key: 'test', rollout_percentage: 50 }),
-                    ],
-                }),
-            })
+            expect(mockOnChange).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    parameters: expect.objectContaining({
+                        feature_flag_variants: [
+                            expect.objectContaining({ key: 'control', rollout_percentage: 50 }),
+                            expect.objectContaining({ key: 'test', rollout_percentage: 50 }),
+                        ],
+                    }),
+                })
+            )
         })
 
         it.each([

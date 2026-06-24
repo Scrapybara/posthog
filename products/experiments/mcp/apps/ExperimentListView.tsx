@@ -4,7 +4,7 @@ import { DataTable, type DataTableColumn, ListDetailView, formatDate } from '@po
 import { Badge, Button } from '@posthog/quill'
 
 import { ExperimentView } from './ExperimentView'
-import { ExperimentData, getStatus } from './utils'
+import { ExperimentData, getBaselineVariantKey, getStatus } from './utils'
 
 export interface ExperimentListData {
     count?: number
@@ -71,10 +71,11 @@ export function ExperimentListView({ data, onExperimentClick }: ExperimentListVi
                             if (!variants || variants.length === 0) {
                                 return <span className="text-muted-foreground">&mdash;</span>
                             }
+                            const baselineVariantKey = getBaselineVariantKey(row)
                             return (
                                 <div className="flex gap-1 flex-wrap">
                                     {variants.map((v) => (
-                                        <Badge key={v.key} variant={v.key === 'control' ? 'default' : 'info'}>
+                                        <Badge key={v.key} variant={v.key === baselineVariantKey ? 'default' : 'info'}>
                                             {v.key}
                                             {(v.split_percent ?? v.rollout_percentage) != null
                                                 ? `: ${v.split_percent ?? v.rollout_percentage}%`

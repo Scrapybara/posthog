@@ -3,6 +3,7 @@ from typing import cast
 from posthog.test.base import APIBaseTest
 
 from parameterized import parameterized
+from rest_framework.exceptions import ValidationError
 
 from posthog.schema import (
     EventsNode,
@@ -399,6 +400,79 @@ class TestStatsConfig(APIBaseTest):
         runner = ExperimentQueryRunner(query=query, team=self.team)
 
         self.assertEqual(runner.baseline_variant_key, expected_baseline)
+
+    @parameterized.expand(
+        [
+            ("legacy_without_control_uses_first_variant", None, "variant-a"),
+            ("explicit_valid_baseline_wins", {"baseline_variant_key": "variant-b"}, "variant-b"),
+        ]
+    )
+    def test_experiment_query_runner_resolves_non_control_baselines(
+        self, _name, stats_config, expected_baseline
+    ) -> None:
+        feature_flag = FeatureFlag.objects.create(
+            name="No control flag",
+            key="no-control-flag",
+            team=self.team,
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": None}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "variant-a", "name": "Variant A", "rollout_percentage": 50},
+                        {"key": "variant-b", "name": "Variant B", "rollout_percentage": 50},
+                    ]
+                },
+            },
+            created_by=self.user,
+        )
+        experiment = Experiment.objects.create(
+            name="no-control-experiment",
+            team=self.team,
+            feature_flag=feature_flag,
+            stats_config=stats_config,
+        )
+
+        runner = ExperimentQueryRunner(
+            query=ExperimentQuery(
+                experiment_id=experiment.id, kind="ExperimentQuery", metric=self.create_mean_metric()
+            ),
+            team=self.team,
+        )
+
+        self.assertEqual(runner.baseline_variant_key, expected_baseline)
+
+    def test_experiment_query_runner_rejects_removed_explicit_baseline(self) -> None:
+        feature_flag = FeatureFlag.objects.create(
+            name="Missing baseline flag",
+            key="missing-baseline-flag",
+            team=self.team,
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": None}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "variant-a", "name": "Variant A", "rollout_percentage": 50},
+                        {"key": "variant-b", "name": "Variant B", "rollout_percentage": 50},
+                    ]
+                },
+            },
+            created_by=self.user,
+        )
+        experiment = Experiment.objects.create(
+            name="missing-baseline-experiment",
+            team=self.team,
+            feature_flag=feature_flag,
+            stats_config={"baseline_variant_key": "control"},
+        )
+
+        with self.assertRaises(ValidationError):
+            ExperimentQueryRunner(
+                query=ExperimentQuery(
+                    experiment_id=experiment.id,
+                    kind="ExperimentQuery",
+                    metric=self.create_mean_metric(),
+                ),
+                team=self.team,
+            )
 
 
 class TestSequentialStatsConfig(APIBaseTest):

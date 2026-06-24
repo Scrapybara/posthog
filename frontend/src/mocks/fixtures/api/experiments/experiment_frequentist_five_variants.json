@@ -1,6 +1,6 @@
 {
     "id": 20,
-    "name": "frequentist-five-variants",
+    "name": "frequentist-five-variants-custom-baseline",
     "description": null,
     "start_date": "2025-05-25T13:33:00Z",
     "end_date": null,
@@ -149,10 +149,17 @@
             "uuid": "fb633a4e-f3a9-429a-8b89-3f4e6967a71a"
         }
     ],
-    "primary_metrics_ordered_uuids": ["645b7e87-0e3b-4543-8e75-6234d5310e64", "9f7d52f5-175a-4210-a1a9-804d8aca19af"],
-    "secondary_metrics_ordered_uuids": ["a89f1069-8f38-44c7-955e-fd325c5370b2", "fb633a4e-f3a9-429a-8b89-3f4e6967a71a"],
+    "primary_metrics_ordered_uuids": [
+        "645b7e87-0e3b-4543-8e75-6234d5310e64",
+        "9f7d52f5-175a-4210-a1a9-804d8aca19af"
+    ],
+    "secondary_metrics_ordered_uuids": [
+        "a89f1069-8f38-44c7-955e-fd325c5370b2",
+        "fb633a4e-f3a9-429a-8b89-3f4e6967a71a"
+    ],
     "stats_config": {
-        "method": "frequentist"
+        "method": "frequentist",
+        "baseline_variant_key": "test-2"
     },
     "conclusion": null,
     "conclusion_comment": null

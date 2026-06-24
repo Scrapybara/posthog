@@ -51,6 +51,8 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
         self.variants = [variant["key"] for variant in self.feature_flag.variants]
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
+        stats_config = self.experiment.stats_config or {}
+        self.baseline_variant_key = stats_config.get("baseline_variant_key") or CONTROL_VARIANT_KEY
 
         self.prepared_funnels_query = self._prepare_funnel_query()
         self.funnels_query_runner = FunnelsQueryRunner(
@@ -144,7 +146,7 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
     def _get_variants_with_base_stats(
         self, funnels_result: FunnelsQueryResponse
     ) -> tuple[ExperimentVariantFunnelsBaseStats, list[ExperimentVariantFunnelsBaseStats]]:
-        control_variant: Optional[ExperimentVariantFunnelsBaseStats] = None
+        baseline_variant: Optional[ExperimentVariantFunnelsBaseStats] = None
         test_variants = []
 
         for result in funnels_result.results:
@@ -158,8 +160,8 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
 
             breakdown_value = cast(list[str], first_step["breakdown_value"])[0]
 
-            if breakdown_value == CONTROL_VARIANT_KEY:
-                control_variant = ExperimentVariantFunnelsBaseStats(
+            if breakdown_value == self.baseline_variant_key:
+                baseline_variant = ExperimentVariantFunnelsBaseStats(
                     key=breakdown_value,
                     success_count=int(success),
                     failure_count=int(failure),
@@ -171,10 +173,10 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
                     )
                 )
 
-        if control_variant is None:
-            raise ValueError("Control variant not found in count results")
+        if baseline_variant is None:
+            raise ValueError(f"Baseline variant '{self.baseline_variant_key}' not found in count results")
 
-        return control_variant, test_variants
+        return baseline_variant, test_variants
 
     def _validate_event_variants(self, funnels_result: FunnelsQueryResponse):
         errors = {
@@ -193,15 +195,15 @@ class ExperimentFunnelsQueryRunner(QueryRunner):
                 if event_dict.get("order") == 0:
                     eventsWithOrderZero.append(event_dict)
 
-        # Check if "control" is present
+        # Check if the baseline variant is present
         for event in eventsWithOrderZero:
             event_variant = event.get("breakdown_value", [None])[0]
-            if event_variant == "control":
+            if event_variant == self.baseline_variant_key:
                 errors[ExperimentNoResultsErrorKeys.NO_CONTROL_VARIANT] = False
                 break
 
         # Check if at least one of the test variants is present
-        test_variants = [variant for variant in self.variants if variant != "control"]
+        test_variants = [variant for variant in self.variants if variant != self.baseline_variant_key]
         for event in eventsWithOrderZero:
             event_variant = event.get("breakdown_value", [None])[0]
             if event_variant in test_variants:

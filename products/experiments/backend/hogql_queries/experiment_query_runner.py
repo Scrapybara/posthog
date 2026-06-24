@@ -153,7 +153,7 @@ class ExperimentQueryRunner(QueryRunner):
         ]
 
         stats_config = self.experiment.stats_config or {}
-        self.baseline_variant_key = stats_config.get("baseline_variant_key", CONTROL_VARIANT_KEY)
+        self.baseline_variant_key = stats_config.get("baseline_variant_key") or CONTROL_VARIANT_KEY
 
         self.date_range = get_experiment_date_range(self.experiment, self.team, self.override_end_date)
         self.date_range_query = QueryDateRange(

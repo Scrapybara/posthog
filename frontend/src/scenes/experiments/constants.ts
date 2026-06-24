@@ -63,17 +63,17 @@ export const CONCLUSION_DISPLAY_CONFIG: Record<
 > = {
     [ExperimentConclusion.Won]: {
         title: 'Won',
-        description: 'The test variant(s) outperformed the control with statistical significance.',
+        description: 'The test variant(s) outperformed the baseline with statistical significance.',
         color: 'bg-success',
     },
     [ExperimentConclusion.Lost]: {
         title: 'Lost',
-        description: 'The test variant(s) underperformed compared to the control with statistical significance.',
+        description: 'The test variant(s) underperformed compared to the baseline with statistical significance.',
         color: 'bg-danger',
     },
     [ExperimentConclusion.Inconclusive]: {
         title: 'Inconclusive',
-        description: 'No significant difference was detected between the variant(s) and the control.',
+        description: 'No significant difference was detected between the variant(s) and the baseline.',
         color: 'bg-warning',
     },
     [ExperimentConclusion.StoppedEarly]: {

@@ -68,6 +68,8 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         self.variants = [variant["key"] for variant in self.feature_flag.variants]
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
+        stats_config = self.experiment.stats_config or {}
+        self.baseline_variant_key = stats_config.get("baseline_variant_key") or CONTROL_VARIANT_KEY
         self.breakdown_key = f"$feature/{self.feature_flag_key}"
 
         self._fix_math_aggregation()
@@ -326,7 +328,7 @@ class ExperimentTrendsQueryRunner(QueryRunner):
     def _get_variants_with_base_stats(
         self, count_results: TrendsQueryResponse, exposure_results: TrendsQueryResponse
     ) -> tuple[ExperimentVariantTrendsBaseStats, list[ExperimentVariantTrendsBaseStats]]:
-        control_variant: Optional[ExperimentVariantTrendsBaseStats] = None
+        baseline_variant: Optional[ExperimentVariantTrendsBaseStats] = None
         test_variants = []
         exposure_counts = {}
         exposure_ratios = {}
@@ -336,18 +338,18 @@ class ExperimentTrendsQueryRunner(QueryRunner):
             breakdown_value = result.get("breakdown_value")
             exposure_counts[breakdown_value] = count
 
-        control_exposure = exposure_counts.get(CONTROL_VARIANT_KEY, 0)
+        baseline_exposure = exposure_counts.get(self.baseline_variant_key, 0)
 
-        if control_exposure != 0:
+        if baseline_exposure != 0:
             for key, count in exposure_counts.items():
-                exposure_ratios[key] = count / control_exposure
+                exposure_ratios[key] = count / baseline_exposure
 
         for result in count_results.results:
             count = result.get("count", 0)
             breakdown_value = result.get("breakdown_value")
-            if breakdown_value == CONTROL_VARIANT_KEY:
+            if breakdown_value == self.baseline_variant_key:
                 absolute_exposure = exposure_counts.get(breakdown_value, 0)
-                control_variant = ExperimentVariantTrendsBaseStats(
+                baseline_variant = ExperimentVariantTrendsBaseStats(
                     key=breakdown_value,
                     count=count,
                     exposure=1,
@@ -364,10 +366,10 @@ class ExperimentTrendsQueryRunner(QueryRunner):
                     )
                 )
 
-        if control_variant is None:
-            raise ValueError("Control variant not found in count results")
+        if baseline_variant is None:
+            raise ValueError(f"Baseline variant '{self.baseline_variant_key}' not found in count results")
 
-        return control_variant, test_variants
+        return baseline_variant, test_variants
 
     def _validate_event_variants(self, count_result: TrendsQueryResponse, exposure_result: TrendsQueryResponse):
         errors = {
@@ -384,14 +386,14 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         if not count_result.results or not count_result.results[0]:
             raise ValidationError(code="no-results", detail=json.dumps(errors))
 
-        # Check if "control" is present
+        # Check if the baseline variant is present
         for event in count_result.results:
             event_variant = event.get("breakdown_value")
-            if event_variant == "control":
+            if event_variant == self.baseline_variant_key:
                 errors[ExperimentNoResultsErrorKeys.NO_CONTROL_VARIANT] = False
                 break
         # Check if at least one of the test variants is present
-        test_variants = [variant for variant in self.variants if variant != "control"]
+        test_variants = [variant for variant in self.variants if variant != self.baseline_variant_key]
 
         for event in count_result.results:
             event_variant = event.get("breakdown_value")

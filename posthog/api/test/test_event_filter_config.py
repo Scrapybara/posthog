@@ -128,8 +128,63 @@ class TestEventFilterConfigAPI(APIBaseTest):
         data = response.json()
         self.assertIsNone(data["filter_tree"])
         self.assertEqual(data["test_cases"], [])
-        self.assertEqual(data["mode"], seed["mode"])
+        self.assertEqual(data["mode"], "disabled")
         self.assertEqual(data["id"], seed["id"])
+
+    def test_create_empty_filter_tree_disables_filtering(self) -> None:
+        response = self.client.post(
+            self._url(),
+            data={
+                "mode": "live",
+                "filter_tree": _or(),
+                "test_cases": [{"event_name": "$pageview", "expected_result": "drop"}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["mode"], "disabled")
+        self.assertIsNone(data["filter_tree"])
+        self.assertEqual(data["test_cases"], [])
+
+    def test_update_delete_all_disables_filter_and_clears_test_cases(self) -> None:
+        seed = self._seed_config()
+
+        response = self.client.post(self._url(), data={"filter_tree": _or()}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["id"], seed["id"])
+        self.assertEqual(data["mode"], "disabled")
+        self.assertIsNone(data["filter_tree"])
+        self.assertEqual(data["test_cases"], [])
+
+    def test_update_delete_all_can_be_saved_repeatedly(self) -> None:
+        seed = self._seed_config()
+        self.client.post(self._url(), data={"filter_tree": _or()}, format="json")
+
+        response = self.client.post(self._url(), data={"mode": "dry_run", "filter_tree": _and()}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["id"], seed["id"])
+        self.assertEqual(data["mode"], "disabled")
+        self.assertIsNone(data["filter_tree"])
+        self.assertEqual(data["test_cases"], [])
+        self.assertEqual(EventFilterConfig.objects.filter(team=self.team).count(), 1)
+
+    def test_nested_empty_groups_disable_filtering(self) -> None:
+        self._seed_config()
+        tree = _or(_and(), _not(_or()))
+
+        response = self.client.post(self._url(), data={"mode": "live", "filter_tree": tree}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["mode"], "disabled")
+        self.assertIsNone(data["filter_tree"])
+        self.assertEqual(data["test_cases"], [])
 
     def test_create_clears_test_cases(self):
         seed = self._seed_config()
@@ -195,6 +250,20 @@ class TestEventFilterConfigAPI(APIBaseTest):
         self.assertEqual(data["type"], "validation_error")
         self.assertEqual(data["attr"], "filter_tree__filter_tree")
         self.assertIn("field must be one of", data["detail"])
+
+    def test_rejects_partially_completed_condition_without_creating_config(self) -> None:
+        response = self.client.post(
+            self._url(),
+            data={"mode": "dry_run", "filter_tree": _or(_cond(value=""))},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        data = response.json()
+        self.assertEqual(data["type"], "validation_error")
+        self.assertEqual(data["attr"], "filter_tree__filter_tree")
+        self.assertIn("value must be a non-empty string", data["detail"])
+        self.assertFalse(EventFilterConfig.objects.filter(team=self.team).exists())
 
     def test_rejects_invalid_test_cases(self):
         response = self.client.post(

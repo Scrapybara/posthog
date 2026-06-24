@@ -75,9 +75,23 @@ class EventFilterConfig(UUIDTModel):
                 raise ValidationError({"test_cases": failures})
 
     def save(self, *args, **kwargs):
+        normalized_fields: set[str] = set()
         if self.filter_tree:
-            self.filter_tree = prune_filter_tree(self.filter_tree)
+            pruned_filter_tree = prune_filter_tree(self.filter_tree)
+            if pruned_filter_tree != self.filter_tree:
+                normalized_fields.add("filter_tree")
+            self.filter_tree = pruned_filter_tree
         self.clean()
+        if not self.filter_tree:
+            if self.mode != EventFilterMode.DISABLED:
+                self.mode = EventFilterMode.DISABLED
+                normalized_fields.add("mode")
+            if self.test_cases != []:
+                self.test_cases = []
+                normalized_fields.add("test_cases")
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and normalized_fields:
+            kwargs["update_fields"] = set(update_fields).union(normalized_fields)
         super().save(*args, **kwargs)
 
 

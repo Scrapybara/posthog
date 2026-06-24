@@ -320,6 +320,52 @@ describe('experimentsLogic', () => {
         })
     })
 
+    describe('sorting and order URL state', () => {
+        beforeEach(() => {
+            api.get.mockClear()
+        })
+
+        // The Result and Created by columns previously broke list loading; cover them
+        // alongside an unaffected valid column for both sort directions.
+        it.each(['conclusion', '-conclusion', 'created_by', '-created_by', '-created_at'])(
+            'forwards order=%s to the API and resets to page 1',
+            async (order) => {
+                api.get.mockClear()
+
+                await expectLogic(logic, () => {
+                    logic.actions.setExperimentsFilters({ order, page: 1 })
+                })
+                    .delay(350)
+                    .toFinishAllListeners()
+
+                expect(logic.values.filters.order).toBe(order)
+                expect(logic.values.filters.page).toBe(1)
+                expect(logic.values.paramsFromFilters).toEqual(expect.objectContaining({ order, offset: 0 }))
+                expect(api.get).toHaveBeenCalledWith(expect.stringContaining(`order=${order}`))
+            }
+        )
+
+        it('syncs the active order to the URL search params', async () => {
+            await expectLogic(logic, () => {
+                logic.actions.setExperimentsFilters({ order: 'conclusion', page: 1 })
+            }).toFinishAllListeners()
+
+            expect(router.values.searchParams['order']).toBe('conclusion')
+        })
+
+        it('restores the order from the URL on navigation', async () => {
+            await expectLogic(logic, () => {
+                router.actions.push(urls.experiments(), { order: '-conclusion' })
+            }).toFinishAllListeners()
+
+            expect(logic.values.filters.order).toBe('-conclusion')
+        })
+
+        it('omits order from params when no sort is active', () => {
+            expect(logic.values.paramsFromFilters.order).toBeUndefined()
+        })
+    })
+
     describe('experiment CRUD operations', () => {
         beforeEach(() => {
             router.actions.push = jest.fn()

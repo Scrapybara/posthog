@@ -307,17 +307,33 @@ describe('experimentsLogic', () => {
                 search: 'test',
                 status: ExperimentStatus.Running,
                 page: 2,
+                order: '-conclusion',
             })
 
             expect(logic.values.paramsFromFilters).toEqual({
                 search: 'test',
                 status: ExperimentStatus.Running,
                 page: 2,
+                order: '-conclusion',
                 limit: 100,
                 offset: 100,
                 archived: false,
             })
         })
+
+        it.each(['conclusion', '-conclusion', 'created_by', '-created_by', '-created_at'])(
+            'preserves %s sorting in URL and request state',
+            (order) => {
+                const mockReplace = jest.fn()
+                router.actions.replace = mockReplace
+
+                logic.actions.setExperimentsFilters({ order, page: 1 })
+
+                expect(logic.values.filters).toEqual(expect.objectContaining({ order, page: 1 }))
+                expect(logic.values.paramsFromFilters).toEqual(expect.objectContaining({ order, offset: 0 }))
+                expect(mockReplace).toHaveBeenLastCalledWith(expect.stringContaining(`order=${order}`))
+            }
+        )
     })
 
     describe('experiment CRUD operations', () => {

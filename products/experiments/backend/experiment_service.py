@@ -10,7 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
-from django.db.models import Case, Count, F, Prefetch, Q, QuerySet, Value, When
+from django.db.models import Case, CharField, Count, F, IntegerField, Prefetch, Q, QuerySet, Value, When
 from django.db.models.functions import Coalesce, Now, NullIf
 from django.utils import timezone
 
@@ -458,6 +458,8 @@ class ExperimentService:
         "-duration",
         "status",
         "-status",
+        "conclusion",
+        "-conclusion",
     }
 
     ELIGIBLE_FLAGS_ORDER_ALLOWLIST = {
@@ -2523,16 +2525,37 @@ class ExperimentService:
                 else:
                     queryset = queryset.order_by(F("status_sort_key").asc())
             elif order_value in ["created_by", "-created_by"]:
-                # Match the frontend column's `first_name || email` sorter — treat an
-                # empty `first_name` as missing and fall back to `email`, so users with
-                # a blank first name aren't bunched at one end of the list.
-                prefix = "-" if order_value.startswith("-") else ""
                 queryset = queryset.annotate(
                     created_by_display=Coalesce(
                         NullIf(F("created_by__first_name"), Value("")),
                         F("created_by__email"),
+                        output_field=CharField(),
                     )
-                ).order_by(f"{prefix}created_by_display")
+                )
+                created_by_order = (
+                    F("created_by_display").desc(nulls_last=True)
+                    if order_value.startswith("-")
+                    else F("created_by_display").asc(nulls_last=True)
+                )
+                queryset = queryset.order_by(created_by_order, "id")
+            elif order_value in ["conclusion", "-conclusion"]:
+                queryset = queryset.annotate(
+                    conclusion_sort_key=Case(
+                        When(conclusion="won", then=Value(1)),
+                        When(conclusion="lost", then=Value(2)),
+                        When(conclusion="inconclusive", then=Value(3)),
+                        When(conclusion="stopped_early", then=Value(4)),
+                        When(conclusion="invalid", then=Value(5)),
+                        default=Value(None),
+                        output_field=IntegerField(),
+                    )
+                )
+                conclusion_order = (
+                    F("conclusion_sort_key").desc(nulls_last=True)
+                    if order_value.startswith("-")
+                    else F("conclusion_sort_key").asc(nulls_last=True)
+                )
+                queryset = queryset.order_by(conclusion_order, "id")
             else:
                 queryset = queryset.order_by(order_value)
         else:

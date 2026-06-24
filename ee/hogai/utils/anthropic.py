@@ -37,8 +37,13 @@ def add_cache_control(message: BaseMessage, ttl: Literal["5m", "1h"] | None = No
     return message
 
 
-def convert_human_message_to_anthropic_message(message: HumanMessage) -> messages.HumanMessage:
-    return messages.HumanMessage(content=[{"type": "text", "text": message.content}])
+def convert_human_message_to_anthropic_message(
+    message: HumanMessage, attachment_blocks: Mapping[int, list[dict[str, Any]]] | None = None
+) -> messages.HumanMessage:
+    content: list[dict[str, Any]] = list((attachment_blocks or {}).get(id(message), []))
+    if message.content:
+        content.append({"type": "text", "text": message.content})
+    return messages.HumanMessage(content=content)
 
 
 def convert_context_message_to_anthropic_message(message: ContextMessage) -> messages.HumanMessage:
@@ -105,10 +110,12 @@ def convert_failure_message_to_anthropic_message(message: FailureMessage) -> mes
 
 
 def convert_to_anthropic_message(
-    message: AssistantMessageUnion, tool_result_map: Mapping[str, AssistantToolCallMessage]
+    message: AssistantMessageUnion,
+    tool_result_map: Mapping[str, AssistantToolCallMessage],
+    attachment_blocks: Mapping[int, list[dict[str, Any]]] | None = None,
 ) -> list[messages.BaseMessage]:
     if isinstance(message, HumanMessage):
-        return [convert_human_message_to_anthropic_message(message)]
+        return [convert_human_message_to_anthropic_message(message, attachment_blocks)]
     if isinstance(message, ContextMessage):
         return [convert_context_message_to_anthropic_message(message)]
     elif isinstance(message, AssistantMessage):
@@ -121,11 +128,12 @@ def convert_to_anthropic_message(
 def convert_to_anthropic_messages(
     conversation: Sequence[AssistantMessageUnion],
     tool_result_map: Mapping[str, AssistantToolCallMessage],
+    attachment_blocks: Mapping[int, list[dict[str, Any]]] | None = None,
 ) -> list[messages.BaseMessage]:
     history: list[messages.BaseMessage] = []
     for message in conversation:
         try:
-            history.extend(convert_to_anthropic_message(message, tool_result_map))
+            history.extend(convert_to_anthropic_message(message, tool_result_map, attachment_blocks))
         except ValueError:
             continue
     return history

@@ -23688,6 +23688,12 @@
         "HumanMessage": {
             "additionalProperties": false,
             "properties": {
+                "attachments": {
+                    "items": {
+                        "$ref": "#/definitions/HumanMessageAttachment"
+                    },
+                    "type": "array"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -23709,6 +23715,32 @@
                 }
             },
             "required": ["type", "content"],
+            "type": "object"
+        },
+        "HumanMessageAttachment": {
+            "additionalProperties": false,
+            "properties": {
+                "content_type": {
+                    "enum": ["image/png", "image/jpeg"],
+                    "type": "string"
+                },
+                "file_name": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "number"
+                },
+                "width": {
+                    "type": "number"
+                }
+            },
+            "required": ["id", "file_name", "content_type", "size", "width", "height"],
             "type": "object"
         },
         "IQRDetectorConfig": {

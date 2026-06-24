@@ -90,9 +90,19 @@ export interface BaseAssistantMessage {
     parent_tool_call_id?: string
 }
 
+export interface HumanMessageAttachment {
+    id: string
+    file_name: string
+    content_type: 'image/png' | 'image/jpeg'
+    size: number
+    width: number
+    height: number
+}
+
 export interface HumanMessage extends BaseAssistantMessage {
     type: AssistantMessageType.Human
     content: string
+    attachments?: HumanMessageAttachment[]
     ui_context?: MaxUIContext
     trace_id?: string
 }

@@ -12672,6 +12672,18 @@ export namespace Schemas {
       Base64: 'base64',
     } as const;
 
+    /**
+     * * `image/png` - image/png
+     * * `image/jpeg` - image/jpeg
+     */
+    export type ContentTypeEnum = typeof ContentTypeEnum[keyof typeof ContentTypeEnum];
+
+
+    export const ContentTypeEnum = {
+      ImagePng: 'image/png',
+      ImageJpeg: 'image/jpeg',
+    } as const;
+
     export interface ContextGeneration {
       /**
          * ID of the Task currently generating this folder's CONTEXT.md, or null if none.
@@ -12799,6 +12811,29 @@ export namespace Schemas {
        * Combines metadata from conversation.approval_decisions with payload from checkpoint
        * interrupts (single source of truth for payload data). */
       readonly pending_approvals: readonly ConversationPendingApprovalsItem[];
+    }
+
+    export interface ConversationAttachment {
+      /** Attachment identifier. */
+      readonly id: string;
+      /** Sanitized display filename. */
+      readonly file_name: string;
+      /** Verified and re-encoded image content type.
+       *
+       * * `image/png` - image/png
+       * * `image/jpeg` - image/jpeg */
+      readonly content_type: ContentTypeEnum;
+      /** Sanitized image size in bytes. */
+      readonly size: number;
+      /** Decoded image width in pixels. */
+      readonly width: number;
+      /** Decoded image height in pixels. */
+      readonly height: number;
+    }
+
+    export interface ConversationAttachmentUpload {
+      /** A PNG or JPEG image no larger than 4 MiB. */
+      image: string;
     }
 
     export interface ConversationMinimal {
@@ -26718,6 +26753,11 @@ export namespace Schemas {
       agent_mode?: AgentModeEnum;
       is_sandbox?: boolean;
       resume_payload?: unknown;
+      /**
+         * IDs of private PNG or JPEG attachments uploaded for this exact conversation.
+         * @maxItems 4
+         */
+      attachments?: string[];
     }
 
     export interface MessageCategory {

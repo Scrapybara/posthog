@@ -220,6 +220,11 @@ export interface MessageApi {
     agent_mode?: AgentModeEnumApi
     is_sandbox?: boolean
     resume_payload?: unknown
+    /**
+     * IDs of private PNG or JPEG attachments uploaded for this exact conversation.
+     * @maxItems 4
+     */
+    attachments?: string[]
 }
 
 export type ConversationApiMessagesItem = { [key: string]: unknown }
@@ -285,6 +290,40 @@ export interface ConversationApi {
 export interface MessageMinimalApi {
     /** @maxLength 10000 */
     content: string
+}
+
+export interface ConversationAttachmentUploadApi {
+    /** A PNG or JPEG image no larger than 4 MiB. */
+    image: string
+}
+
+/**
+ * * `image/png` - image/png
+ * * `image/jpeg` - image/jpeg
+ */
+export type ContentTypeEnumApi = (typeof ContentTypeEnumApi)[keyof typeof ContentTypeEnumApi]
+
+export const ContentTypeEnumApi = {
+    ImagePng: 'image/png',
+    ImageJpeg: 'image/jpeg',
+} as const
+
+export interface ConversationAttachmentApi {
+    /** Attachment identifier. */
+    readonly id: string
+    /** Sanitized display filename. */
+    readonly file_name: string
+    /** Verified and re-encoded image content type.
+     *
+     * * `image/png` - image/png
+     * * `image/jpeg` - image/jpeg */
+    readonly content_type: ContentTypeEnumApi
+    /** Sanitized image size in bytes. */
+    readonly size: number
+    /** Decoded image width in pixels. */
+    readonly width: number
+    /** Decoded image height in pixels. */
+    readonly height: number
 }
 
 export type PatchedConversationApiMessagesItem = { [key: string]: unknown }

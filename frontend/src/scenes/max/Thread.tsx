@@ -32,6 +32,7 @@ import {
     Tooltip,
 } from '@posthog/lemon-ui'
 
+import api from 'lib/api'
 import {
     InsightBreakdownSummary,
     PropertiesSummary,
@@ -392,7 +393,13 @@ function Message({
 }: MessageProps): JSX.Element | null {
     const { editInsightToolRegistered, registeredToolMap } = useValues(maxGlobalLogic)
     const { activeTabId, activeSceneId } = useValues(sceneLogic)
-    const { threadLoading, isSharedThread, pendingApprovalsData, resolvedApprovalStatuses } = useValues(maxThreadLogic)
+    const {
+        threadLoading,
+        isSharedThread,
+        pendingApprovalsData,
+        resolvedApprovalStatuses,
+        conversationId: threadConversationId,
+    } = useValues(maxThreadLogic)
     const { conversationId } = useValues(maxLogic)
 
     const groupType = message.type === 'human' ? 'human' : 'ai'
@@ -473,6 +480,23 @@ function Message({
                                         useCurrentPageContext={false}
                                     />
                                 )}
+                                {message.attachments && message.attachments.length > 0 && (
+                                    <div className="mb-2 grid max-w-120 grid-cols-2 gap-2">
+                                        {message.attachments.map((attachment) => (
+                                            <div key={attachment.id} className="overflow-hidden rounded border">
+                                                <img
+                                                    src={api.conversations.attachments.contentUrl(
+                                                        threadConversationId,
+                                                        attachment.id
+                                                    )}
+                                                    alt={attachment.file_name}
+                                                    className="max-h-64 w-full object-contain"
+                                                    loading="lazy"
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 {maybeCommand ? (
                                     <div className="flex items-center">
                                         <Tooltip
@@ -488,12 +512,9 @@ function Message({
                                         </Tooltip>
                                         <span className="font-mono">{message.content}</span>
                                     </div>
-                                ) : (
-                                    <MarkdownMessage
-                                        content={message.content || '*No text.*'}
-                                        id={message.id || 'no-text'}
-                                    />
-                                )}
+                                ) : message.content ? (
+                                    <MarkdownMessage content={message.content} id={message.id || 'image-message'} />
+                                ) : null}
                             </MessageTemplate>
                         )
                     } else if (isAssistantMessage(message)) {

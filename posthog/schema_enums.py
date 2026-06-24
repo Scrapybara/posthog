@@ -2082,6 +2082,11 @@ class SessionsV2JoinMode(StrEnum):
     UUID = "uuid"
 
 
+class ContentType(StrEnum):
+    IMAGE_PNG = "image/png"
+    IMAGE_JPEG = "image/jpeg"
+
+
 class InfinityValue(float, Enum):
     NUMBER_999999 = 999999
     NUMBER__999999 = -999999

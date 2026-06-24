@@ -3,14 +3,14 @@ import { router } from 'kea-router'
 import { useMemo } from 'react'
 
 import { IconEllipsis } from '@posthog/icons'
-import { LemonButton, LemonCheckbox, LemonDialog, LemonMenu, LemonTag } from '@posthog/lemon-ui'
+import { LemonButton, LemonCheckbox, LemonDialog, LemonMenu } from '@posthog/lemon-ui'
 
 import { LemonTableColumns } from 'lib/lemon-ui/LemonTable'
-import { capitalizeFirstLetter } from 'lib/utils'
 import { urls } from 'scenes/urls'
 
 import { hogFunctionConfigurationLogic } from '../configuration/hogFunctionConfigurationLogic'
 import { hogFunctionTestLogic } from '../configuration/hogFunctionTestLogic'
+import { HogFunctionInvocationStatusTag } from '../misc/HogFunctionInvocationStatusTag'
 import { hogFunctionLogsLogic } from './hogFunctionLogsLogic'
 import { LogsViewer } from './LogsViewer'
 import { GroupedLogEntry, LogsViewerLogicProps } from './logsViewerLogic'
@@ -149,9 +149,7 @@ function HogFunctionLogsStatus({
                     onChange={(checked) => setSelectedForRetry({ [record.instanceId]: checked })}
                 />
             ) : null}
-            <LemonTag type={status === 'success' ? 'success' : status === 'failure' ? 'danger' : 'warning'}>
-                {capitalizeFirstLetter(status)}
-            </LemonTag>
+            <HogFunctionInvocationStatusTag status={status} />
 
             {!internalEvent && (
                 <LemonMenu

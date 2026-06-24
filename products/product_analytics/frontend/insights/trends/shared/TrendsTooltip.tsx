@@ -21,6 +21,7 @@ interface TrendsTooltipProps {
     interval?: IntervalType
     breakdownFilter?: BreakdownFilter
     dateRange?: DateRange
+    compareDateRange?: DateRange
     trendsFilter?: TrendsFilter | null
     formula?: string | null
     showPercentView?: boolean
@@ -30,6 +31,8 @@ interface TrendsTooltipProps {
     formatCompareLabel?: (label: string, dateLabel?: string) => string
     onRowClick?: (datum: SeriesDatum) => void
     showHeader?: boolean
+    weekStartDay?: number
+    includeDatumDates?: boolean
     /** Override the auto-derived date header. Stickiness needs this since its `date`
      *  is an interval-count integer, not a date — letting InsightTooltip format it as
      *  a calendar date produces a wrong "Thursday, 1 Jan 1970" header. */
@@ -53,6 +56,7 @@ export function TrendsTooltip({
     interval,
     breakdownFilter,
     dateRange,
+    compareDateRange,
     trendsFilter,
     formula,
     showPercentView,
@@ -62,6 +66,8 @@ export function TrendsTooltip({
     formatCompareLabel,
     onRowClick,
     showHeader,
+    weekStartDay,
+    includeDatumDates = true,
     altTitle,
     renderCount: renderCountOverride,
     renderSeriesOverride,
@@ -80,6 +86,7 @@ export function TrendsTooltip({
                 action: meta.action,
                 breakdown_value: meta.breakdown_value,
                 compare_label: meta.compare_label,
+                date: includeDatumDates ? meta.days?.[context.dataIndex] : undefined,
                 date_label: meta.days?.[context.dataIndex],
                 filter: meta.filter,
             }
@@ -90,9 +97,12 @@ export function TrendsTooltip({
                 (a.label === undefined || b.label === undefined ? 0 : a.label.localeCompare(b.label))
         )
         return data.map((s, id) => ({ ...s, id }))
-    }, [context.seriesData, context.dataIndex])
+    }, [context.seriesData, context.dataIndex, includeDatumDates])
 
-    const date = context.seriesData[0]?.series.meta?.days?.[context.dataIndex]
+    const date = includeDatumDates
+        ? (context.seriesData.find((entry) => entry.series.meta?.compare_label !== 'previous') ?? context.seriesData[0])
+              ?.series.meta?.days?.[context.dataIndex]
+        : undefined
 
     const renderCount = useCallback(
         (value: number): string => {
@@ -123,7 +133,14 @@ export function TrendsTooltip({
             const hasBreakdown = datum.breakdown_value !== undefined && !!datum.breakdown_value
 
             if (hasBreakdown && !hasMultipleSeries) {
-                const title = getDatumTitle(datum, breakdownFilter, formatCompareLabel)
+                const title = getDatumTitle(datum, breakdownFilter, {
+                    interval,
+                    dateRange,
+                    compareDateRange,
+                    timezone,
+                    weekStartDay,
+                    formatCompareLabel,
+                })
                 return <div className="datum-label-column">{title}</div>
             }
 
@@ -141,7 +158,18 @@ export function TrendsTooltip({
                 </div>
             )
         },
-        [hasMultipleSeries, breakdownFilter, formatCompareLabel, formula, renderSeriesOverride]
+        [
+            hasMultipleSeries,
+            breakdownFilter,
+            formatCompareLabel,
+            formula,
+            renderSeriesOverride,
+            dateRange,
+            interval,
+            timezone,
+            weekStartDay,
+            compareDateRange,
+        ]
     )
 
     return (
@@ -152,6 +180,7 @@ export function TrendsTooltip({
             breakdownFilter={breakdownFilter}
             interval={interval}
             dateRange={dateRange}
+            compareDateRange={compareDateRange}
             formatCompareLabel={formatCompareLabel}
             groupTypeLabel={groupTypeLabel}
             onClose={context.onUnpin ?? NOOP}

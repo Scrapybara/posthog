@@ -20,6 +20,7 @@ export interface SeriesDatum {
     compare_label?: CompareLabelType
     action?: ActionFilter
     label?: string
+    date?: string | number
     date_label?: string
     order: number
     dotted?: boolean
@@ -57,6 +58,11 @@ export interface TooltipConfig {
     formatCompareLabel?: (label: string, dateLabel?: string) => string
 }
 
+export interface CompareLabelFormatOptions extends FormattedDateOptions {
+    compareDateRange?: DateRange | null
+    formatCompareLabel?: (label: string, dateLabel?: string) => string
+}
+
 export interface InsightTooltipProps extends Omit<TooltipConfig, 'renderSeries' | 'renderCount' | 'getInspectLabel'> {
     renderSeries: Required<TooltipConfig>['renderSeries']
     renderCount: Required<TooltipConfig>['renderCount']
@@ -66,7 +72,7 @@ export interface InsightTooltipProps extends Omit<TooltipConfig, 'renderSeries' 
      * @default false
      */
     embedded?: boolean
-    date?: string
+    date?: string | number
     hideInspectActorsSection?: boolean
     seriesData: SeriesDatum[]
     breakdownFilter?: BreakdownFilter | undefined | null
@@ -74,6 +80,7 @@ export interface InsightTooltipProps extends Omit<TooltipConfig, 'renderSeries' 
     timezone?: string | undefined
     interval?: IntervalType | null
     dateRange?: DateRange | null
+    compareDateRange?: DateRange | null
     /** Show hint about holding shift to highlight individual bars in stacked charts */
     showShiftKeyHint?: boolean
     formatCompareLabel?: (label: string, dateLabel?: string) => string
@@ -196,7 +203,7 @@ function getPillValues(
     breakdownFilter: BreakdownFilter | null | undefined,
     cohorts: any,
     formatPropertyValueForDisplay: any,
-    formatCompareLabel?: (label: string, dateLabel?: string) => string
+    compareLabelFormatOptions?: CompareLabelFormatOptions
 ): string[] {
     const pillValues = []
     if (s.breakdown_value !== undefined) {
@@ -205,23 +212,50 @@ function getPillValues(
         )
     }
     if (s.compare_label) {
-        const formattedLabel = formatCompareLabel
-            ? formatCompareLabel(String(s.compare_label), s.date_label)
-            : capitalizeFirstLetter(String(s.compare_label))
-        pillValues.push(formattedLabel)
+        pillValues.push(getFormattedCompareLabel(s, compareLabelFormatOptions))
     }
     return pillValues
+}
+
+export function getFormattedCompareLabel(
+    s: Pick<SeriesDatum, 'compare_label' | 'date' | 'date_label'>,
+    options?: CompareLabelFormatOptions
+): string {
+    const label = String(s.compare_label)
+    if (options?.formatCompareLabel) {
+        return options.formatCompareLabel(label, s.date_label)
+    }
+
+    const formattedLabel = capitalizeFirstLetter(label)
+    if (s.compare_label !== CompareLabelType.Previous || s.date === undefined) {
+        return formattedLabel
+    }
+
+    const formattedDate = getFormattedDate(s.date, {
+        interval: options?.interval,
+        dateRange: options?.compareDateRange ?? options?.dateRange,
+        timezone: options?.timezone,
+        weekStartDay: options?.weekStartDay,
+    })
+
+    return `${formattedLabel} (${formattedDate})`
 }
 
 export function getDatumTitle(
     s: SeriesDatum,
     breakdownFilter: BreakdownFilter | null | undefined,
-    formatCompareLabel?: (label: string, dateLabel?: string) => string
+    compareLabelFormatOptions?: CompareLabelFormatOptions
 ): React.ReactNode {
     // NOTE: Assuming these logics are mounted elsewhere, and we're not interested in tracking changes.
     const cohorts = cohortsModel.findMounted()?.values?.allCohorts
     const formatPropertyValueForDisplay = propertyDefinitionsModel.findMounted()?.values?.formatPropertyValueForDisplay
-    const pillValues = getPillValues(s, breakdownFilter, cohorts, formatPropertyValueForDisplay, formatCompareLabel)
+    const pillValues = getPillValues(
+        s,
+        breakdownFilter,
+        cohorts,
+        formatPropertyValueForDisplay,
+        compareLabelFormatOptions
+    )
     const showPathCleaningHighlight = breakdownFilter?.breakdown_path_cleaning
 
     if (pillValues.length > 0) {
@@ -253,7 +287,7 @@ export function getDatumTitle(
 export function invertDataSource(
     seriesData: SeriesDatum[],
     breakdownFilter: BreakdownFilter | null | undefined,
-    formatCompareLabel?: (label: string, dateLabel?: string) => string
+    compareLabelFormatOptions?: CompareLabelFormatOptions
 ): InvertedSeriesDatum[] {
     const flattenedData: Record<string, InvertedSeriesDatum> = {}
 
@@ -267,7 +301,7 @@ export function invertDataSource(
                 id: datumKey,
                 datasetIndex: s.datasetIndex,
                 color: s.color,
-                datumTitle: getDatumTitle(s, breakdownFilter, formatCompareLabel),
+                datumTitle: getDatumTitle(s, breakdownFilter, compareLabelFormatOptions),
                 seriesData: [s],
             }
         }

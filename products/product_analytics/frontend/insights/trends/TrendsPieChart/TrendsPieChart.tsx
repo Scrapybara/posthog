@@ -220,6 +220,7 @@ export function TrendsPieChart({
                 onRowClick={onRowClick}
                 showHeader={false}
                 renderCount={renderCount}
+                includeDatumDates={false}
             />
         ),
         [

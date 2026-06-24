@@ -5,7 +5,7 @@ import { SeriesLetter } from 'lib/components/SeriesGlyph'
 import { humanFriendlyNumber } from 'lib/utils'
 
 import { cohortsModel } from '~/models/cohortsModel'
-import { InsightType } from '~/types'
+import { CompareLabelType, InsightType, IntervalType } from '~/types'
 
 import { InsightTooltip } from './InsightTooltip'
 import { InsightTooltipProps } from './insightTooltipUtils'
@@ -216,6 +216,143 @@ export const Columns: Story = {
             },
         ],
     },
+}
+
+const compareAction = {
+    id: '$pageview',
+    type: 'events' as const,
+    order: 0,
+    name: '$pageview',
+    custom_name: null,
+    math: 'total' as const,
+    math_property: null,
+    math_group_type_index: null,
+}
+
+function compareSeriesData({
+    currentDate,
+    previousDate,
+    breakdownValues = [undefined],
+}: {
+    currentDate: string
+    previousDate: string
+    breakdownValues?: (string | undefined)[]
+}): InsightTooltipProps['seriesData'] {
+    return breakdownValues.flatMap((breakdownValue, breakdownIndex) => [
+        {
+            id: breakdownIndex * 2,
+            dataIndex: 0,
+            datasetIndex: breakdownIndex * 2,
+            order: 0,
+            action: compareAction,
+            label: breakdownValue ? `$pageview - ${breakdownValue}` : '$pageview',
+            breakdown_value: breakdownValue,
+            compare_label: CompareLabelType.Current,
+            date: currentDate,
+            color: '#1d4aff',
+            count: 120 + breakdownIndex * 20,
+        },
+        {
+            id: breakdownIndex * 2 + 1,
+            dataIndex: 0,
+            datasetIndex: breakdownIndex * 2 + 1,
+            order: 0,
+            action: compareAction,
+            label: breakdownValue ? `$pageview - ${breakdownValue}` : '$pageview',
+            breakdown_value: breakdownValue,
+            compare_label: CompareLabelType.Previous,
+            date: previousDate,
+            color: '#1d4aff80',
+            count: 84 + breakdownIndex * 16,
+        },
+    ])
+}
+
+function compareDateRange(date: string): { date_from: string; date_to: string } {
+    return { date_from: `${date}T00:00:00Z`, date_to: `${date}T23:59:59Z` }
+}
+
+function compareTooltipArgs({
+    interval,
+    currentDate,
+    previousDate,
+    dateRange = compareDateRange(currentDate),
+    compareDateRange: previousDateRange = compareDateRange(previousDate),
+    timezone = 'UTC',
+    breakdownValues,
+}: {
+    interval: IntervalType
+    currentDate: string
+    previousDate: string
+    dateRange?: { date_from: string; date_to: string }
+    compareDateRange?: { date_from: string; date_to: string }
+    timezone?: string
+    breakdownValues?: string[]
+}): Partial<InsightTooltipProps> {
+    return {
+        date: currentDate,
+        interval,
+        timezone,
+        dateRange,
+        compareDateRange: previousDateRange,
+        seriesData: compareSeriesData({ currentDate, previousDate, breakdownValues }),
+    }
+}
+
+export const PreviousPeriodDay: Story = {
+    args: compareTooltipArgs({
+        interval: 'day',
+        currentDate: '2025-06-12',
+        previousDate: '2025-06-05',
+    }),
+}
+
+export const PreviousPeriodWeek: Story = {
+    args: compareTooltipArgs({
+        interval: 'week',
+        currentDate: '2025-06-09',
+        previousDate: '2025-06-02',
+        dateRange: { date_from: '2025-06-09T00:00:00Z', date_to: '2025-06-15T23:59:59Z' },
+        compareDateRange: { date_from: '2025-06-02T00:00:00Z', date_to: '2025-06-08T23:59:59Z' },
+    }),
+}
+
+export const PreviousPeriodMonth: Story = {
+    args: compareTooltipArgs({
+        interval: 'month',
+        currentDate: '2025-06-01',
+        previousDate: '2025-05-01',
+        dateRange: { date_from: '2025-06-01T00:00:00Z', date_to: '2025-06-30T23:59:59Z' },
+        compareDateRange: { date_from: '2025-05-01T00:00:00Z', date_to: '2025-05-31T23:59:59Z' },
+    }),
+}
+
+export const PreviousPeriodYearBoundary: Story = {
+    args: compareTooltipArgs({
+        interval: 'day',
+        currentDate: '2025-01-01',
+        previousDate: '2024-12-31',
+    }),
+}
+
+export const PreviousPeriodDst: Story = {
+    args: compareTooltipArgs({
+        interval: 'day',
+        currentDate: '2024-03-17',
+        previousDate: '2024-03-10',
+        timezone: 'America/Los_Angeles',
+        dateRange: { date_from: '2024-03-17T00:00:00-07:00', date_to: '2024-03-17T23:59:59-07:00' },
+        compareDateRange: { date_from: '2024-03-10T00:00:00-08:00', date_to: '2024-03-10T23:59:59-07:00' },
+    }),
+}
+
+export const PreviousPeriodBreakdowns: Story = {
+    args: compareTooltipArgs({
+        interval: 'day',
+        currentDate: '2025-06-12',
+        previousDate: '2025-06-05',
+        breakdownValues: ['Chrome', 'Safari'],
+    }),
 }
 
 const longBreakdownValue =

@@ -1,6 +1,13 @@
-import { getFormattedDate } from 'scenes/insights/InsightTooltip/insightTooltipUtils'
+import { createElement, Fragment } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
-import { IntervalType } from '~/types'
+import {
+    getDatumTitle,
+    getFormattedCompareLabel,
+    getFormattedDate,
+} from 'scenes/insights/InsightTooltip/insightTooltipUtils'
+
+import { CompareLabelType, IntervalType } from '~/types'
 
 describe('getFormattedDate', () => {
     const paramsToExpectedWithNumericInput: [number, IntervalType, string][] = [
@@ -155,5 +162,120 @@ describe('getFormattedDate', () => {
         it('expects undefined string if no inputs', () => {
             expect(getFormattedDate()).toEqual('undefined')
         })
+    })
+})
+
+describe('getFormattedCompareLabel', () => {
+    const previousDatum = (date: string): Parameters<typeof getFormattedCompareLabel>[0] => ({
+        compare_label: CompareLabelType.Previous,
+        date,
+    })
+
+    it.each([
+        [
+            'daily comparison across a month boundary',
+            '2024-05-31',
+            {
+                interval: 'day' as const,
+                compareDateRange: { date_from: '2024-05-31T00:00:00Z', date_to: '2024-05-31T23:59:59Z' },
+            },
+            'Previous (31 May 2024)',
+        ],
+        [
+            'weekly comparison with Monday week start across a year boundary',
+            '2024-12-23',
+            {
+                interval: 'week' as const,
+                timezone: 'UTC',
+                weekStartDay: 1,
+                compareDateRange: { date_from: '2024-12-23T00:00:00Z', date_to: '2024-12-29T23:59:59Z' },
+            },
+            'Previous (23-29 Dec 2024)',
+        ],
+        [
+            'monthly comparison across a year boundary',
+            '2024-12-01',
+            {
+                interval: 'month' as const,
+                compareDateRange: { date_from: '2024-12-01T00:00:00Z', date_to: '2024-12-31T23:59:59Z' },
+            },
+            'Previous (December 2024)',
+        ],
+        [
+            'daily comparison on a US DST boundary in the project timezone',
+            '2024-03-10',
+            {
+                interval: 'day' as const,
+                timezone: 'America/Los_Angeles',
+                compareDateRange: {
+                    date_from: '2024-03-10T00:00:00-08:00',
+                    date_to: '2024-03-10T23:59:59-07:00',
+                },
+            },
+            'Previous (10 Mar 2024)',
+        ],
+        [
+            'partial weekly comparison constrained to the resolved compare range',
+            '2025-06-08',
+            {
+                interval: 'week' as const,
+                timezone: 'America/Los_Angeles',
+                weekStartDay: 0,
+                compareDateRange: {
+                    date_from: '2025-06-08T00:00:00-07:00',
+                    date_to: '2025-06-11T23:59:59-07:00',
+                },
+            },
+            'Previous (8-11 Jun 2025)',
+        ],
+    ])('adds the previous bucket date for %s', (_, date, options, expected) => {
+        expect(getFormattedCompareLabel(previousDatum(date), options)).toEqual(expected)
+    })
+
+    it('does not duplicate the current bucket date in the current comparison label', () => {
+        expect(
+            getFormattedCompareLabel(
+                { compare_label: CompareLabelType.Current, date: '2025-01-01' },
+                { interval: 'day' }
+            )
+        ).toEqual('Current')
+    })
+
+    it('keeps custom comparison label formatting for callers that provide one', () => {
+        expect(
+            getFormattedCompareLabel(
+                { compare_label: CompareLabelType.Previous, date: '2025-01-01', date_label: 'Jan 1' },
+                {
+                    interval: 'day',
+                    formatCompareLabel: (label, dateLabel) => `${label}:${dateLabel}`,
+                }
+            )
+        ).toEqual('previous:Jan 1')
+    })
+
+    it('adds the previous bucket date alongside breakdown labels', () => {
+        const html = renderToStaticMarkup(
+            createElement(
+                Fragment,
+                null,
+                getDatumTitle(
+                    {
+                        id: 0,
+                        dataIndex: 0,
+                        datasetIndex: 0,
+                        order: 0,
+                        breakdown_value: 'Chrome',
+                        compare_label: CompareLabelType.Previous,
+                        date: '2025-06-05',
+                        count: 12,
+                    },
+                    null,
+                    { interval: 'day', timezone: 'UTC' }
+                )
+            )
+        )
+
+        expect(html).toContain('Chrome')
+        expect(html).toContain('Previous (5 Jun 2025)')
     })
 })

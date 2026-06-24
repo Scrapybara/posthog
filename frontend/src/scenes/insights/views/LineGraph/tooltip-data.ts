@@ -5,7 +5,8 @@ import { GraphDataset } from '~/types'
 
 export function createTooltipData(
     tooltipDataPoints: TooltipItem<any>[],
-    filterFn?: (s: SeriesDatum) => boolean
+    filterFn?: (s: SeriesDatum) => boolean,
+    getDate?: (tooltipItem: TooltipItem<any>, dataset: GraphDataset) => string | number | undefined
 ): SeriesDatum[] {
     if (!tooltipDataPoints) {
         return []
@@ -27,6 +28,7 @@ export function createTooltipData(
                 compare_label: pointDataset?.compare_label ?? pointDataset?.compareLabels?.[dp.dataIndex] ?? undefined,
                 action: pointDataset?.action ?? pointDataset?.actions?.[dp.dataIndex] ?? undefined,
                 label: pointDataset?.label ?? pointDataset.labels?.[dp.dataIndex] ?? undefined,
+                date: getDate?.(dp, pointDataset),
                 date_label: pointDataset?.labels?.[dp.dataIndex] ?? undefined,
                 order: pointDataset?.order ?? 0,
                 color: Array.isArray(pointDataset.borderColor)

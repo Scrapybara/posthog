@@ -354,6 +354,7 @@ export function TrendsBarChart({
                     interval={interval ?? undefined}
                     breakdownFilter={breakdownFilter ?? undefined}
                     dateRange={insightData?.resolved_date_range ?? undefined}
+                    compareDateRange={insightData?.resolved_compare_date_range ?? undefined}
                     trendsFilter={trendsFilter}
                     formula={formula}
                     showPercentView={isStickiness}
@@ -363,6 +364,8 @@ export function TrendsBarChart({
                     formatCompareLabel={context?.formatCompareLabel}
                     onRowClick={onRowClick}
                     showHeader={isAggregated ? false : undefined}
+                    weekStartDay={weekStartDay}
+                    includeDatumDates={!isAggregated}
                 />
             )
         },
@@ -371,6 +374,7 @@ export function TrendsBarChart({
             interval,
             breakdownFilter,
             insightData?.resolved_date_range,
+            insightData?.resolved_compare_date_range,
             trendsFilter,
             formula,
             isStickiness,
@@ -381,6 +385,7 @@ export function TrendsBarChart({
             canHandleClick,
             clickDeps,
             isAggregated,
+            weekStartDay,
         ]
     )
 

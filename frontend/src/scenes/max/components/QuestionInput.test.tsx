@@ -2,6 +2,7 @@ import '@testing-library/jest-dom'
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { BindLogic, Provider } from 'kea'
+import type { ComponentProps } from 'react'
 
 import { useMocks } from '~/mocks/jest'
 import { initKeaTests } from '~/test/init'
@@ -9,7 +10,7 @@ import { initKeaTests } from '~/test/init'
 import { maxGlobalLogic } from '../maxGlobalLogic'
 import { maxLogic } from '../maxLogic'
 import { maxThreadLogic } from '../maxThreadLogic'
-import { maxMocks } from '../testUtils'
+import { maxMocks, mockStream } from '../testUtils'
 import { QuestionInput } from './QuestionInput'
 
 jest.mock(
@@ -24,32 +25,36 @@ jest.mock(
 describe('QuestionInput', () => {
     let maxLogicInstance: ReturnType<typeof maxLogic.build>
     let threadLogicInstance: ReturnType<typeof maxThreadLogic.build>
+    let maxGlobalLogicInstance: ReturnType<typeof maxGlobalLogic.build>
+    let threadProps: { panelId: string; conversationId: string }
 
     beforeEach(() => {
         useMocks(maxMocks)
         initKeaTests()
 
-        const maxGlobalLogicInstance = maxGlobalLogic()
+        maxGlobalLogicInstance = maxGlobalLogic()
         maxGlobalLogicInstance.mount()
         jest.spyOn(maxGlobalLogicInstance.selectors, 'dataProcessingAccepted').mockReturnValue(true)
 
         maxLogicInstance = maxLogic({ panelId: 'test' })
         maxLogicInstance.mount()
 
-        const threadProps = { panelId: 'test', conversationId: maxLogicInstance.values.frontendConversationId }
+        threadProps = { panelId: 'test', conversationId: maxLogicInstance.values.frontendConversationId }
         threadLogicInstance = maxThreadLogic(threadProps)
         threadLogicInstance.mount()
+    })
 
+    function renderQuestionInput(props: Partial<ComponentProps<typeof QuestionInput>> = {}): void {
         render(
             <Provider>
                 <BindLogic logic={maxLogic} props={{ panelId: 'test' }}>
                     <BindLogic logic={maxThreadLogic} props={threadProps}>
-                        <QuestionInput />
+                        <QuestionInput {...props} />
                     </BindLogic>
                 </BindLogic>
             </Provider>
         )
-    })
+    }
 
     afterEach(() => {
         cleanup()
@@ -64,6 +69,7 @@ describe('QuestionInput', () => {
     const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
     it('does not release a sandbox pre-warm when blur moves to the send button', async () => {
+        renderQuestionInput()
         // Simulate a completed warm; a release would clear the flag (and relay-cancel the warm Run).
         threadLogicInstance.cache.prewarmed = true
         threadLogicInstance.cache.prewarming = false
@@ -81,6 +87,7 @@ describe('QuestionInput', () => {
     })
 
     it('releases a sandbox pre-warm when blur leaves the input for somewhere else', async () => {
+        renderQuestionInput()
         threadLogicInstance.cache.prewarmed = true
         threadLogicInstance.cache.prewarming = false
 
@@ -94,6 +101,7 @@ describe('QuestionInput', () => {
     })
 
     it('reopens the popover after Escape dismisses it and a fresh slash is typed', async () => {
+        renderQuestionInput()
         const input = screen.getByRole('textbox') as HTMLTextAreaElement
 
         fireEvent.change(input, { target: { value: '/' } })
@@ -109,17 +117,61 @@ describe('QuestionInput', () => {
         await waitFor(() => expect(slashCommandItem()).toBeInTheDocument())
     })
 
+    it('keeps long content in the scrolling textarea while the send control stays mounted', async () => {
+        renderQuestionInput()
+        const input = screen.getByRole('textbox') as HTMLTextAreaElement
+        const longPrompt = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: explain this`).join('\n')
+
+        fireEvent.change(input, { target: { value: longPrompt } })
+
+        await waitFor(() => expect(input).toHaveValue(longPrompt))
+        expect(input).toHaveClass('max-h-[min(35dvh,13.5rem)]')
+        expect(input).toHaveClass('overflow-y-auto')
+        expect(document.querySelector('[data-attr="max-send-message"]')).toBeInTheDocument()
+    })
+
+    it('submits with Enter and preserves Shift+Enter for new lines', async () => {
+        mockStream()
+        const onSubmit = jest.fn()
+        renderQuestionInput({ onSubmit })
+        const input = screen.getByRole('textbox') as HTMLTextAreaElement
+
+        fireEvent.change(input, { target: { value: 'Explain activation trends' } })
+        await waitFor(() => expect(input).toHaveValue('Explain activation trends'))
+
+        fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+        expect(onSubmit).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(onSubmit).toHaveBeenCalledTimes(1)
+    })
+
+    it('disables empty and loading composer states', async () => {
+        renderQuestionInput()
+        expect(document.querySelector('[data-attr="max-send-message"]')).toHaveAttribute('aria-disabled', 'true')
+
+        cleanup()
+        jest.spyOn(maxGlobalLogicInstance.selectors, 'dataProcessingAccepted').mockReturnValue(false)
+        threadLogicInstance.actions.reconnectToStream()
+        renderQuestionInput()
+
+        expect(threadLogicInstance.values.threadLoading).toBe(true)
+        await waitFor(() => expect(screen.getByRole('textbox')).toBeDisabled())
+    })
+
     describe('stop button cancel state', () => {
         const sendButton = (): HTMLElement | null => document.querySelector('[data-attr="max-send-message"]')
         const stopButton = (): HTMLElement | null => document.querySelector('[data-attr="max-stop-generation"]')
 
         it('shows the stop affordance while streaming and not cancelling', async () => {
+            renderQuestionInput()
             threadLogicInstance.actions.reconnectToStream()
             await waitFor(() => expect(stopButton()).not.toBeNull())
             expect(sendButton()).toHaveAttribute('aria-disabled', 'true')
         })
 
         it('shows send (not stop) while cancelLoading is true', async () => {
+            renderQuestionInput()
             threadLogicInstance.actions.reconnectToStream()
             threadLogicInstance.actions.setCancelLoading(true)
 
@@ -130,6 +182,7 @@ describe('QuestionInput', () => {
         })
 
         it('returns to send (not stop) after cancel resolves and loading clears', async () => {
+            renderQuestionInput()
             threadLogicInstance.actions.reconnectToStream()
             threadLogicInstance.actions.setCancelLoading(true)
             await waitFor(() => expect(sendButton()).not.toBeNull())

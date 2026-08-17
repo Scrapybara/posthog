@@ -150,7 +150,14 @@ impl FeatureFlagList {
                       ARRAY_AGG(ctx.name) FILTER (WHERE ctx.name IS NOT NULL),
                       '{}'::text[]
                   ) AS evaluation_tags,
-                  bucketing_identifier
+                  bucketing_identifier,
+                  -- Mirror the canonical Django predicate (live_experiment_exists in
+                  -- products/experiments/backend/models/experiment.py,
+                  -- Experiment.objects.filter(feature_flag_id=..., deleted=False)). Keep this in lockstep with it.
+                  EXISTS (
+                      SELECT 1 FROM posthog_experiment e
+                      WHERE e.feature_flag_id = f.id AND e.deleted = false
+                  ) AS has_experiment
               FROM posthog_featureflag AS f
               JOIN posthog_team AS t ON (f.team_id = t.id)
               LEFT JOIN posthog_featureflagevaluationcontext AS ec ON (f.id = ec.feature_flag_id)
@@ -194,6 +201,7 @@ impl FeatureFlagList {
                         evaluation_runtime: row.evaluation_runtime,
                         evaluation_tags: row.evaluation_tags,
                         bucketing_identifier: row.bucketing_identifier,
+                        has_experiment: row.has_experiment,
                     }),
                     Err(e) => {
                         // This is highly unlikely to happen, but if it does, we skip the flag.
@@ -312,6 +320,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_from_pg_computes_has_experiment() {
+        let context = TestContext::new(None).await;
+        let team = context
+            .insert_new_team(None)
+            .await
+            .expect("Failed to insert team");
+
+        let make_row = |key: &str| FeatureFlagRow {
+            team_id: team.id,
+            name: Some(key.to_string()),
+            key: key.to_string(),
+            filters: serde_json::json!({"groups": [{"properties": [], "rollout_percentage": 100}]}),
+            active: true,
+            ..Default::default()
+        };
+
+        let live = context
+            .insert_flag(team.id, Some(make_row("flag_with_live_experiment")))
+            .await
+            .expect("Failed to insert flag");
+        let deleted_only = context
+            .insert_flag(team.id, Some(make_row("flag_with_deleted_experiment")))
+            .await
+            .expect("Failed to insert flag");
+        context
+            .insert_flag(team.id, Some(make_row("flag_without_experiment")))
+            .await
+            .expect("Failed to insert flag");
+
+        context
+            .insert_experiment(live.id, team.id, false)
+            .await
+            .expect("Failed to insert live experiment");
+        // A deleted experiment must not count as linkage.
+        context
+            .insert_experiment(deleted_only.id, team.id, true)
+            .await
+            .expect("Failed to insert deleted experiment");
+
+        let flags = FeatureFlagList::from_pg(context.non_persons_reader.clone(), team.id)
+            .await
+            .expect("Failed to fetch flags from pg");
+
+        let by_key = |key: &str| {
+            flags
+                .iter()
+                .find(|f| f.key == key)
+                .unwrap_or_else(|| panic!("missing flag {key}"))
+                .has_experiment
+        };
+
+        assert!(by_key("flag_with_live_experiment"));
+        assert!(!by_key("flag_with_deleted_experiment"));
+        assert!(!by_key("flag_without_experiment"));
+    }
+
+    #[tokio::test]
     async fn test_fetch_empty_team_from_pg() {
         let context = TestContext::new(None).await;
 
@@ -366,6 +431,7 @@ mod tests {
             evaluation_runtime: Some("all".to_string()),
             evaluation_tags: None,
             bucketing_identifier: None,
+            has_experiment: false,
         };
 
         let flag2 = FeatureFlagRow {
@@ -381,6 +447,7 @@ mod tests {
             evaluation_runtime: Some("all".to_string()),
             evaluation_tags: None,
             bucketing_identifier: None,
+            has_experiment: false,
         };
 
         // Insert multiple flags for the team
@@ -638,6 +705,7 @@ mod tests {
             team_id: 123,
             name: Some("Test Flag".to_string()),
             key: "test_flag".to_string(),
+            has_experiment: false,
             filters: FlagFilters::default(),
             deleted: false,
             active: true,
@@ -1113,7 +1181,7 @@ mod tests {
         );
 
         // Verify flags parsed correctly
-        assert_eq!(flags.len(), 5, "Expected 5 flags in contract fixture");
+        assert_eq!(flags.len(), 7, "Expected 7 flags in contract fixture");
 
         // Full flag with all optional fields
         let full_flag = &flags[0];
@@ -1169,14 +1237,27 @@ mod tests {
         assert_eq!(missing_dep_flag.key, "missing-dep-flag");
         assert_eq!(missing_dep_flag.filters.groups.len(), 1);
 
+        // Referenced disabled flag: both writers keep it for the dependency below,
+        // with filters blanked to the empty shape.
+        let referenced_disabled = &flags[5];
+        assert_eq!(referenced_disabled.key, "referenced-disabled-flag");
+        assert!(!referenced_disabled.active);
+        assert!(referenced_disabled.filters.groups.is_empty());
+
+        // Its dependent: an active flag whose condition points at the disabled flag.
+        let disabled_dependent = &flags[6];
+        assert_eq!(disabled_dependent.key, "disabled-dependent-flag");
+        assert_eq!(disabled_dependent.filters.groups.len(), 1);
+
         // Verify evaluation_metadata parsed correctly
         let meta = metadata;
         assert_eq!(meta.dependency_stages.len(), 2);
-        assert_eq!(meta.dependency_stages[0], vec![1, 2, 3, 5]);
-        assert_eq!(meta.dependency_stages[1], vec![4]);
+        assert_eq!(meta.dependency_stages[0], vec![1, 2, 3, 5, 6]);
+        assert_eq!(meta.dependency_stages[1], vec![4, 7]);
         assert_eq!(meta.flags_with_missing_deps, vec![5]);
-        assert_eq!(meta.transitive_deps.len(), 5);
+        assert_eq!(meta.transitive_deps.len(), 7);
         assert!(meta.transitive_deps[&4].contains(&2));
+        assert!(meta.transitive_deps[&7].contains(&6));
 
         // Verify cohorts parsed correctly
         let cohorts = cohorts.expect("cohorts should be present in contract fixture");
@@ -1189,6 +1270,10 @@ mod tests {
         assert!(
             cohorts[0].last_backfill_person_properties_at.is_some(),
             "last_backfill_person_properties_at should deserialize from ISO 8601 timestamp"
+        );
+        assert!(
+            cohorts[0].last_realtime_cohort_calculation_at.is_some(),
+            "last_realtime_cohort_calculation_at should deserialize from ISO 8601 timestamp"
         );
 
         // Verify cohort filters can parse into the expected CohortProperty structure
@@ -1208,6 +1293,7 @@ mod tests {
             team_id: 1,
             name: None,
             key: "test_flag".to_string(),
+            has_experiment: false,
             filters: FlagFilters {
                 groups: vec![FlagPropertyGroup {
                     properties: Some(vec![
@@ -1321,6 +1407,7 @@ mod tests {
             team_id: 123,
             name: Some("Serialization Test".to_string()),
             key: "serialize_test".to_string(),
+            has_experiment: false,
             filters: FlagFilters::default(),
             deleted: false,
             active: true,

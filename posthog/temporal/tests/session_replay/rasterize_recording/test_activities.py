@@ -1,8 +1,12 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from django.test import override_settings
+
 from parameterized import parameterized
 
+from posthog.jwt import PosthogJwtAudience, decode_jwt
+from posthog.session_recordings.recordings.recording_api_jwt import recording_api_signing_keys
 from posthog.temporal.session_replay.rasterize_recording.activities import (
     build_rasterization_input,
     finalize_rasterization,
@@ -117,6 +121,32 @@ class TestBuildRasterizationInput:
         assert ai.mouse_tail is False
         assert ai.max_virtual_time == 300.0
 
+    def test_mints_team_scoped_read_token(self):
+        asset = _make_asset(pk=42, team_id=7, export_context={"session_recording_id": "abc123"})
+        patches, _ = _patches(asset)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = build_rasterization_input(42)
+
+        ai = result.activity_input
+        assert ai is not None
+        decoded = decode_jwt(
+            ai.recording_api_token, PosthogJwtAudience.RECORDING_API, verification_keys=recording_api_signing_keys()
+        )
+        assert decoded["team_id"] == 7
+        assert decoded["op"] == "read"
+
+    @override_settings(RECORDING_API_JWT_SECRET="")
+    def test_no_token_when_jwt_disabled(self):
+        # Before the JWT scheme is rolled out, the token is empty and the rasterizer relays the
+        # legacy shared secret instead.
+        asset = _make_asset(pk=42, team_id=7, export_context={"session_recording_id": "abc123"})
+        patches, _ = _patches(asset)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = build_rasterization_input(42)
+
+        assert result.activity_input is not None
+        assert result.activity_input.recording_api_token == ""
+
     def test_defaults(self):
         asset = _make_asset(pk=10, team_id=3, export_context={"session_recording_id": "sess-1"})
         patches, _ = _patches(asset)
@@ -152,6 +182,23 @@ class TestBuildRasterizationInput:
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             with pytest.raises(ValueError, match="no session_recording_id"):
                 build_rasterization_input(100)
+
+    @parameterized.expand(
+        [
+            ("traversal", "../../2/recordings/other"),
+            ("slash", "abc/def"),
+            ("backslash", "abc\\def"),
+            ("percent_encoded", "%2e%2e%2f2"),
+            ("dot_segment", ".."),
+            ("trailing_newline", "abc\n"),
+        ]
+    )
+    def test_malformed_session_id_raises(self, _name, session_id):
+        asset = _make_asset(pk=101, export_context={"session_recording_id": session_id})
+        patches, _ = _patches(asset)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with pytest.raises(ValueError, match="malformed session_recording_id"):
+                build_rasterization_input(101)
 
     def test_timestamp_and_duration_mapped_to_offsets(self):
         asset = _make_asset(
@@ -252,6 +299,39 @@ class TestBuildRasterizationInput:
             result = build_rasterization_input(50)
         assert result.activity_input is not None
         assert getattr(result.activity_input, field) == expected_value
+
+    @parameterized.expand(
+        [
+            ("in_range", 24, 24),
+            ("at_cap", 60, 60),
+            ("above_cap", 1000, 60),
+            ("absurd", 100_000, 60),
+        ]
+    )
+    def test_recording_fps_capped(self, _name, recording_fps, expected_fps):
+        asset = _make_asset(pk=50, export_context={"session_recording_id": "s1", "recording_fps": recording_fps})
+        patches, _ = _patches(asset)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = build_rasterization_input(50)
+        assert result.activity_input is not None
+        assert result.activity_input.recording_fps == expected_fps
+
+    @parameterized.expand(
+        [
+            ("slow_motion_preserved", 0.5, 0.5),
+            ("default_in_range", 4, 4),
+            ("at_cap", 360, 360),
+            ("above_cap", 1000, 360),
+            ("absurd", 99_999, 360),
+        ]
+    )
+    def test_playback_speed_capped(self, _name, playback_speed, expected_speed):
+        asset = _make_asset(pk=50, export_context={"session_recording_id": "s1", "playback_speed": playback_speed})
+        patches, _ = _patches(asset)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = build_rasterization_input(50)
+        assert result.activity_input is not None
+        assert result.activity_input.playback_speed == expected_speed
 
 
 class TestBuildRasterizationCache:
@@ -372,6 +452,7 @@ class TestFingerprint:
         defaults = {
             "team_id": 1,
             "session_id": "s1",
+            "recording_api_token": "tok",
             "s3_bucket": "posthog",
             "s3_key_prefix": "exports/mp4/team-1/task-1",
             "playback_speed": 4,
@@ -397,6 +478,12 @@ class TestFingerprint:
     def test_excludes_team_and_session(self):
         a = self._make_input(team_id=1, session_id="s1")
         b = self._make_input(team_id=2, session_id="s2")
+        assert compute_params_fingerprint(a) == compute_params_fingerprint(b)
+
+    def test_excludes_recording_api_token(self):
+        # The per-run token must not affect the cache key, or every render would be a cache miss.
+        a = self._make_input(recording_api_token="token-a")
+        b = self._make_input(recording_api_token="token-b")
         assert compute_params_fingerprint(a) == compute_params_fingerprint(b)
 
     @parameterized.expand(

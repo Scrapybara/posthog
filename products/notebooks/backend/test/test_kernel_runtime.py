@@ -13,6 +13,7 @@ from django.utils import timezone
 from parameterized import parameterized
 
 from products.notebooks.backend.kernel_runtime import (
+    NOTEBOOK_KERNEL_TTL_SECONDS,
     KernelRuntimeService,
     _KernelHandle,
     _NotebookBridgeParser,
@@ -47,6 +48,7 @@ class _FakeSandbox:
         self.stream = stream
         self.command: str | None = None
         self.timeout_seconds: int | None = None
+        self.written_files: dict[str, bytes] = {}
 
     def execute(self, command: str, timeout_seconds: int | None = None) -> _FakeExecutionResult:
         self.command = command
@@ -59,6 +61,10 @@ class _FakeSandbox:
         if self.stream is None:
             raise RuntimeError("Fake sandbox stream not configured")
         return self.stream
+
+    def write_file(self, path: str, content: bytes) -> _FakeExecutionResult:
+        self.written_files[path] = content
+        return self.result
 
 
 class _FakeSandboxStream:
@@ -100,7 +106,7 @@ class TestKernelRuntimeService(BaseTest):
             (
                 "memory_only",
                 {"kernel_memory_gb": 12.0},
-                {"memory_gb": 12.0},
+                {"memory_gb": 12.0, "ttl_seconds": NOTEBOOK_KERNEL_TTL_SECONDS},
             ),
         ]
     )
@@ -341,6 +347,43 @@ class TestKernelRuntimeService(BaseTest):
 
         assert execution_result.stdout == "before\nafter"
         mock_payload.assert_called_once_with(bridge_payload_json, handle)
+
+    def test_notebook_bridge_hogql_executes_as_runtime_user(self) -> None:
+        service = KernelRuntimeService(execution_timeout=5)
+        notebook = Notebook.objects.create(team=self.team)
+        runtime = KernelRuntime.objects.create(
+            team=self.team,
+            notebook=notebook,
+            notebook_short_id=notebook.short_id,
+            user=self.user,
+            status=KernelRuntime.Status.RUNNING,
+            backend=KernelRuntime.Backend.DOCKER,
+            connection_file="/tmp/connection.json",
+            sandbox_id="sandbox-1",
+        )
+        handle = _KernelHandle(
+            runtime=runtime,
+            lock_name="lock",
+            started_at=timezone.now(),
+            last_activity_at=timezone.now(),
+            backend=KernelRuntime.Backend.DOCKER,
+            sandbox_id=runtime.sandbox_id,
+        )
+        sandbox = _FakeSandbox(_FakeExecutionResult(stdout=""))
+        _FakeSandboxClass.sandbox = sandbox
+        payload = {"call": "hogql_execute", "query": "select * from warehouse_table", "response_path": "/tmp/resp.json"}
+
+        with (
+            patch.object(service, "_get_sandbox_class", return_value=_FakeSandboxClass),
+            patch("products.notebooks.backend.kernel_runtime.execute_hogql_query") as mock_execute,
+        ):
+            mock_execute.return_value.model_dump.return_value = {"results": [[1]], "columns": ["count"]}
+            service._handle_notebook_bridge_payload(json.dumps(payload), handle)
+
+        mock_execute.assert_called_once()
+        assert mock_execute.call_args.kwargs["user"] == self.user
+        header, body = sandbox.written_files["/tmp/resp.json"].split(b"\n", 1)
+        assert int(header) == len(body)
 
     def test_execute_in_sandbox_stream_yields_output_and_result(self) -> None:
         service = KernelRuntimeService(execution_timeout=5)

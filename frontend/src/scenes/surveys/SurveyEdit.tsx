@@ -33,7 +33,7 @@ import { LemonField } from 'lib/lemon-ui/LemonField'
 import { LemonRadio, LemonRadioOption } from 'lib/lemon-ui/LemonRadio'
 import { Tooltip } from 'lib/lemon-ui/Tooltip'
 import { featureFlagLogic as enabledFeaturesLogic } from 'lib/logic/featureFlagLogic'
-import { formatDate } from 'lib/utils'
+import { formatDate } from 'lib/utils/datetime'
 import { ValueOf } from 'lib/utils/types'
 import { featureFlagLogic } from 'scenes/feature-flags/featureFlagLogic'
 import { FeatureFlagReleaseConditions } from 'scenes/feature-flags/FeatureFlagReleaseConditions'
@@ -65,6 +65,8 @@ import {
 } from '~/types'
 
 import { SurveyBranchingFlowModal } from './branching-flow/SurveyBranchingFlowModal'
+import { SurveyPublicContentNotice } from './components/SurveyPublicContentNotice'
+import { SurveyUrlAudienceEstimate } from './components/SurveyUrlAudienceEstimate'
 import { SURVEY_TYPE_LABEL_MAP, SurveyMatchTypeLabels, defaultSurveyFieldValues } from './constants'
 import { COMMON_LANGUAGES, getBaseLanguage, getSurveyLanguageName } from './language'
 import { SurveyAPIEditor } from './SurveyAPIEditor'
@@ -502,6 +504,7 @@ export default function SurveyEdit({ id }: { id: string }): JSX.Element {
                         </>
                     }
                 />
+                <SurveyPublicContentNotice />
                 <div className="sticky top-[34px] z-[100] bg-bg-3000">
                     {(() => {
                         const shouldShowValidationErrors = hasVisibleTranslationValidationErrors
@@ -1581,6 +1584,7 @@ export default function SurveyEdit({ id }: { id: string }): JSX.Element {
                                                                                       fullWidth
                                                                                   />
                                                                               </div>
+                                                                              <SurveyUrlAudienceEstimate />
                                                                           </LemonField.Pure>
                                                                           <LemonField.Pure
                                                                               label="Device types"
@@ -1589,7 +1593,10 @@ export default function SurveyEdit({ id }: { id: string }): JSX.Element {
                                                                               }
                                                                               help={
                                                                                   <>
-                                                                                      <Link to="https://posthog.com/docs/surveys/creating-surveys#display-conditions">
+                                                                                      <Link
+                                                                                          to="https://posthog.com/docs/surveys/creating-surveys#display-conditions"
+                                                                                          target="_blank"
+                                                                                      >
                                                                                           See accepted values
                                                                                       </Link>
                                                                                       . Needs posthog-js 1.214+.
@@ -1749,7 +1756,10 @@ export default function SurveyEdit({ id }: { id: string }): JSX.Element {
                                                                       </>
                                                                   )}
                                                               </LemonField>
-                                                              <LemonField.Pure label="Audience filters">
+                                                              <LemonField.Pure
+                                                                  label="Audience filters"
+                                                                  info="User counts shown here estimate how many people match these filters across your project. The survey's actual reach is usually smaller, because display conditions like URL and device targeting still control where it appears."
+                                                              >
                                                                   <BindLogic
                                                                       logic={featureFlagLogic}
                                                                       props={{

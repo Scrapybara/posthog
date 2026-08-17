@@ -34,14 +34,21 @@ Hence the explicit separation between the data and view layers.
   - Props for both logics and components are PascalCase and end with `Props` (`DashboardLogicProps` & `DashboardMenuProps`)
   - Name the `.ts` file according to its main export: `DashboardMenu.ts` or `DashboardMenu.tsx` or `dashboardLogic.ts` or `Dashboard.scss`. Pay attention to the case.
   - Avoid `index.ts`, `styles.css`, and other generic names, even if this is the only file in a directory.
-- Scenes & tabs
-  - Our app is built of _tabs that contain scenes_, managed through a scene router in `sceneLogic`.
+- Component structure & reuse
+  - One component per file — a file exports the component its name promises. Avoid re-export shims and barrel files: every symbol should have exactly one import path, and moving a symbol means updating its consumers, not leaving a compatibility stub.
+  - Reach for an existing design-system component (Lemon/quill) before hand-rolling markup — reuse is how new UI stays on-brand. When you genuinely need a custom component, build it from the system's tokens and primitives and match the surrounding scene's density; avoid the generic AI-generated look (purple gradients, glassmorphism, gradient text, icon-tile card grids, decorative motion).
+  - Before building new UI, read a few comparable scenes or components and model yours on the ones that follow these conventions. The codebase contains legacy that predates them — an existing violation is not license to repeat it. Conventions outrank precedent, and compliant precedent outranks invention.
+  - Extract a shared component once the same shape appears in several places and the call sites read as content, not markup. Keep new generics next to the feature that uses them, and promote to `lib/` only when a second feature needs them. Don't build wrappers with a single consumer, and don't add boolean variant props so one caller can switch half the component off — that's two components.
+  - Interactive elements are real `<button>`/`<a>` elements (`LemonButton` renders one) — never `onClick` on a `<div>`.
+  - Loading, empty, and error are three different screens. Never show an empty state from data that hasn't resolved yet — branch on the loading state first.
+  - When renaming a feature, sweep code symbols completely — but analytics-facing strings (event names, property names and values, `data-attr` values) and persisted keys are a frozen API: leave them as-is, with a comment noting they're pinned.
+- Scenes
+  - Our app is built of _scenes_, managed through a scene router in `sceneLogic`.
   - A scene is the smallest unit in the router and for code splitting. Usually we split scenes by resource type (dashboard, insight) and function (edit, index).
   - Each scene (e.g. Dashboards) exports an object of type `SceneExport`, containing the scene's root `logic` and its React `component`.
-  - The scene's logic is automatically mounted if on a tab, and receives a `tabId: string` prop. It's strongly recommended to key your logic with this `tabId`.
-  - It's also strongly recommended to add the `tabAwareScene()` function to your scene's logic. This catches bugs when mounting the logic from somewhere without the `tabId` prop.
-  - Instead of `urlToAction` and `actionToUrl`, use `tabAwareUrlToAction` and `tabAwareActionToUrl`. Try to only only use them on the scene's logic, not in any deeper logics.
-  - When a scene becomes inactive (you open a different tab), it's still around in the background. However any logics mounted by React components through the view layer will unmount. Use `useAttachedLogic(dataNoteLogic(propsFromComponent), mySceneLogic({ tabId }))` to attach any logic to a scene logic. It'll persist until the scene's logic is unmounted, surviving React component remounts.
+  - The scene's logic is automatically mounted and receives the scene's URL params as props (via `paramsToProps`).
+  - Use `urlToAction` and `actionToUrl` on the scene's logic to sync state with the URL. Try to only use them on the scene's logic, not in any deeper logics.
+  - Logics mounted by React components through the view layer unmount when the component unmounts. Use `useAttachedLogic(dataNodeLogic(propsFromComponent), mySceneLogic())` to attach a logic to the scene's logic so it persists until the scene's logic is unmounted, surviving React component remounts.
   - You can control what's shown on the tab via the `breadcrumbs` selector in your scene's logic. The last breadcrumb controls the title and the icon, the one before that controls the back button. If there are more breadcrumbs, they will be ignored.
 - Kea
   - It's worth repeating: think of the data flow. Then work to simplify it. Derive as much state as possible via selectors, update the source via cascading actions, and avoid complex loops where a value triggers a subscription which calls an action which changes the value which triggers the subscription, ...
@@ -57,6 +64,7 @@ Hence the explicit separation between the data and view layers.
     - We loosely follow BEM conventions. If an element can't be namespaced inside a container class (e.g. modals that break out of the containing DOM element), use BEM style names like `.DashboardMenu__modal` to keep things namespaced.
   - Keep an eye out for custom styles in SCSS files that can be easily replaced with Tailwind classes and replace them with Tailwind when you see them
 - Testing
+  - Before adding a test, make sure it earns its place and sits as low on the test pyramid as it can — the value/cost rubric in [Backend coding conventions › Testing](backend-coding#testing) is language-agnostic.
   - Write [logic tests](https://keajs.org/docs/intro/testing) for all logic files.
   - [react testing library](https://testing-library.com/docs/react-testing-library/intro/) tests are particularly useful for components with complex interactions or to guide future humans or agents when they're changing components without full context of the uses and edge cases
   - Add all new presentational elements and scenes to [our storybook](https://storybook.dev.posthog.dev/). Run `pnpm storybook` locally.

@@ -6,7 +6,7 @@ import { LemonButton, LemonInputSelect, LemonSelect } from '@posthog/lemon-ui'
 import { DateFilter } from 'lib/components/DateFilter/DateFilter'
 import { FilterBar } from 'lib/components/FilterBar'
 import { dayjs } from 'lib/dayjs'
-import { formatDateRange } from 'lib/utils'
+import { formatDateRange } from 'lib/utils/datetime'
 
 import { EndpointsUsageBreakdown } from '~/queries/schema/schema-general'
 import { IntervalType } from '~/types'
@@ -52,7 +52,7 @@ const endpointsUsageDateMapping: DateMappingOption[] = [
         defaultInterval: 'day',
     },
     {
-        key: 'Year to date',
+        key: 'This year',
         values: ['yStart'],
         getFormattedDate: (date: dayjs.Dayjs): string => formatDateRange(date.startOf('y'), date.endOf('d')),
         defaultInterval: 'day',

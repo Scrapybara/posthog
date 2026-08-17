@@ -7,7 +7,7 @@ from django.conf import settings
 from langchain_core.runnables import RunnableConfig
 
 from products.skills.backend.tools.skills import GetLLMSkillFileTool, GetLLMSkillTool, ListLLMSkillsTool
-from products.tasks.backend.max_tools import (
+from products.tasks.backend.facade.max_tools import (
     CreateTaskTool,
     GetTaskRunLogsTool,
     GetTaskRunTool,
@@ -37,7 +37,7 @@ from ee.hogai.tools.call_mcp_server.tool import CallMCPServerTool
 from ee.hogai.tools.finalize_plan.tool import FinalizePlanTool
 from ee.hogai.utils.feature_flags import (
     get_llm_gateway_variant,
-    has_mcp_servers_feature_flag,
+    has_mcp_gateway_feature_flag,
     has_memory_tool_feature_flag,
     has_phai_tasks_feature_flag,
     has_task_tool_feature_flag,
@@ -137,7 +137,7 @@ class ChatAgentToolkitManager(AgentToolkitManager):
                 available_tools.append(tool)
 
         # Add MCP server tool if user has installations and flag is enabled
-        if has_mcp_servers_feature_flag(self._team, self._user):
+        if has_mcp_gateway_feature_flag(self._team, self._user):
             mcp_tool = await CallMCPServerTool.create_tool_class(
                 team=self._team,
                 user=self._user,

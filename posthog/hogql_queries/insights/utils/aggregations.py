@@ -1,6 +1,21 @@
+from dataclasses import dataclass
 from typing import cast
 
 from posthog.hogql import ast
+
+
+@dataclass
+class FirstTimeForUserDataWarehouseConfig:
+    """Retargets the first-time-for-user subquery from the events table to a data warehouse table."""
+
+    table_expr: ast.Field
+    """The data warehouse table, e.g. ast.Field(chain=[table_name])."""
+    timestamp_expr: ast.Expr
+    """The timestamp column, e.g. e.<timestamp_field> (wrapped in toDateTime() for String columns)."""
+    group_by_expr: ast.Expr
+    """The aggregation target, e.g. parse_expr(aggregation_target_field)."""
+    id_select_expr: ast.Expr
+    """The row identifier, e.g. ast.Field(chain=[id_field]); becomes argMin(<id_field>, timestamp)."""
 
 
 class QueryAlternator:
@@ -52,10 +67,13 @@ class QueryAlternator:
 
 class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
     """
-    A specialized QueryAlternator for building queries that identify the first time an event or action occurs for each user.
+    A specialized QueryAlternator for building queries that identify the first time an event or action occurs for each actor.
+
+    The actor is a person by default. When `math_group_type_index` is set, the actor is a group and the query
+    groups by `$group_N` instead of `person_id`.
 
     This class extends the base QueryAlternator to build a query that:
-    - Finds the minimum timestamp for `person_id` filtered by the event/action and right date range.
+    - Finds the minimum timestamp for the actor filtered by the event/action and right date range.
     - Compares it with the minimum timestamp that satisfies general conditions like event/person properties and the left date range.
     - Selects only those events where these two timestamps match.
     """
@@ -70,10 +88,14 @@ class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
         ratio: ast.RatioExpr | None = None,
         is_first_matching_event: bool = False,
         filters_with_breakdown: ast.Expr | None = None,
+        dwh_config: FirstTimeForUserDataWarehouseConfig | None = None,
+        math_group_type_index: int | None = None,
     ):
         self._filters = filters
         self._filters_with_breakdown = filters_with_breakdown
         self._is_first_matching_event = is_first_matching_event
+        self._dwh_config = dwh_config
+        self._math_group_type_index = math_group_type_index
         query.select = self._select_expr(date_from)
         query.select_from = self._select_from_expr(ratio)
         query.where = self._where_expr(date_to, event_or_action_filter, self._matching_event_prefilter())
@@ -92,9 +114,9 @@ class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
         )
 
         min_timestamp_expr = (
-            ast.Call(name="minIf", args=[ast.Field(chain=["timestamp"]), cast(ast.Expr, self._filters)])
+            ast.Call(name="minIf", args=[self._timestamp_field(), cast(ast.Expr, self._filters)])
             if self._uses_conditional_aggregation()
-            else ast.Call(name="min", args=[ast.Field(chain=["timestamp"])])
+            else ast.Call(name="min", args=[self._timestamp_field()])
         )
 
         return [
@@ -106,14 +128,20 @@ class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
                 alias="min_timestamp_with_condition",
                 expr=ast.Call(
                     name="minIf",
-                    args=[ast.Field(chain=["timestamp"]), aggregation_filters],
+                    args=[self._timestamp_field(), aggregation_filters],
                 ),
             ),
         ]
 
+    def _timestamp_field(self) -> ast.Expr:
+        if self._dwh_config is not None:
+            return self._dwh_config.timestamp_expr
+        return ast.Field(chain=["timestamp"])
+
     def _select_from_expr(self, ratio: ast.RatioExpr | None = None) -> ast.JoinExpr:
         sample_value = ast.SampleExpr(sample_value=ratio) if ratio is not None else None
-        return ast.JoinExpr(table=ast.Field(chain=["events"]), alias="e", sample=sample_value)
+        table_expr = self._dwh_config.table_expr if self._dwh_config is not None else ast.Field(chain=["events"])
+        return ast.JoinExpr(table=table_expr, alias="e", sample=sample_value)
 
     def _uses_conditional_aggregation(self) -> bool:
         # first_matching_event_for_user wraps the series filters in conditional aggregates (minIf/argMinIf).
@@ -142,6 +170,10 @@ class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
         return where_filters_expr
 
     def _group_by_expr(self) -> list[ast.Expr]:
+        if self._dwh_config is not None:
+            return [self._dwh_config.group_by_expr]
+        if self._math_group_type_index is not None:
+            return [ast.Field(chain=[f"$group_{int(self._math_group_type_index)}"])]
         return [ast.Field(chain=["person_id"])]
 
     def _having_expr(self) -> ast.Expr:
@@ -162,10 +194,10 @@ class FirstTimeForUserEventsQueryAlternator(QueryAlternator):
         return (
             ast.Call(
                 name="argMinIf",
-                args=[column, ast.Field(chain=["timestamp"]), cast(ast.Expr, self._filters)],
+                args=[column, self._timestamp_field(), cast(ast.Expr, self._filters)],
             )
             if self._uses_conditional_aggregation()
-            else ast.Call(name="argMin", args=[column, ast.Field(chain=["timestamp"])])
+            else ast.Call(name="argMin", args=[column, self._timestamp_field()])
         )
 
     def append_select(self, expr: ast.Expr, aggregate: bool = False):

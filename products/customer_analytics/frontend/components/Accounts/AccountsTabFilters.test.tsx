@@ -10,7 +10,7 @@ import { dataNodeLogic } from '~/queries/nodes/DataNode/dataNodeLogic'
 import { initKeaTests } from '~/test/init'
 import type { UserType } from '~/types'
 
-import { ACCOUNTS_HOGQL_DATA_NODE_KEY } from '../../constants'
+import { ACCOUNTS_TABLE_DATA_NODE_KEY } from '../../constants'
 import { accountsLogic } from './accountsLogic'
 import { AccountsTabFilters } from './AccountsTabFilters'
 
@@ -26,6 +26,9 @@ describe('AccountsTabFilters', () => {
             },
         })
         initKeaTests()
+        // The shared "my accounts" (mineOnly) toggle persists to localStorage; clear it so a
+        // value set by one test can't bleed into the next (which would pre-check the checkbox).
+        localStorage.clear()
         logic = accountsLogic()
         logic.mount()
     })
@@ -33,6 +36,7 @@ describe('AccountsTabFilters', () => {
     afterEach(() => {
         logic.unmount()
         cleanup()
+        localStorage.clear()
     })
 
     function renderFilters(): void {
@@ -40,7 +44,7 @@ describe('AccountsTabFilters', () => {
             <Provider>
                 <BindLogic
                     logic={dataNodeLogic}
-                    props={{ key: ACCOUNTS_HOGQL_DATA_NODE_KEY, query: {}, autoLoad: false }}
+                    props={{ key: ACCOUNTS_TABLE_DATA_NODE_KEY, query: {}, autoLoad: false }}
                 >
                     <AccountsTabFilters />
                 </BindLogic>

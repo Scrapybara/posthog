@@ -1,10 +1,12 @@
 import { Meta } from '@storybook/react'
-import { router } from 'kea-router'
+import { combineUrl, router } from 'kea-router'
 import { useEffect } from 'react'
 
+import { FEATURE_FLAGS } from 'lib/constants'
 import { dayjs } from 'lib/dayjs'
-import { dateStringToDayJs, inStorybookTestRunner, sampleOne, uuid } from 'lib/utils'
-import { deterministicRandom } from 'lib/utils/random'
+import { sampleOne } from 'lib/utils/arrays'
+import { dateStringToDayJs } from 'lib/utils/dateFilters'
+import { inStorybookTestRunner, uuid } from 'lib/utils/dom'
 import { App } from 'scenes/App'
 import { urls } from 'scenes/urls'
 
@@ -12,6 +14,22 @@ import { mswDecorator } from '~/mocks/browser'
 import { MockSignature } from '~/mocks/utils'
 import { LogMessage, LogSeverityLevel } from '~/queries/schema/schema-general'
 import { PropertyFilterType } from '~/types'
+
+function createSeededRandom(seed: number): () => number {
+    // LCG constants from Numerical Recipes
+    let m = 0x80000000 // 2^31
+    let a = 1103515245
+    let c = 12345
+
+    let state = seed ? seed : Math.floor(Math.random() * (m - 1))
+
+    return function () {
+        state = (a * state + c) % m
+        return state / m
+    }
+}
+
+const deterministicRandom = createSeededRandom(1234)
 
 const delayIfNotTestRunner = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, inStorybookTestRunner() ? 0 : 200 + Math.random() * 1000))
@@ -206,10 +224,10 @@ const getLogs = async (
     }
 }
 
-const queryMock: MockSignature = async (req, res, ctx) => {
+const queryMock: MockSignature = async ({ request }) => {
     await delayIfNotTestRunner()
 
-    const body = await req.json()
+    const body = (await request.json()) as Record<string, any>
     const { logs } = await getLogs(body)
 
     const limit = body.query?.limit ?? 100
@@ -217,12 +235,12 @@ const queryMock: MockSignature = async (req, res, ctx) => {
 
     const results = logs.slice(offset, offset + limit)
 
-    return res(ctx.json({ results: results, maxExportableLogs: 5000 }))
+    return [200, { results: results, maxExportableLogs: 5000 }]
 }
 
-const sparklineMock: MockSignature = async (req, res, ctx) => {
+const sparklineMock: MockSignature = async ({ request }) => {
     await delayIfNotTestRunner()
-    const body = await req.json()
+    const body = (await request.json()) as Record<string, any>
     const { startTime, endTime, logs } = await getLogs(body)
 
     // Interval selection
@@ -290,12 +308,12 @@ const sparklineMock: MockSignature = async (req, res, ctx) => {
             })
         )
 
-    return res(ctx.json(results))
+    return [200, results]
 }
 
-const attributesMock: MockSignature = async (req, res, ctx) => {
+const attributesMock: MockSignature = async ({ request }) => {
     await delayIfNotTestRunner()
-    const type = (req.url.searchParams.get('attribute_type') ?? 'log_attribute') as
+    const type = (new URL(request.url).searchParams.get('attribute_type') ?? 'log_attribute') as
         | PropertyFilterType.LogAttribute
         | PropertyFilterType.LogResourceAttribute
     const results = Object.keys(attributeExamples[type]).map((key) => ({
@@ -303,35 +321,118 @@ const attributesMock: MockSignature = async (req, res, ctx) => {
         name: key,
         type: type,
     }))
-    return res(ctx.json(results))
+    return [200, results]
 }
 
-const valuesMock: MockSignature = async (req, res, ctx) => {
+const valuesMock: MockSignature = async ({ request }) => {
     await delayIfNotTestRunner()
-    const key = req.url.searchParams.get('key') ?? ''
-    const type = (req.url.searchParams.get('attribute_type') ?? 'log_attribute') as
+    const url = new URL(request.url)
+    const key = url.searchParams.get('key') ?? ''
+    const type = (url.searchParams.get('attribute_type') ?? 'log_attribute') as
         | PropertyFilterType.LogAttribute
         | PropertyFilterType.LogResourceAttribute
     const results = (attributeExamples[type][key] ?? []).map((value) => ({
         id: value,
         name: value,
     }))
-    return res(ctx.json(results))
+    return [200, results]
+}
+
+// Synthetic per-service aggregates for the Services tab: a realistic head of
+// named services and a long generated tail, so pagination and the truncation
+// banner both render.
+const SERVICE_HEAD: [string, number, number][] = [
+    // [name, log_count, error_rate]
+    ['checkout-api', 4_182_330, 0.0021],
+    ['ingestion-worker', 3_411_089, 0.0004],
+    ['payments-gateway', 2_207_555, 0.1391],
+    ['email-renderer', 1_876_002, 0.0102],
+    ['session-recorder', 1_412_776, 0.0009],
+    ['feature-flag-evaluator', 988_120, 0.0001],
+    ['batch-exporter', 745_990, 0.0356],
+    ['webhook-dispatcher', 512_304, 0.0044],
+]
+
+const SERVICES_FIXTURE = [
+    ...SERVICE_HEAD,
+    ...Array.from({ length: 992 }, (_, i): [string, number, number] => [
+        `batch-worker-${String(i + 1).padStart(3, '0')}`,
+        400_000 - i * 400,
+        0.001,
+    ]),
+].map(([service_name, log_count, error_rate]) => {
+    const error_count = Math.round(log_count * error_rate)
+    const warn = Math.round(log_count * 0.05)
+    const debug = Math.round(log_count * 0.2)
+    return {
+        service_name,
+        log_count,
+        error_count,
+        error_rate,
+        severity_breakdown: { debug, info: log_count - debug - warn - error_count, warn, error: error_count },
+        active_rules: [],
+    }
+})
+
+const servicesMock: MockSignature = async ({ request }) => {
+    await delayIfNotTestRunner()
+    const body = (await request.json()) as Record<string, any>
+    const query = body.query ?? {}
+
+    let services = SERVICES_FIXTURE
+    if (query.serviceNameSearch) {
+        const term = String(query.serviceNameSearch).toLowerCase()
+        services = services.filter((s) => s.service_name.toLowerCase().includes(term))
+    }
+    const totalServices = services.length + (query.serviceNameSearch ? 0 : 287) // pretend a tail beyond the cap exists
+    if (query.serviceNames?.length) {
+        services = services.filter((s) => query.serviceNames.includes(s.service_name))
+    }
+    services = services.slice(0, 1000)
+
+    const totalLogs = services.reduce((acc, s) => acc + s.log_count, 0)
+    const sparklineFor = services.slice(0, 25)
+    const sparkline = sparklineFor.flatMap((s) =>
+        Array.from({ length: 24 }, (_, hour) => ({
+            time: dayjs('2023-02-17T00:00:00Z').add(hour, 'hour').toISOString(),
+            service_name: s.service_name,
+            count: Math.max(1, Math.round((s.log_count / 24) * (0.6 + 0.8 * Math.abs(Math.sin(hour + s.log_count))))),
+        }))
+    )
+
+    return [
+        200,
+        {
+            services: services.map((s) => ({
+                ...s,
+                volume_share_pct: totalLogs ? Math.round((10000 * s.log_count) / totalLogs) / 100 : 0,
+            })),
+            sparkline,
+            total_services: totalServices,
+            summary: {
+                top_services_count: Math.min(5, services.length),
+                top_services_volume_share_pct: 68.4,
+            },
+        },
+    ]
 }
 
 export default {
     title: 'Scenes-App/Logs',
     decorators: [
         // mocks used by all stories in this file
+        // Endpoint prefix follows the caller: the generated client is project-scoped,
+        // while the handwritten ApiRequest helpers are environment-scoped.
         mswDecorator({
             get: {
-                '/api/environments/:team_id/logs/attributes': attributesMock,
+                '/api/projects/:team_id/logs/attributes': attributesMock,
                 '/api/environments/:team_id/logs/values': valuesMock,
-                '/api/environments/:team_id/logs/has_logs': (_, res, ctx) => res(ctx.json({ hasLogs: true })),
+                '/api/environments/:team_id/logs/has_logs': () => [200, { hasLogs: true }],
             },
             post: {
                 '/api/environments/:team_id/logs/query': queryMock,
                 '/api/environments/:team_id/logs/sparkline': sparklineMock,
+                '/api/projects/:team_id/logs/services': servicesMock,
             },
         }),
     ],
@@ -355,4 +456,36 @@ export function LogsScene(): JSX.Element {
 }
 LogsScene.parameters = {
     featureFlags: [],
+}
+
+export function LogsSceneServicesTab(): JSX.Element {
+    useEffect(() => {
+        router.actions.push(combineUrl(urls.logs(), { activeTab: 'services' }).url)
+    }, [])
+    return <App />
+}
+// Story parameters replace the meta's rather than merging, so each list is complete.
+LogsSceneServicesTab.parameters = {
+    featureFlags: [FEATURE_FLAGS.LOGS_TABBED_VIEW, FEATURE_FLAGS.LOGS_SERVICES_VIEW],
+    testOptions: {
+        waitForSelector: '.LemonTable',
+    },
+}
+
+export function LogsSceneServicesTabV2(): JSX.Element {
+    useEffect(() => {
+        router.actions.push(combineUrl(urls.logs(), { activeTab: 'services' }).url)
+    }, [])
+    return <App />
+}
+LogsSceneServicesTabV2.parameters = {
+    featureFlags: [
+        FEATURE_FLAGS.LOGS_TABBED_VIEW,
+        FEATURE_FLAGS.LOGS_SERVICES_VIEW,
+        FEATURE_FLAGS.LOGS_SERVICES_VIEW_V2,
+    ],
+    testOptions: {
+        // v2-specific, so this fails rather than passes if the gate falls through to the v1 table.
+        waitForSelector: '[data-attr="logs-services-view-mode-list"]',
+    },
 }

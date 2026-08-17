@@ -32,10 +32,8 @@ def cascade_posthog_code_repository_activity(
 
     ``user_id`` defaults to ``None`` for backwards compatibility with the pre-2026-06
     call shape: if a worker drains an activity task that was scheduled by an older
-    workflow (recorded with two positional args), the call still binds. In that case
-    the activity short-circuits to ``no_repo`` since the pre-2026-06 workflow code on
-    the receiving end does not understand the ``needs_user_github`` outcome and would
-    drop into the discovery agent flow with an empty repo list anyway.
+    workflow (recorded with two positional args), the call still binds, and an
+    unidentifiable mentioner resolves no repos anyway.
     """
     from posthog.models.integration import Integration
 
@@ -57,13 +55,10 @@ def cascade_posthog_code_repository_activity(
     all_repos = _get_full_repo_names(integration, user_id=user_id)
 
     if not all_repos:
-        # A connected team install with no personal install is recoverable via the gate prompt;
-        # a team with no install at all is genuinely no-op.
-        team_has_github = Integration.objects.filter(
-            team=integration.team, kind=Integration.IntegrationKind.GITHUB
-        ).exists()
-        if team_has_github:
-            return PostHogCodeRepoCascadeOutcome(mode="needs_user_github", repository=None, reason="no_user_repos")
+        # No repos means no repo, whatever the team has installed. Deciding here that the user must
+        # connect a personal install would gate the mention before anyone has asked whether it is
+        # even about code; `no_repo` becomes a repo-less task instead, and the agent tells the user
+        # to connect GitHub only once it can see that the ask needs code.
         return PostHogCodeRepoCascadeOutcome(mode="no_repo", repository=None, reason="no_repos")
 
     if len(all_repos) == 1:
@@ -95,8 +90,8 @@ async def discover_posthog_code_repository_via_agent_activity(
     """
     from posthog.models.integration import Integration, SlackIntegration
 
-    from products.tasks.backend.models import Task
-    from products.tasks.backend.repo_selection import (
+    from products.tasks.backend.facade import api as tasks_facade
+    from products.tasks.backend.facade.repo_selection import (
         RepoSelectionRejectedError,
         RepoSelectionUnavailableError,
         select_repository,
@@ -137,7 +132,7 @@ async def discover_posthog_code_repository_via_agent_activity(
                 team_id=integration.team_id,
                 user_id=user_id,
                 context=context_block,
-                origin_product=Task.OriginProduct.SLACK,
+                origin_product=tasks_facade.TaskOriginProduct.SLACK,
                 on_research_session=_capture_research_session,
             )
     except RepoSelectionRejectedError as exc:
@@ -197,13 +192,3 @@ async def discover_posthog_code_repository_via_agent_activity(
         repo_research_task_id=research_ids.get("task_id"),
         repo_research_run_id=research_ids.get("run_id"),
     )
-
-
-@activity.defn
-def classify_posthog_code_task_needs_repo_activity(
-    event_text: str,
-    thread_messages: list[dict[str, str]],
-) -> bool:
-    from products.slack_app.backend.api import classify_task_needs_repo
-
-    return classify_task_needs_repo(event_text, thread_messages)

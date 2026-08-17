@@ -1,20 +1,21 @@
 import { Message } from 'node-rdkafka'
 
+import { KAFKA_EVENTS_JSON } from '~/common/config/kafka-topics'
+import { KafkaConsumerInterface, createKafkaConsumer } from '~/common/kafka/consumer'
 import { instrumentFn, instrumented } from '~/common/tracing/tracing-utils'
+import { parseJSON } from '~/common/utils/json-parse'
+import { logger } from '~/common/utils/logger'
+import { captureException } from '~/common/utils/posthog'
 
 import { convertToHogFunctionInvocationGlobals } from '../../cdp/utils'
-import { KAFKA_EVENTS_JSON } from '../../config/kafka-topics'
-import { KafkaConsumerInterface, createKafkaConsumer } from '../../kafka/consumer'
 import { HealthCheckResult, PluginsServerConfig, RawClickHouseEvent } from '../../types'
-import { parseJSON } from '../../utils/json-parse'
-import { logger } from '../../utils/logger'
-import { captureException } from '../../utils/posthog'
 import { HogFlowInvocationPipeline } from '../services/hog-flow-invocation-pipeline.service'
 import { HogFunctionInvocationPipeline } from '../services/hog-function-invocation-pipeline.service'
 import { JobQueue } from '../services/job-queue/job-queue.interface'
 import { CyclotronJobInvocation, HogFunctionInvocationGlobals, HogFunctionTypeType } from '../types'
 import { CdpConsumerBase, CdpConsumerBaseDeps } from './cdp-base.consumer'
 import { counterParseError } from './metrics'
+import { PUSH_NOTIFICATION_OPENED_EVENT, buildPushOpenedMetric } from './push-open-tracking'
 
 export class CdpEventsConsumer<
     TConfig extends PluginsServerConfig = PluginsServerConfig,
@@ -41,7 +42,7 @@ export class CdpEventsConsumer<
         this.kafkaConsumer = createKafkaConsumer({ groupId, topic })
         this.hogFunctionPipeline = new HogFunctionInvocationPipeline(config, {
             hogFunctionManager: this.hogFunctionManager,
-            hogExecutor: this.hogExecutor,
+            hogInputsService: this.hogInputsService,
             hogWatcher: this.hogWatcher,
             hogWatcherMirror: this.hogWatcherMirror,
             hogMasker: this.hogMasker,
@@ -78,7 +79,12 @@ export class CdpEventsConsumer<
                 hogTypes: this.hogTypes,
                 filterFn: (fn) => (fn.filters?.source ?? 'events') === 'events',
             }),
-            this.hogFlowPipeline.buildInvocations(invocationGlobals),
+            // Source-compatibility lives in the consumer. The events consumer matches event-triggered
+            // flows only; other trigger types (data-warehouse-table, batch, schedule, webhook, manual)
+            // are dispatched from their respective consumers and never reach the executor from here.
+            this.hogFlowPipeline.buildInvocations(invocationGlobals, {
+                eligibilityFn: (flow) => flow.trigger.type === 'event',
+            }),
         ])
 
         const invocationsToBeQueued = [...hogInvocations, ...hogflowInvocations]
@@ -93,6 +99,10 @@ export class CdpEventsConsumer<
         for (const invocation of invocationsToBeQueued) {
             this.invocationResultsService.invocationResultsRowsService.queueLifecycleRow(invocation, 'running')
         }
+
+        // Turn any $push_notification_opened events in this batch into `push_opened` app-metrics. Queued
+        // here (synchronously) so the monitoring flush in the background task below picks them up.
+        await this.trackPushNotificationOpens(invocationGlobals)
 
         return {
             // This is all IO so we can set them off in the background and start processing the next batch
@@ -116,6 +126,37 @@ export class CdpEventsConsumer<
                 ),
             ]),
             invocations: [...hogInvocations, ...hogflowInvocations],
+        }
+    }
+
+    // Resolve each $push_notification_opened event's workflow and queue its push_opened app-metric.
+    // The attribution + spoof guard live in buildPushOpenedMetric (pure + unit-tested).
+    private async trackPushNotificationOpens(globals: HogFunctionInvocationGlobals[]): Promise<void> {
+        const opens = globals.filter((g) => g.event.event === PUSH_NOTIFICATION_OPENED_EVENT)
+        if (!opens.length) {
+            return
+        }
+        // Match each open's workflow id against the flows its own team owns, which the hog flow pipeline
+        // already loaded for this batch (warm by-team cache). Resolving against that bounded, team-owned
+        // set rather than looking up the client-supplied id directly keeps a spoofed id from hitting
+        // Postgres or polluting the shared by-id cache with negative entries. Best-effort: a lookup
+        // failure here must not abort the batch (that would stall all event processing and force a replay).
+        try {
+            const teamIds = Array.from(new Set(opens.map((g) => g.project.id)))
+            const flowsByTeam = await this.hogFlowManager.getHogFlowsForTeams(teamIds)
+            for (const g of opens) {
+                const workflowId = g.event.properties['$notification_workflow_id']
+                if (typeof workflowId !== 'string') {
+                    continue
+                }
+                const flow = (flowsByTeam[g.project.id] ?? []).find((f) => f.id === workflowId) ?? null
+                const metric = buildPushOpenedMetric(g.event.properties, g.project.id, flow)
+                if (metric) {
+                    this.hogFunctionMonitoringService.queueAppMetric(metric, 'hog_flow')
+                }
+            }
+        } catch (error) {
+            logger.error('[CdpEventsConsumer] Failed to track push notification opens', { error })
         }
     }
 

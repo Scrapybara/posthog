@@ -2,7 +2,6 @@ import './FeatureFlag.scss'
 
 import clsx from 'clsx'
 import { useActions, useValues } from 'kea'
-import { Fragment } from 'react'
 
 import { IconCopy, IconFlag, IconInfo, IconPlus, IconTrash } from '@posthog/icons'
 import { LemonLabel, LemonSelect, LemonSnack, Link, Tooltip } from '@posthog/lemon-ui'
@@ -26,7 +25,9 @@ import { LemonRadio } from 'lib/lemon-ui/LemonRadio'
 import { LemonSlider } from 'lib/lemon-ui/LemonSlider'
 import { LemonTag } from 'lib/lemon-ui/LemonTag/LemonTag'
 import { Spinner } from 'lib/lemon-ui/Spinner/Spinner'
-import { capitalizeFirstLetter, clamp, dateFilterToText, dateStringToComponents, pluralize } from 'lib/utils'
+import { dateFilterToText, dateStringToComponents } from 'lib/utils/dateFilters'
+import { clamp } from 'lib/utils/numbers'
+import { capitalizeFirstLetter, pluralize } from 'lib/utils/strings'
 import { FeatureFlagConditionWarning } from 'scenes/feature-flags/FeatureFlagConditionWarning'
 import { PercentageInput } from 'scenes/feature-flags/PercentageInput'
 import { urls } from 'scenes/urls'
@@ -42,13 +43,17 @@ import {
     PropertyOperator,
 } from '~/types'
 
-import { MATCHING_ESTIMATE_TOOLTIP } from './constants'
+import { resolveAggregationGroupTypeIndex } from './aggregation'
+import { EARLY_ACCESS_GROUP_TARGETING_DISABLED_REASON, MATCHING_ESTIMATE_TOOLTIP } from './constants'
 import { featureFlagLogic } from './featureFlagLogic'
 import {
     FeatureFlagReleaseConditionsLogicProps,
     featureFlagReleaseConditionsLogic,
     isDistinctIdFilter,
+    withResolvedFlagLabels,
 } from './featureFlagReleaseConditionsLogic'
+import { MatchingActorsLink } from './MatchingActorsLink'
+import { getPropertySelectErrorMessages } from './propertySelectErrorMessages'
 
 function PropertyValueComponent({
     property,
@@ -128,6 +133,7 @@ export function FeatureFlagReleaseConditions({
         propertySelectErrors,
         affectedCounts,
         totalCounts,
+        blastRadiusErrors,
         filtersTaxonomicOptions,
         aggregationTargetName,
         properties,
@@ -143,6 +149,7 @@ export function FeatureFlagReleaseConditions({
         addConditionSet,
         moveConditionSetUp,
         moveConditionSetDown,
+        calculateBlastRadiusForCondition,
     } = useActions(releaseConditionsLogic)
 
     const { showGroupsOptions, groupTypes, aggregationLabel } = useValues(groupsModel)
@@ -362,7 +369,7 @@ export function FeatureFlagReleaseConditions({
                                 pageKey={`feature-flag-${id}-${group.sort_key}-${filterGroups.length}-${
                                     filters.aggregation_group_type_index ?? ''
                                 }`}
-                                propertyFilters={group?.properties}
+                                propertyFilters={withResolvedFlagLabels(group?.properties, getFlagKey)}
                                 logicalRowDivider
                                 addText="Add condition"
                                 onChange={(properties) => updateConditionSet(index, undefined, properties)}
@@ -378,22 +385,7 @@ export function FeatureFlagReleaseConditions({
                                           }
                                         : undefined
                                 }
-                                errorMessages={
-                                    propertySelectErrors?.[index]?.properties?.some((message) => !!message.value)
-                                        ? propertySelectErrors[index].properties?.map((message, index) => {
-                                              return message.value ? (
-                                                  <div
-                                                      key={index}
-                                                      className="text-danger flex items-center gap-1 text-sm Field--error"
-                                                  >
-                                                      <IconErrorOutline className="text-xl" /> {message.value}
-                                                  </div>
-                                              ) : (
-                                                  <Fragment key={index} />
-                                              )
-                                          })
-                                        : null
-                                }
+                                errorMessages={getPropertySelectErrorMessages(propertySelectErrors, index)}
                                 hideBehavioralCohorts={!realtimeCohortFlagTargeting}
                             />
                         </div>
@@ -456,13 +448,39 @@ export function FeatureFlagReleaseConditions({
                                 of <b>{aggregationTargetName(group.aggregation_group_type_index)}</b> in this set.
                                 {(() => {
                                     const targetIndex = group.aggregation_group_type_index
+                                    const resolvedGroupTypeIndex = resolveAggregationGroupTypeIndex(
+                                        targetIndex,
+                                        filters.aggregation_group_type_index
+                                    )
                                     const pluralName = aggregationTargetName(targetIndex)
-                                    const singularName = aggregationLabel(
-                                        targetIndex ?? filters.aggregation_group_type_index,
-                                        true
-                                    ).singular
-                                    const affected = group.sort_key ? affectedCounts[group.sort_key] : undefined
-                                    const total = group.sort_key ? totalCounts[group.sort_key] : undefined
+                                    const singularName = aggregationLabel(resolvedGroupTypeIndex, true).singular
+                                    const sortKey = group.sort_key
+                                    const affected = sortKey ? affectedCounts[sortKey] : undefined
+                                    const total = sortKey ? totalCounts[sortKey] : undefined
+                                    if (sortKey && blastRadiusErrors[sortKey]) {
+                                        return (
+                                            <div
+                                                role="status"
+                                                className="basis-full flex items-center gap-2 mt-1 text-secondary"
+                                            >
+                                                <IconErrorOutline className="text-danger text-base shrink-0" />
+                                                <span>Couldn't estimate how many {pluralName} match.</span>
+                                                <LemonButton
+                                                    type="secondary"
+                                                    size="xsmall"
+                                                    onClick={() =>
+                                                        calculateBlastRadiusForCondition(
+                                                            sortKey,
+                                                            group.properties,
+                                                            resolvedGroupTypeIndex
+                                                        )
+                                                    }
+                                                >
+                                                    Retry
+                                                </LemonButton>
+                                            </div>
+                                        )
+                                    }
                                     if (affected === undefined || affected < 0 || total === undefined) {
                                         return (
                                             <div className="basis-full flex items-center mt-1">
@@ -489,6 +507,11 @@ export function FeatureFlagReleaseConditions({
                                                 <b>~{pluralize(receivingFlag, singularName, pluralName)}</b> -{' '}
                                                 <b>{rolloutPct}%</b>
                                             </span>
+                                            <MatchingActorsLink
+                                                properties={group.properties}
+                                                resolvedGroupTypeIndex={resolvedGroupTypeIndex}
+                                                targetName={pluralName}
+                                            />
                                         </div>
                                     )
                                 })()}
@@ -545,13 +568,12 @@ export function FeatureFlagReleaseConditions({
             description={
                 !readOnly &&
                 !excludeTitle && (
-                    <>
-                        <div className="text-secondary mb-2">
-                            Specify users for flag release. Condition sets are evaluated top to bottom - the first
-                            matching set is used. A condition matches when all property filters pass AND the target
-                            falls within the rollout percentage.
-                        </div>
-                    </>
+                    // span, not div: SceneSection renders the description inside a <p>
+                    <span className="block text-secondary mb-2">
+                        Specify users for flag release. Condition sets are evaluated top to bottom - the first matching
+                        set is used. A condition matches when all property filters pass AND the target falls within the
+                        rollout percentage.
+                    </span>
                 )
             }
         >
@@ -677,7 +699,7 @@ export function FeatureFlagReleaseConditions({
                                 description:
                                     'Stable assignment for everyone in an organization, company, or other custom group type.',
                                 disabledReason: hasEarlyAccessFeatures
-                                    ? 'This feature flag cannot be group-based, because it is linked to an early access feature.'
+                                    ? EARLY_ACCESS_GROUP_TARGETING_DISABLED_REASON
                                     : groupTypes.size === 0
                                       ? 'No group types defined. Set up group analytics first.'
                                       : undefined,

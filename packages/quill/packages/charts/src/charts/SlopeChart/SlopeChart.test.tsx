@@ -1,6 +1,8 @@
-import type { ChartTheme, Series } from '../../core/types'
-import { renderHogChart } from '../../testing'
-import type { SlopeSeriesMeta } from './slope-data'
+import { fireEvent } from '@testing-library/react'
+
+import type { ChartTheme, Series, TooltipContext } from '../../core/types'
+import { getHogChart, renderHogChart } from '../../testing'
+import { sortSlopeTooltipRows, type SlopeSeriesMeta } from './slope-data'
 import { SlopeChart } from './SlopeChart'
 
 const THEME: ChartTheme = {
@@ -34,7 +36,12 @@ describe('SlopeChart', () => {
     it('skips excluded series everywhere', () => {
         const series: Series<SlopeSeriesMeta>[] = [
             ...SERIES,
-            { key: 'c', label: 'C', data: [5, 9], visibility: { excluded: true } },
+            {
+                key: 'c',
+                label: 'C',
+                data: [5, 9],
+                visibility: { excluded: true },
+            },
         ]
         const { chart } = renderHogChart(
             <SlopeChart series={series} labels={LABELS} config={{ legend: { show: true } }} theme={THEME} />
@@ -67,7 +74,12 @@ describe('SlopeChart', () => {
             ['showEndLabels: false', { showEndLabels: true } as const, { showEndLabel: false }, 'end'],
         ])('honors per-series %s via meta', (_label, config, metaOverride, side) => {
             const series: Series<SlopeSeriesMeta>[] = [
-                { key: 'a', label: 'A', data: [10, 90], meta: metaOverride },
+                {
+                    key: 'a',
+                    label: 'A',
+                    data: [10, 90],
+                    meta: metaOverride,
+                },
                 { key: 'b', label: 'B', data: [80, 20] },
             ]
             const { chart } = renderHogChart(
@@ -82,7 +94,12 @@ describe('SlopeChart', () => {
 
         it('drops all value labels for a series with visibility.valueLabel false', () => {
             const series: Series<SlopeSeriesMeta>[] = [
-                { key: 'a', label: 'A', data: [10, 90], visibility: { valueLabel: false } },
+                {
+                    key: 'a',
+                    label: 'A',
+                    data: [10, 90],
+                    visibility: { valueLabel: false },
+                },
                 { key: 'b', label: 'B', data: [80, 20] },
             ]
             const { chart } = renderHogChart(<SlopeChart series={series} labels={LABELS} theme={THEME} />)
@@ -97,6 +114,21 @@ describe('SlopeChart', () => {
                 <SlopeChart series={SERIES} labels={LABELS} config={{ valueFormatter: (v) => `${v}%` }} theme={THEME} />
             )
             expect(chart.slopeValueLabels().every((l) => l.text.endsWith('%'))).toBe(true)
+        })
+
+        it('keeps the computed label gutter when a margins override side is undefined', () => {
+            // A conditionally built override (`{ top: reserveOrUndefined }`) must not wipe the
+            // start-label gutter SlopeChart computed — a plain spread would, clipping the labels.
+            const startLabelLeft = (config?: Parameters<typeof SlopeChart>[0]['config']): string => {
+                const { container } = renderHogChart(
+                    <SlopeChart series={SERIES} labels={LABELS} config={config} theme={THEME} />
+                )
+                const label = container.querySelector<HTMLElement>(
+                    '[data-attr="hog-chart-slope-value-label"][data-slope-side="start"]'
+                )
+                return label!.style.left
+            }
+            expect(startLabelLeft({ margins: { top: 20, left: undefined } })).toBe(startLabelLeft())
         })
     })
 
@@ -145,11 +177,49 @@ describe('SlopeChart', () => {
                 <SlopeChart
                     series={SERIES}
                     labels={LABELS}
-                    config={{ legend: { show: true }, deltaFormatter: (d) => `${d > 0 ? '↑' : '↓'}${Math.abs(d)}` }}
+                    config={{
+                        legend: { show: true },
+                        deltaFormatter: (d) => `${d > 0 ? '↑' : '↓'}${Math.abs(d)}`,
+                    }}
                     theme={THEME}
                 />
             )
             expect(chart.slopeLegendItems().map((i) => i.secondaryLabel)).toEqual(['↑80', '↓60'])
+        })
+
+        it('orders rows biggest-to-smallest by end value', () => {
+            // Input order (A, B, C) differs from descending end values (B 90, C 60, A 30).
+            const series: Series<SlopeSeriesMeta>[] = [
+                { key: 'a', label: 'A', data: [0, 30] },
+                { key: 'b', label: 'B', data: [0, 90] },
+                { key: 'c', label: 'C', data: [0, 60] },
+            ]
+            const { chart } = renderHogChart(
+                <SlopeChart series={series} labels={LABELS} config={{ legend: { show: true } }} theme={THEME} />
+            )
+            expect(chart.slopeLegendItems().map((i) => i.label)).toEqual(['B', 'C', 'A'])
+        })
+
+        it('toggles a series off and on when its legend row is clicked', () => {
+            const { container, chart } = renderHogChart(
+                <SlopeChart series={SERIES} labels={LABELS} config={{ legend: { show: true } }} theme={THEME} />
+            )
+            expect(chart.seriesCount).toBe(2)
+            const legend = container.querySelector('[data-attr="hog-chart-slope-legend"]')!
+            const buttonFor = (label: string): HTMLButtonElement =>
+                Array.from(legend.querySelectorAll('button')).find((b) => b.textContent?.startsWith(label))!
+
+            fireEvent.click(buttonFor('A'))
+            expect(getHogChart(container).seriesCount).toBe(1)
+            // The toggled-off series stays listed (so it can be restored).
+            expect(
+                getHogChart(container)
+                    .slopeLegendItems()
+                    .map((i) => i.label)
+            ).toEqual(['A', 'B'])
+
+            fireEvent.click(buttonFor('A'))
+            expect(getHogChart(container).seriesCount).toBe(2)
         })
     })
 
@@ -157,12 +227,24 @@ describe('SlopeChart', () => {
         it.each([
             [
                 'one series with incompleteEnd',
-                [{ key: 'a', label: 'A', data: [10, 90], meta: { incompleteEnd: true } }] as Series<SlopeSeriesMeta>[],
+                [
+                    {
+                        key: 'a',
+                        label: 'A',
+                        data: [10, 90],
+                        meta: { incompleteEnd: true },
+                    },
+                ] as Series<SlopeSeriesMeta>[],
             ],
             [
                 'multiple series, one with incompleteEnd',
                 [
-                    { key: 'a', label: 'A', data: [10, 90], meta: { incompleteEnd: true } },
+                    {
+                        key: 'a',
+                        label: 'A',
+                        data: [10, 90],
+                        meta: { incompleteEnd: true },
+                    },
                     { key: 'b', label: 'B', data: [80, 20] },
                 ] as Series<SlopeSeriesMeta>[],
             ],
@@ -174,7 +256,14 @@ describe('SlopeChart', () => {
         it.each([
             [
                 'one series with incompleteEnd',
-                [{ key: 'a', label: 'A', data: [10, 90], meta: { incompleteEnd: true } }] as Series<SlopeSeriesMeta>[],
+                [
+                    {
+                        key: 'a',
+                        label: 'A',
+                        data: [10, 90],
+                        meta: { incompleteEnd: true },
+                    },
+                ] as Series<SlopeSeriesMeta>[],
                 [
                     { side: 'start', text: '10' },
                     { side: 'end', text: '90' },
@@ -183,7 +272,12 @@ describe('SlopeChart', () => {
             [
                 'multiple series, one with incompleteEnd',
                 [
-                    { key: 'a', label: 'A', data: [10, 90], meta: { incompleteEnd: true } },
+                    {
+                        key: 'a',
+                        label: 'A',
+                        data: [10, 90],
+                        meta: { incompleteEnd: true },
+                    },
                     { key: 'b', label: 'B', data: [80, 20] },
                 ] as Series<SlopeSeriesMeta>[],
                 [
@@ -212,6 +306,29 @@ describe('SlopeChart', () => {
             const values = chart.slopeValueLabels().map((l) => ({ side: l.side, text: l.text }))
             expect(values).toContainEqual({ side: 'start', text: '10' })
             expect(values).toContainEqual({ side: 'end', text: '40' })
+        })
+    })
+
+    describe('tooltip row sorting', () => {
+        const row = (key: string, value: number): TooltipContext['seriesData'][number] => ({
+            series: { key, label: key.toUpperCase(), data: [] },
+            value,
+            color: '#000',
+        })
+
+        it.each([
+            ['unsorted input', [row('a', 30), row('b', 90), row('c', 60)], [90, 60, 30]],
+            ['already sorted descending', [row('a', 90), row('b', 60), row('c', 30)], [90, 60, 30]],
+            ['already sorted ascending', [row('a', 30), row('b', 60), row('c', 90)], [90, 60, 30]],
+            ['single element', [row('a', 42)], [42]],
+        ] as const)('orders rows biggest-to-smallest by value (%s)', (_label, input, expected) => {
+            expect(sortSlopeTooltipRows([...input]).map((r) => r.value)).toEqual([...expected])
+        })
+
+        it('does not mutate the input array', () => {
+            const input = [row('a', 30), row('b', 90)]
+            sortSlopeTooltipRows(input)
+            expect(input.map((r) => r.value)).toEqual([30, 90])
         })
     })
 

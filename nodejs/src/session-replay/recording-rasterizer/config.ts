@@ -22,6 +22,9 @@ export const config = {
     disableBrowserSecurity: process.env.DISABLE_BROWSER_SECURITY === '1',
     captureBrowserLogs: process.env.CAPTURE_BROWSER_LOGS === '1',
     screenshotFormat: (process.env.SCREENSHOT_FORMAT || 'jpeg') as 'png' | 'jpeg',
+    // Hard cap on a single beginFrame; mass-image-decode stalls legitimately run 30-60s, so keep
+    // this well above that. It only exists to bound a truly wedged compositor.
+    beginFrameTimeoutMs: parseInt(process.env.BEGINFRAME_TIMEOUT_MS || '120000', 10) || 120_000,
     screenshotJpegQuality: parseInt(process.env.SCREENSHOT_JPEG_QUALITY || '80', 10),
     metricsPort: parseInt(process.env.METRICS_PORT || '6738', 10),
 
@@ -40,4 +43,7 @@ export const config = {
     // Player
     siteUrl: process.env.SITE_URL || 'http://localhost:8000',
     playerHtmlPath: process.env.PLAYER_HTML_PATH || '/code/common/replay-headless/dist/player.html',
+    // Opt-in: serve the player under a script-locking CSP (nonce). Off by default so it can be
+    // rolled out and verified in dev before enabling in production.
+    enablePlayerCsp: process.env.ENABLE_PLAYER_CSP === '1',
 }

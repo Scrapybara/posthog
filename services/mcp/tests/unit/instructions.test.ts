@@ -60,15 +60,15 @@ describe('buildToolDomainsBlock', () => {
     it('keeps a singleton tool whole but collapses siblings to a shared root', () => {
         const tools = [
             { name: 'execute-sql', category: 'SQL' },
-            { name: 'read-data-schema', category: 'Data schema' },
-            { name: 'read-data-warehouse-schema', category: 'Data schema' },
+            { name: 'external-data-schemas-list', category: 'Data warehouse' },
+            { name: 'external-data-sources-list', category: 'Data warehouse' },
         ]
         const result = buildToolDomainsBlock(tools)
         expect(result).toContain('- execute-sql')
-        // read-data-* siblings collapse to their shared prefix, not listed verbatim
-        expect(result).toContain('- read-data')
-        expect(result).not.toContain('- read-data-schema')
-        expect(result).not.toContain('- read-data-warehouse-schema')
+        // external-data-* siblings collapse to their shared prefix, not listed verbatim
+        expect(result).toContain('- external-data')
+        expect(result).not.toContain('- external-data-schemas-list')
+        expect(result).not.toContain('- external-data-sources-list')
     })
 
     it('splits an oversized family into sub-family roots, one level deep', () => {
@@ -171,6 +171,36 @@ describe('buildToolDomainsCompact', () => {
     it('returns an empty string for an empty array', () => {
         expect(buildToolDomainsCompact([])).toBe('')
     })
+
+    // A tight budget must cost sub-family precision, never whole families: the caller
+    // renders this into a payload a client will hard-truncate, and a family that isn't
+    // named at all is a product the agent believes has no tools.
+    it('collapses sub-families to fit a character budget instead of dropping domains', () => {
+        // 30 scout-* tools across 3 sub-families exceeds MAX_FAMILY_SIZE (25), so the
+        // unbudgeted render splits them; `survey` is the family that a truncation would
+        // take off the end.
+        const tools = [
+            ...Array.from({ length: 10 }, (_, i) => ({ name: `scout-config-${i}`, category: 'Signals' })),
+            ...Array.from({ length: 10 }, (_, i) => ({ name: `scout-notes-${i}`, category: 'Signals' })),
+            ...Array.from({ length: 10 }, (_, i) => ({ name: `scout-record-${i}`, category: 'Signals' })),
+            { name: 'survey-create', category: 'Surveys' },
+        ]
+        expect(buildToolDomainsCompact(tools)).toBe('scout-config|scout-notes|scout-record|survey')
+
+        const budgeted = buildToolDomainsCompact(tools, 20)
+        expect(budgeted).toBe('scout|survey')
+        expect(budgeted.length).toBeLessThanOrEqual(20)
+    })
+
+    // The floor is one domain per root. Returning an over-budget string is deliberate:
+    // the budget test that calls this must fail loudly rather than see a silent trim.
+    it('returns the fully collapsed index when even that exceeds the budget', () => {
+        const tools = [
+            { name: 'experiment-create', category: 'Experiments' },
+            { name: 'survey-create', category: 'Surveys' },
+        ]
+        expect(buildToolDomainsCompact(tools, 5)).toBe('experiment|survey')
+    })
 })
 
 describe('QueryToolCatalog', () => {
@@ -231,19 +261,24 @@ describe('QueryToolCatalog', () => {
 })
 
 describe('buildActiveEnvironmentContextPrompt', () => {
+    const org = { id: 'org_1', name: 'Acme' } satisfies Partial<CachedOrg> as unknown as CachedOrg
     const project = {
         id: 1,
         name: 'My App',
         timezone: 'America/New_York',
+        api_token: 'token_1',
         person_on_events_querying_enabled: false,
-    } as unknown as CachedProject
-    const org = { id: 'org_1', name: 'Acme' } as unknown as CachedOrg
-    const user = { first_name: 'Jane', last_name: 'Doe', email: 'jane@acme.com' } as unknown as CachedUser
+    } satisfies Partial<CachedProject> as unknown as CachedProject
+    const user = {
+        first_name: 'Jane',
+        last_name: 'Doe',
+        email: 'jane@acme.com',
+    } satisfies Partial<CachedUser> as unknown as CachedUser
 
     it('renders the full project + org line when both are present', () => {
         const result = buildActiveEnvironmentContextPrompt(user, org, project)
         expect(result).toContain(
-            'You are currently in project "My App" (id: 1) within organization "Acme" (id: org_1).'
+            'You are currently in project "My App" (id: 1, token: token_1) within organization "Acme" (id: org_1).'
         )
     })
 
@@ -252,7 +287,7 @@ describe('buildActiveEnvironmentContextPrompt', () => {
         // fetch is skipped. The line drops the "within organization …" tail
         // rather than rendering a fabricated "Unknown" placeholder.
         const result = buildActiveEnvironmentContextPrompt(user, undefined, project)
-        expect(result).toContain('You are currently in project "My App" (id: 1).')
+        expect(result).toContain('You are currently in project "My App" (id: 1, token: token_1).')
         expect(result).not.toContain('within organization')
         expect(result).not.toContain('Unknown')
         expect(result).not.toContain('unknown')
@@ -270,7 +305,9 @@ describe('buildActiveEnvironmentContextPrompt', () => {
         // Sits right after the project/org context line.
         const lines = (result ?? '').split('\n')
         expect(lines.indexOf('Base URL: us.posthog.com — add /project/1 for project-scoped paths.')).toBe(
-            lines.indexOf('You are currently in project "My App" (id: 1) within organization "Acme" (id: org_1).') + 1
+            lines.indexOf(
+                'You are currently in project "My App" (id: 1, token: token_1) within organization "Acme" (id: org_1).'
+            ) + 1
         )
     })
 
@@ -289,11 +326,23 @@ describe('buildActiveEnvironmentContextPrompt', () => {
         expect(buildActiveEnvironmentContextPrompt(undefined, undefined, undefined)).toBeUndefined()
     })
 
+    it.each([
+        ['checked', true, true],
+        ['unchecked', false, false],
+        ['unset', undefined, false],
+    ])('surfaces the test account filter default only when %s', (_name, testAccountFiltersDefaultChecked, expected) => {
+        const result = buildActiveEnvironmentContextPrompt(user, org, {
+            ...project,
+            test_account_filters_default_checked: testAccountFiltersDefaultChecked,
+        } as CachedProject)
+        expect((result ?? '').includes('filters out internal and test users by default')).toBe(expected)
+    })
+
     it('still renders an "Unknown" project when org is present but project is missing', () => {
         // The org branch is unchanged — only the no-org branch was added.
         const result = buildActiveEnvironmentContextPrompt(user, org, undefined)
         expect(result).toContain(
-            'You are currently in project "Unknown" (id: unknown) within organization "Acme" (id: org_1).'
+            'You are currently in project "Unknown" (id: unknown, token: unknown) within organization "Acme" (id: org_1).'
         )
     })
 })

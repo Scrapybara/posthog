@@ -26,6 +26,22 @@ describe('useChartMargins', () => {
         expect(render({ hideXAxis: true }).bottom).toBe(8)
     })
 
+    describe('override', () => {
+        it('applies the sides it sets', () => {
+            expect(render({ override: { top: 30, left: 24 } })).toMatchObject({ top: 30, left: 24 })
+        })
+
+        it('leaves a side alone when its override is undefined', () => {
+            const withUndefined = render({ override: { top: undefined, left: 24 } })
+            expect(withUndefined.top).toBe(DEFAULT_MARGINS.top)
+            expect(withUndefined.left).toBe(24)
+        })
+
+        it('honors an explicit zero rather than treating it as unset', () => {
+            expect(render({ override: { top: 0, left: 0 } })).toMatchObject({ top: 0, left: 0 })
+        })
+    })
+
     it('keeps default bottom margin otherwise', () => {
         expect(render().bottom).toBe(DEFAULT_MARGINS.bottom)
     })
@@ -38,22 +54,47 @@ describe('useChartMargins', () => {
         expect(render({ xAxisLabel: '   ' }).bottom).toBe(DEFAULT_MARGINS.bottom)
     })
 
-    it('collapses left margin when hideYAxis is true', () => {
-        expect(render({ hideYAxis: true }).left).toBe(8)
+    it('collapses the left margin when hideYAxis is true, floored on the first x label half-width', () => {
+        // Widest label "Mon" measures 30px mocked → half 15 + 4 edge padding = 19.
+        expect(render({ hideYAxis: true }).left).toBe(19)
+    })
+
+    it('fully collapses the left margin when both axes are hidden', () => {
+        expect(render({ hideYAxis: true, hideXAxis: true }).left).toBe(8)
     })
 
     it('left margin is at least 20 when y-axis is shown', () => {
         expect(render({ series: [], labels: [] }).left).toBeGreaterThanOrEqual(20)
     })
 
-    it('adds left space for a y-axis title', () => {
-        const withoutTitle = render()
-        const withTitle = render({ yAxisLabel: 'Unique users' })
+    it('reserves room for the [0, 1] fallback y-ticks when there is no data', () => {
+        // Empty data renders a [0, 1] domain whose ticks format as "0.00".."1.00" (4 chars). The
+        // margin must fit them, not collapse to the bare floor — otherwise the labels clip.
+        const empty = render({ series: [], labels: [] })
+        const fourCharLabelReserve = '0.00'.length * 10 // matches the mocked measureLabelWidth
+        expect(empty.left).toBeGreaterThanOrEqual(fourCharLabelReserve)
+    })
+
+    it('reserves the left title band for a horizontal chart category-axis title', () => {
+        const withoutTitle = render({ axisOrientation: 'horizontal' })
+        const withTitle = render({ axisOrientation: 'horizontal', yAxisTitles: { left: 'Series' } })
         expect(withTitle.left).toBeGreaterThan(withoutTitle.left)
     })
 
-    it('does not add left space for a whitespace-only y-axis title', () => {
-        expect(render({ yAxisLabel: '   ' }).left).toBe(render().left)
+    it('reserves a title band per titled axis stacked on the same side', () => {
+        const threeAxis: Series[] = [
+            { key: 'a', label: 'A', data: [1, 2, 3] },
+            { key: 'b', label: 'B', data: [4, 5, 6], yAxisId: 'right' },
+            { key: 'c', label: 'C', data: [7, 8, 9], yAxisId: 'right2' },
+        ]
+        const positions = { left: 'left', right: 'right', right2: 'right' } as const
+        const oneTitle = render({ series: threeAxis, yAxisPositions: positions, yAxisTitles: { right: 'One' } })
+        const twoTitles = render({
+            series: threeAxis,
+            yAxisPositions: positions,
+            yAxisTitles: { right: 'One', right2: 'Two' },
+        })
+        expect(twoTitles.right).toBeGreaterThan(oneTitle.right)
     })
 
     it('grows the right margin to at least 48 when multiple y-axes are present', () => {
@@ -76,10 +117,30 @@ describe('useChartMargins', () => {
         expect(render({ series: oneVisible, labels: ['a', 'b'] }).right).toBeLessThan(48)
     })
 
+    it('reserves the gutter on the right for a single axis pinned right', () => {
+        const data = [200, 800, 1200]
+        const onRight: Series[] = [{ key: 'a', label: 'A', data, yAxisId: 'right' }]
+        const soleRight = render({ series: onRight, labels: ['a', 'b', 'c'], yAxisPositions: { right: 'right' } })
+        const soleLeft = render({ series: [{ key: 'a', label: 'A', data }], labels: ['a', 'b', 'c'] })
+        // The right gutter is reserved (dual-axis floor) and the left no longer holds the axis labels.
+        expect(soleRight.right).toBeGreaterThanOrEqual(48)
+        expect(soleRight.right).toBeGreaterThan(soleLeft.right)
+        expect(soleRight.left).toBeLessThan(soleLeft.left)
+    })
+
     it('widens the left margin to fit long y-tick labels', () => {
         const big: Series[] = [{ key: 'a', label: 'A', data: [1_000_000_000, 2_000_000_000] }]
         const small: Series[] = [{ key: 'a', label: 'A', data: [1, 2] }]
         expect(render({ series: big }).left).toBeGreaterThan(render({ series: small }).left)
+    })
+
+    it('moves rotated category-label space from the horizontal margins to the bottom margin', () => {
+        const longLabels = ['a-very-long-category-label', 'another-long-category-label']
+        const horizontal = render({ labels: longLabels })
+        const rotated = render({ labels: longLabels, xTickLabelRotation: -45 })
+
+        expect(rotated.bottom).toBeGreaterThan(horizontal.bottom)
+        expect(rotated.left + rotated.right).toBeLessThan(horizontal.left + horizontal.right)
     })
 
     describe('horizontal orientation', () => {

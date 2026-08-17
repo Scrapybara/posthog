@@ -55,7 +55,7 @@ import { IconArrowDown, IconArrowUp, SortableDragIcon } from 'lib/lemon-ui/icons
 import { LemonDialog } from 'lib/lemon-ui/LemonDialog'
 import { LemonField } from 'lib/lemon-ui/LemonField'
 import 'lib/lemon-ui/Lettermark'
-import { alphabet } from 'lib/utils'
+import { alphabet } from 'lib/utils/strings'
 import { ApprovalActionKey } from 'scenes/approvals/utils'
 import { JSONEditorInput } from 'scenes/feature-flags/JSONEditorInput'
 import { urls } from 'scenes/urls'
@@ -160,6 +160,7 @@ export function FeatureFlagForm({ id }: FeatureFlagLogicProps): JSX.Element {
         payloadExpanded,
         expandAdvancedOnEdit,
         hasEncryptedPayloadBeenSaved,
+        hasEarlyAccessFeatures,
     } = useValues(featureFlagLogic)
     const {
         setMultivariateEnabled,
@@ -1066,6 +1067,7 @@ export function FeatureFlagForm({ id }: FeatureFlagLogicProps): JSX.Element {
                                         variants={nonEmptyVariants}
                                         isDisabled={!featureFlag.active}
                                         bucketingIdentifier={featureFlag.bucketing_identifier}
+                                        hasEarlyAccessFeatures={hasEarlyAccessFeatures}
                                         onBucketingIdentifierChange={(value: FeatureFlagBucketingIdentifier | null) => {
                                             // Always go through setFeatureFlag so this caller and
                                             // FeatureFlagReleaseConditions use the same shape — listeners on

@@ -1,5 +1,5 @@
 import { DEFAULT_Y_AXIS_ID } from '@posthog/quill-charts'
-import type { TooltipConfig } from '@posthog/quill-charts'
+import type { TooltipConfig, YAxisConfig } from '@posthog/quill-charts'
 
 import { ciRanges } from 'lib/statistics'
 
@@ -470,7 +470,17 @@ describe('trendsChartTransforms', () => {
                 yAxisLabel: 'Unique users',
             })
             expect(config.xAxis?.label).toBe('Signup date')
-            expect(config.yAxis?.label).toBe('Unique users')
+            expect((config.yAxis as YAxisConfig)?.label).toBe('Unique users')
+        })
+
+        it('forwards the y-axis range onto the axis config', () => {
+            const config = buildTrendsLineTimeSeriesConfig({
+                ...baseOpts,
+                yAxisStartAtZero: false,
+                yAxisMin: 40,
+                yAxisMax: 80,
+            })
+            expect(config.yAxis).toMatchObject({ startAtZero: false, min: 40, max: 80 })
         })
 
         it('derives yAxis from buildTrendsYAxisConfig when isPercentStackView is true and passes through tooltip / showCrosshair', () => {

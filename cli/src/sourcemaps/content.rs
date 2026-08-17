@@ -8,9 +8,73 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
     api::symbol_sets::SymbolSetUpload,
-    sourcemaps::constant::{CHUNKID_COMMENT_PREFIX, CHUNKID_PLACEHOLDER, CODE_SNIPPET_TEMPLATE},
+    sourcemaps::constant::{
+        CHUNKID_COMMENT_PREFIX, CHUNKID_PLACEHOLDER, CODE_SNIPPET_TEMPLATE,
+        CODE_SNIPPET_WITH_RELEASE_TEMPLATE, QUOTED_CHUNKID_PLACEHOLDER, RELEASE_ID_PLACEHOLDER,
+    },
     utils::files::SourceFile,
 };
+
+/// Build the injected IIFE for a chunk. Both ids are filled in as JSON-encoded string literals,
+/// so quotes/backslashes in the values can't break out of the snippet — chunk ids matter too,
+/// since re-injection reuses whatever the `//# chunkId=` comment carries.
+fn build_code_snippet(chunk_id: &str, release_id: Option<&str>) -> Result<String> {
+    let Some(release_id) = release_id else {
+        return substitute_chunk_id(CODE_SNIPPET_TEMPLATE, chunk_id);
+    };
+    Ok(
+        substitute_chunk_id(CODE_SNIPPET_WITH_RELEASE_TEMPLATE, chunk_id)?
+            .replace(RELEASE_ID_PLACEHOLDER, &serde_json::to_string(release_id)?),
+    )
+}
+
+/// Fill a snippet template's quoted chunk-id placeholder with the JSON-encoded id. Every site
+/// that renders or searches for an injected snippet must encode the same way, or ids that
+/// need escaping would fail to round-trip through detection and removal.
+fn substitute_chunk_id(template: &str, chunk_id: &str) -> Result<String> {
+    Ok(template.replace(
+        QUOTED_CHUNKID_PLACEHOLDER,
+        &serde_json::to_string(chunk_id)?,
+    ))
+}
+
+struct ReleaseSnippetSpan {
+    start: usize,
+    end: usize,
+    release_id_start: usize,
+    release_id_end: usize,
+}
+
+/// Locate the release-variant snippet for `chunk_id` in `source`, if present.
+fn find_release_snippet(source: &str, chunk_id: &str) -> Option<ReleaseSnippetSpan> {
+    let (prefix, suffix) = CODE_SNIPPET_WITH_RELEASE_TEMPLATE
+        .split_once(RELEASE_ID_PLACEHOLDER)
+        .expect("release template has a release id placeholder");
+    let suffix = substitute_chunk_id(suffix, chunk_id).ok()?;
+
+    let start = source.find(prefix)?;
+    let release_id_start = start + prefix.len();
+    let release_id_len = source[release_id_start..].find(&suffix)?;
+    // The span between prefix and suffix must be the injected release id — a short JSON
+    // string literal. A distant suffix match means user code, not our snippet.
+    if release_id_len > 256 {
+        return None;
+    }
+    let release_id_end = release_id_start + release_id_len;
+
+    Some(ReleaseSnippetSpan {
+        start,
+        end: release_id_end + suffix.len(),
+        release_id_start,
+        release_id_end,
+    })
+}
+
+/// Read the release id embedded in the source's release-variant snippet, if any.
+pub fn get_injected_release_id(source: &str, chunk_id: &str) -> Option<String> {
+    let span = find_release_snippet(source, chunk_id)?;
+    serde_json::from_str(&source[span.release_id_start..span.release_id_end]).ok()
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceMapContent {
@@ -176,12 +240,12 @@ impl MinifiedSourceFile {
         self.get_comment_value(&patterns)
     }
 
-    pub fn set_chunk_id(&mut self, chunk_id: &str) -> Result<SourceMap> {
+    pub fn set_chunk_id(&mut self, chunk_id: &str, release_id: Option<&str>) -> Result<SourceMap> {
         let (new_source_content, source_adjustment) = {
             // Update source content with chunk ID
             let source_content = &self.inner.content;
             let mut magic_source = MagicString::new(source_content);
-            let code_snippet = CODE_SNIPPET_TEMPLATE.replace(CHUNKID_PLACEHOLDER, chunk_id);
+            let code_snippet = build_code_snippet(chunk_id, release_id)?;
             magic_source
                 .prepend(&code_snippet)
                 .map_err(|err| anyhow!("Failed to prepend code snippet: {err}"))?;
@@ -267,6 +331,14 @@ impl MinifiedSourceFile {
         Ok(Some(urlencoding::decode(&found)?.into_owned()))
     }
 
+    pub fn remove_sourcemap_reference(&mut self) -> bool {
+        let Some(range) = trailing_sourcemap_reference_range(&self.inner.content) else {
+            return false;
+        };
+        self.inner.content.replace_range(range, "");
+        true
+    }
+
     fn get_comment_value(&self, patterns: &[&str]) -> Option<String> {
         for line in self.inner.content.lines().rev() {
             if let Some(val) = patterns
@@ -299,11 +371,15 @@ impl MinifiedSourceFile {
                     .map_err(|err| anyhow!("Failed to remove chunk comment: {err}"))?;
             }
 
-            let code_snippet = CODE_SNIPPET_TEMPLATE.replace(CHUNKID_PLACEHOLDER, &chunk_id);
+            let code_snippet = substitute_chunk_id(CODE_SNIPPET_TEMPLATE, &chunk_id)?;
             if let Some(code_snippet_start) = source_content.find(&code_snippet) {
                 let code_snippet_end = code_snippet_start as i64 + code_snippet.len() as i64;
                 magic_source
                     .remove(code_snippet_start as i64, code_snippet_end)
+                    .map_err(|err| anyhow!("Failed to remove code snippet {err}"))?;
+            } else if let Some(span) = find_release_snippet(source_content, &chunk_id) {
+                magic_source
+                    .remove(span.start as i64, span.end as i64)
                     .map_err(|err| anyhow!("Failed to remove code snippet {err}"))?;
             }
 
@@ -330,6 +406,31 @@ impl MinifiedSourceFile {
     }
 }
 
+fn trailing_sourcemap_reference_range(content: &str) -> Option<std::ops::Range<usize>> {
+    let mut line_start = 0;
+    let mut lines = Vec::new();
+    for line in content.split_inclusive('\n') {
+        let line_end = line_start + line.len();
+        lines.push((line_start, line_end, line));
+        line_start = line_end;
+    }
+
+    for (line_start, line_end, line) in lines.into_iter().rev() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() || trimmed_line.starts_with("//# chunkId=") {
+            continue;
+        }
+        if trimmed_line.starts_with("//# sourceMappingURL=")
+            || trimmed_line.starts_with("//@ sourceMappingURL=")
+        {
+            return Some(line_start..line_end);
+        }
+        return None;
+    }
+
+    None
+}
+
 impl TryInto<SymbolSetUpload> for SourceMapFile {
     type Error = anyhow::Error;
 
@@ -353,6 +454,7 @@ impl TryInto<SymbolSetUpload> for SourceMapFile {
             chunk_id,
             release_id,
             data,
+            content_hash: None,
         })
     }
 }
@@ -364,6 +466,42 @@ mod tests {
 
     fn content_from(value: Value) -> SourceMapContent {
         serde_json::from_value(value).expect("Failed to build SourceMapContent")
+    }
+
+    fn minified_source(content: &str) -> MinifiedSourceFile {
+        MinifiedSourceFile {
+            inner: SourceFile::new(PathBuf::from("chunk.js"), content.to_string()),
+        }
+    }
+
+    #[test]
+    fn build_code_snippet_json_encodes_ids() {
+        let hostile = r#"a");window.x=1;("b"#;
+        let encoded = serde_json::to_string(hostile).unwrap();
+
+        let plain = build_code_snippet(hostile, None).unwrap();
+        let with_release = build_code_snippet(hostile, Some(hostile)).unwrap();
+
+        assert!(plain.contains(&encoded), "snippet: {plain}");
+        assert_eq!(
+            with_release.matches(&encoded).count(),
+            2,
+            "snippet: {with_release}"
+        );
+    }
+
+    #[test]
+    fn get_injected_release_id_round_trips_escaped_ids() {
+        // Ids that need JSON escaping must survive detection: the re-inject flow reads the
+        // embedded release id back to decide whether to refresh the snippet.
+        let chunk_id = r#"weird"chunk\id"#;
+        let release_id = r#"rel"ease\id"#;
+        let snippet = build_code_snippet(chunk_id, Some(release_id)).unwrap();
+
+        assert_eq!(
+            get_injected_release_id(&format!("{snippet}code();"), chunk_id).as_deref(),
+            Some(release_id)
+        );
     }
 
     #[test]
@@ -486,5 +624,40 @@ mod tests {
             ],
         }));
         assert!(!sm.is_empty());
+    }
+
+    #[test]
+    fn remove_sourcemap_reference_strips_standard_comment() {
+        let mut source = minified_source("console.log(1);\n//# sourceMappingURL=chunk.js.map\n");
+
+        assert!(source.remove_sourcemap_reference());
+        assert_eq!(source.inner.content, "console.log(1);\n");
+    }
+
+    #[test]
+    fn remove_sourcemap_reference_strips_legacy_comment() {
+        let mut source = minified_source("console.log(1);\r\n//@ sourceMappingURL=chunk.js.map");
+
+        assert!(source.remove_sourcemap_reference());
+        assert_eq!(source.inner.content, "console.log(1);\r\n");
+    }
+
+    #[test]
+    fn remove_sourcemap_reference_strips_comment_with_injected_chunk_id() {
+        let mut source = minified_source(
+            "console.log(1);\n//# sourceMappingURL=chunk.js.map\n\n//# chunkId=00000",
+        );
+
+        assert!(source.remove_sourcemap_reference());
+        assert_eq!(source.inner.content, "console.log(1);\n\n//# chunkId=00000");
+    }
+
+    #[test]
+    fn remove_sourcemap_reference_leaves_non_trailing_comment() {
+        let original = "console.log(1);\n//# sourceMappingURL=chunk.js.map\nconsole.log(2);\n";
+        let mut source = minified_source(original);
+
+        assert!(!source.remove_sourcemap_reference());
+        assert_eq!(source.inner.content, original);
     }
 }

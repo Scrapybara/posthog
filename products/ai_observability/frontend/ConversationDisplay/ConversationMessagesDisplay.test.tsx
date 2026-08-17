@@ -9,8 +9,13 @@ import { CompatMessage } from '../types'
 import {
     ConversationDisplayOption,
     ConversationMessagesDisplay,
+    ImageMessageDisplay,
     LLMMessageDisplay,
 } from './ConversationMessagesDisplay'
+
+// react-json-view is loaded via React.lazy, so the first render suspends on a code-split chunk.
+// Under CI contention that resolve can exceed waitFor's 1s default, so give it headroom.
+const JSON_VIEWER_TIMEOUT_MS = 5000
 
 describe('LLMMessageDisplay', () => {
     beforeEach(() => {
@@ -70,9 +75,12 @@ describe('LLMMessageDisplay', () => {
             </Provider>
         )
 
-        await waitFor(() => {
-            expect(container.querySelector('.react-json-view')).toBeInTheDocument()
-        })
+        await waitFor(
+            () => {
+                expect(container.querySelector('.react-json-view')).toBeInTheDocument()
+            },
+            { timeout: JSON_VIEWER_TIMEOUT_MS }
+        )
         expect(container.textContent).toContain(expectedSubstring)
     })
 
@@ -126,6 +134,42 @@ describe('LLMMessageDisplay', () => {
         )
 
         expect(container.querySelector('img')?.getAttribute('src')).toBe(expectedSrc)
+    })
+
+    it('renders OpenAI Responses input_text/input_image content parts as text and an image', () => {
+        const dataUri = 'data:image/jpeg;base64,/9j/4AAQSkZ'
+        const message: CompatMessage = {
+            role: 'user',
+            content: [
+                { type: 'input_text', text: 'what is in this photo?' },
+                { type: 'input_image', image_url: dataUri },
+            ],
+        }
+        const { container } = render(
+            <Provider>
+                <LLMMessageDisplay message={message} show />
+            </Provider>
+        )
+
+        expect(container.textContent).toContain('what is in this photo?')
+        expect(container.textContent).not.toContain('input_image')
+        expect(container.textContent).not.toContain('base64')
+        expect(container.querySelector('img')?.getAttribute('src')).toBe(dataUri)
+    })
+
+    it('renders an OpenAI Responses output_text content part as plain text', () => {
+        const message: CompatMessage = {
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'it is a photo of a cat' }],
+        }
+        const { container } = render(
+            <Provider>
+                <LLMMessageDisplay message={message} show />
+            </Provider>
+        )
+
+        expect(container.textContent).toContain('it is a photo of a cat')
+        expect(container.textContent).not.toContain('output_text')
     })
 
     it('renders content[].type=function with object arguments as a tool-call block', async () => {
@@ -371,5 +415,41 @@ describe('ConversationMessagesDisplay', () => {
         for (const text of hidden) {
             expect(screen.queryByText(text)).not.toBeInTheDocument()
         }
+    })
+})
+
+describe('ImageMessageDisplay', () => {
+    beforeEach(() => {
+        initKeaTests()
+    })
+
+    afterEach(() => {
+        cleanup()
+    })
+
+    it('tags rendered images with a stable data-attr for e2e targeting', () => {
+        const { container } = render(
+            <ImageMessageDisplay message={{ content: { image: 'data:image/png;base64,iVBORw0KGgo=' } }} />
+        )
+
+        const image = container.querySelector('img')
+        expect(image).not.toBeNull()
+        expect(image).toHaveAttribute('data-attr', 'ai-message-image')
+    })
+
+    it('tags the OpenAI image_url content branch with the same data-attr', () => {
+        const message: CompatMessage = {
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }],
+        }
+        const { container } = render(
+            <Provider>
+                <LLMMessageDisplay message={message} show />
+            </Provider>
+        )
+
+        const image = container.querySelector('img')
+        expect(image).not.toBeNull()
+        expect(image).toHaveAttribute('data-attr', 'ai-message-image')
     })
 })

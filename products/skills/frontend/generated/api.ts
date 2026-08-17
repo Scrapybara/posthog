@@ -9,18 +9,27 @@ import { apiMutator } from '../../../../frontend/src/lib/api-orval-mutator'
  * OpenAPI spec version: 1.0.0
  */
 import type {
+    CommunitySkillApi,
+    CommunitySkillInstallApi,
+    CommunitySkillVoteResponseApi,
+    CommunitySkillsListParams,
     LLMSkillApi,
     LLMSkillCreateApi,
     LLMSkillDuplicateApi,
     LLMSkillFileApi,
     LLMSkillFileCreateApi,
     LLMSkillFileRenameApi,
+    LLMSkillImportApi,
+    LLMSkillMarketplaceCommandApi,
+    LLMSkillMarketplaceIssueApi,
     LLMSkillResolveResponseApi,
     LlmSkillsListParams,
+    LlmSkillsNameExportRetrieveParams,
     LlmSkillsNameFilesDestroyParams,
     LlmSkillsNameFilesRetrieveParams,
     LlmSkillsNameRetrieveParams,
     LlmSkillsResolveNameRetrieveParams,
+    PaginatedCommunitySkillListListApi,
     PaginatedLLMSkillListListApi,
     PatchedLLMSkillPublishApi,
 } from './api.schemas'
@@ -41,6 +50,81 @@ type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
           [P in keyof Writable<T>]: T[P] extends object ? NonReadonly<NonNullable<T[P]>> : T[P]
       }
     : DistributeReadOnlyOverUnions<T>
+
+export const getCommunitySkillsListUrl = (projectId: string, params?: CommunitySkillsListParams) => {
+    const normalizedParams = new URLSearchParams()
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined) {
+            normalizedParams.append(key, value === null ? 'null' : String(value))
+        }
+    })
+
+    const stringifiedParams = normalizedParams.toString()
+
+    return stringifiedParams.length > 0
+        ? `/api/projects/${projectId}/community_skills/?${stringifiedParams}`
+        : `/api/projects/${projectId}/community_skills/`
+}
+
+export const communitySkillsList = async (
+    projectId: string,
+    params?: CommunitySkillsListParams,
+    options?: RequestInit
+): Promise<PaginatedCommunitySkillListListApi> => {
+    return apiMutator<PaginatedCommunitySkillListListApi>(getCommunitySkillsListUrl(projectId, params), {
+        ...options,
+        method: 'GET',
+    })
+}
+
+export const getCommunitySkillsRetrieveUrl = (projectId: string, slug: string) => {
+    return `/api/projects/${projectId}/community_skills/${slug}/`
+}
+
+export const communitySkillsRetrieve = async (
+    projectId: string,
+    slug: string,
+    options?: RequestInit
+): Promise<CommunitySkillApi> => {
+    return apiMutator<CommunitySkillApi>(getCommunitySkillsRetrieveUrl(projectId, slug), {
+        ...options,
+        method: 'GET',
+    })
+}
+
+export const getCommunitySkillsInstallCreateUrl = (projectId: string, slug: string) => {
+    return `/api/projects/${projectId}/community_skills/${slug}/install/`
+}
+
+export const communitySkillsInstallCreate = async (
+    projectId: string,
+    slug: string,
+    communitySkillInstallApi?: CommunitySkillInstallApi,
+    options?: RequestInit
+): Promise<LLMSkillApi> => {
+    return apiMutator<LLMSkillApi>(getCommunitySkillsInstallCreateUrl(projectId, slug), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(communitySkillInstallApi),
+    })
+}
+
+export const getCommunitySkillsVoteCreateUrl = (projectId: string, slug: string) => {
+    return `/api/projects/${projectId}/community_skills/${slug}/vote/`
+}
+
+export const communitySkillsVoteCreate = async (
+    projectId: string,
+    slug: string,
+    options?: RequestInit
+): Promise<CommunitySkillVoteResponseApi> => {
+    return apiMutator<CommunitySkillVoteResponseApi>(getCommunitySkillsVoteCreateUrl(projectId, slug), {
+        ...options,
+        method: 'POST',
+    })
+}
 
 export const getLlmSkillsListUrl = (projectId: string, params?: LlmSkillsListParams) => {
     const normalizedParams = new URLSearchParams()
@@ -77,12 +161,73 @@ export const llmSkillsCreate = async (
     projectId: string,
     lLMSkillCreateApi: NonReadonly<LLMSkillCreateApi>,
     options?: RequestInit
-): Promise<LLMSkillCreateApi> => {
-    return apiMutator<LLMSkillCreateApi>(getLlmSkillsCreateUrl(projectId), {
+): Promise<LLMSkillApi> => {
+    return apiMutator<LLMSkillApi>(getLlmSkillsCreateUrl(projectId), {
         ...options,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
         body: JSON.stringify(lLMSkillCreateApi),
+    })
+}
+
+export const getLlmSkillsImportCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/llm_skills/import/`
+}
+
+export const llmSkillsImportCreate = async (
+    projectId: string,
+    lLMSkillImportApi: LLMSkillImportApi,
+    options?: RequestInit
+): Promise<LLMSkillApi> => {
+    const formData = new FormData()
+    formData.append(`file`, lLMSkillImportApi.file)
+
+    return apiMutator<LLMSkillApi>(getLlmSkillsImportCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        body: formData,
+    })
+}
+
+export const getLlmSkillsMarketplaceInstallCommandRetrieveUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/llm_skills/marketplace/install-command/`
+}
+
+/**
+ * Report whether the user already has a marketplace credential, without minting one.
+ *
+ * The token is unrecoverable, so an existing credential returns its mask only — the UI shows
+ * "already connected, existing setups keep working" and offers an explicit rotate.
+ */
+export const llmSkillsMarketplaceInstallCommandRetrieve = async (
+    projectId: string,
+    options?: RequestInit
+): Promise<LLMSkillMarketplaceCommandApi> => {
+    return apiMutator<LLMSkillMarketplaceCommandApi>(getLlmSkillsMarketplaceInstallCommandRetrieveUrl(projectId), {
+        ...options,
+        method: 'GET',
+    })
+}
+
+export const getLlmSkillsMarketplaceInstallCommandCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/llm_skills/marketplace/install-command/`
+}
+
+/**
+ * Mint the user's read-only marketplace credential (or rotate it) and return the install command.
+ *
+ * Per-user: rotating only ever invalidates this user's own credential, never a teammate's.
+ */
+export const llmSkillsMarketplaceInstallCommandCreate = async (
+    projectId: string,
+    lLMSkillMarketplaceIssueApi?: LLMSkillMarketplaceIssueApi,
+    options?: RequestInit
+): Promise<LLMSkillMarketplaceCommandApi> => {
+    return apiMutator<LLMSkillMarketplaceCommandApi>(getLlmSkillsMarketplaceInstallCommandCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(lLMSkillMarketplaceIssueApi),
     })
 }
 
@@ -166,6 +311,38 @@ export const llmSkillsNameDuplicateCreate = async (
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
         body: JSON.stringify(lLMSkillDuplicateApi),
+    })
+}
+
+export const getLlmSkillsNameExportRetrieveUrl = (
+    projectId: string,
+    skillName: string,
+    params?: LlmSkillsNameExportRetrieveParams
+) => {
+    const normalizedParams = new URLSearchParams()
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined) {
+            normalizedParams.append(key, value === null ? 'null' : String(value))
+        }
+    })
+
+    const stringifiedParams = normalizedParams.toString()
+
+    return stringifiedParams.length > 0
+        ? `/api/projects/${projectId}/llm_skills/name/${skillName}/export/?${stringifiedParams}`
+        : `/api/projects/${projectId}/llm_skills/name/${skillName}/export/`
+}
+
+export const llmSkillsNameExportRetrieve = async (
+    projectId: string,
+    skillName: string,
+    params?: LlmSkillsNameExportRetrieveParams,
+    options?: RequestInit
+): Promise<Blob> => {
+    return apiMutator<Blob>(getLlmSkillsNameExportRetrieveUrl(projectId, skillName, params), {
+        ...options,
+        method: 'GET',
     })
 }
 

@@ -1,4 +1,5 @@
 import './styles/layers.css'
+import './styles/utilities.css'
 
 export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from './accordion'
 export {
@@ -30,8 +31,75 @@ export {
     AutocompleteValue,
     useAutocompleteAnchor,
 } from './autocomplete'
+export { Avatar, AvatarImage, AvatarFallback, AvatarGroup } from './avatar'
 export { Badge, badgeVariants } from './badge'
 export { Button, buttonVariants, type ButtonProps } from './button'
+export { ChatBubbleGroup, ChatBubble, ChatBubbleContent, ChatBubbleReactions, bubbleVariants } from './chat/chat-bubble'
+export { ChatGlobe } from './chat/chat-globe'
+export {
+    ChatMarker,
+    ChatMarkerIcon,
+    ChatMarkerContent,
+    ChatMarkerValue,
+    markerVariants,
+    type ChatMarkerStatus,
+} from './chat/chat-marker'
+export {
+    ChatMessageGroup,
+    ChatMessage,
+    ChatMessageAvatar,
+    ChatMessageContent,
+    ChatMessageFooter,
+    ChatMessageHeader,
+} from './chat/chat-message'
+export {
+    ChatMessageScrollerProvider,
+    ChatMessageScroller,
+    ChatMessageScrollerViewport,
+    ChatMessageScrollerContent,
+    ChatMessageScrollerItem,
+    ChatMessageScrollerButton,
+    useChatMessageScroller,
+    useChatMessageScrollerScrollable,
+    useChatMessageScrollerVisibility,
+} from './chat/chat-message-scroller'
+export { ChatSource, ChatSourceList, ChatSourceTitle, ChatSourceUrl, type ChatSourceStatus } from './chat/chat-source'
+export { ChatStream, ChatStreamLine } from './chat/chat-stream'
+export {
+    ChatTask,
+    ChatTaskDetail,
+    ChatTaskList,
+    ChatTaskListContent,
+    ChatTaskListCount,
+    ChatTaskListLabel,
+    ChatTaskListProgress,
+    ChatTaskListTrigger,
+    type ChatTaskStatus,
+} from './chat/chat-task-list'
+export {
+    ThreadItemGroup,
+    ThreadItem,
+    ThreadItemGutter,
+    ThreadItemContent,
+    ThreadItemHeader,
+    ThreadItemAuthor,
+    ThreadItemTimestamp,
+    ThreadItemBody,
+    ThreadItemMention,
+    ThreadItemLink,
+    ThreadItemAttachment,
+    ThreadItemAttachmentTrigger,
+    ThreadItemAttachmentContent,
+    ThreadItemAttachmentImage,
+    ThreadItemReactions,
+    ThreadItemReaction,
+    ThreadItemReactionEmoji,
+    ThreadItemActions,
+    ThreadItemAction,
+    ThreadItemReplies,
+    ThreadItemRepliesLabel,
+    ThreadItemRepliesMeta,
+} from './chat/thread-item'
 export { ButtonGroup, ButtonGroupSeparator, ButtonGroupText, buttonGroupVariants } from './button-group'
 export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent } from './card'
 export { CardGroup } from './card-group'
@@ -202,7 +270,7 @@ export {
     getPaginationRange,
     type PaginationRangeItem,
 } from './pagination'
-export { Popover, PopoverContent, PopoverTrigger } from './popover'
+export { Popover, PopoverArrow, PopoverContent, PopoverTrigger } from './popover'
 export {
     Progress,
     ProgressIndicator,
@@ -211,6 +279,28 @@ export {
     ProgressValue,
     progressIndicatorVariants,
 } from './progress'
+export {
+    Questionnaire,
+    QuestionnaireActions,
+    QuestionnaireChoice,
+    QuestionnaireChoiceDescription,
+    QuestionnaireChoices,
+    QuestionnaireDescription,
+    QuestionnaireError,
+    QuestionnaireInput,
+    QuestionnaireItem,
+    QuestionnaireNext,
+    QuestionnairePrevious,
+    QuestionnaireProgress,
+    QuestionnaireSkip,
+    QuestionnaireSubmit,
+    QuestionnaireTitle,
+    type QuestionnaireChoiceDefinition,
+    type QuestionnaireInputType,
+    type QuestionnaireItemDefinition,
+    type QuestionnaireItemStatus,
+    type QuestionnaireShortcutMode,
+} from './chat/questionnaire'
 export { RadioGroup, RadioGroupItem, RadioIndicator } from './radio-group'
 export { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './resizable'
 export { ScrollArea, ScrollBar, scrollShadowsCss, SCROLL_SHADOWS_STYLE_ID } from './scroll-area'
@@ -222,6 +312,7 @@ export {
     SelectGroupLabel,
     SelectSeparator,
     SelectTrigger,
+    SelectTriggerIcon,
     SelectValue,
 } from './select'
 export { Separator } from './separator'
@@ -242,7 +333,17 @@ export {
 } from './toast'
 export { Spinner } from './spinner'
 export { Switch } from './switch'
-export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption } from './table'
+export {
+    Table,
+    TableHeader,
+    TableBody,
+    TableFooter,
+    TableHead,
+    TableRow,
+    TableCell,
+    TableEmpty,
+    TableCaption,
+} from './table'
 export { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs'
 export { Text, textVariants } from './text'
 export { Textarea } from './textarea'

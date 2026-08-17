@@ -2,11 +2,11 @@ import { HTTPRequest } from 'puppeteer'
 
 import { BLOCK_REQUEST_PREFIX } from '@posthog/replay-headless/protocol'
 
-import { internalFetch } from '../../../utils/request'
-import { type RecordingBlock as FullRecordingBlock } from '../../recording-api/types'
-import { RasterizationError } from '../errors'
-import { type Logger, createLogger } from '../logger'
-import { RasterizeRecordingInput } from '../types'
+import { internalFetch } from '~/common/utils/request'
+import { type RecordingBlock as FullRecordingBlock } from '~/session-replay/recording-api/types'
+import { RasterizationError } from '~/session-replay/recording-rasterizer/errors'
+import { type Logger, createLogger } from '~/session-replay/recording-rasterizer/logger'
+import { RasterizeRecordingInput } from '~/session-replay/recording-rasterizer/types'
 
 type RecordingBlock = Pick<FullRecordingBlock, 'key' | 'start_byte' | 'end_byte'>
 
@@ -16,6 +16,7 @@ export class BlockProxy {
     private blocks: RecordingBlock[] = []
     private teamId = 0
     private sessionId = ''
+    private recordingApiToken = ''
 
     constructor(
         private cfg: { recordingApiBaseUrl: string; recordingApiSecret: string },
@@ -26,13 +27,31 @@ export class BlockProxy {
         return this.blocks.length
     }
 
+    // Send both the legacy shared secret (when configured) and the relayed team-scoped JWT (when one
+    // was minted upstream), so recording-api accepts either and rollout stays order-independent.
+    private authHeaders(): Record<string, string> {
+        const headers: Record<string, string> = {}
+        if (this.cfg.recordingApiSecret) {
+            headers['X-Internal-Api-Secret'] = this.cfg.recordingApiSecret
+        }
+        if (this.recordingApiToken) {
+            headers['Authorization'] = `Bearer ${this.recordingApiToken}`
+        }
+        return headers
+    }
+
     async fetchBlocks(input: RasterizeRecordingInput): Promise<number> {
         this.teamId = input.team_id
         this.sessionId = input.session_id
+        this.recordingApiToken = input.recording_api_token ?? ''
 
-        const url = `${this.cfg.recordingApiBaseUrl}/api/projects/${input.team_id}/recordings/${input.session_id}/blocks`
+        // Encoded: the fetch client normalizes the URL, so a raw session id containing `../`
+        // would repoint the request at another team's recording.
+        const url = `${this.cfg.recordingApiBaseUrl}/api/projects/${input.team_id}/recordings/${encodeURIComponent(
+            input.session_id
+        )}/blocks`
         const resp = await internalFetch(url, {
-            headers: { 'X-Internal-Api-Secret': this.cfg.recordingApiSecret },
+            headers: this.authHeaders(),
         })
         if (resp.status < 200 || resp.status >= 300) {
             const body = await resp.text()
@@ -70,9 +89,9 @@ export class BlockProxy {
                 decompress: 'true',
             })
             const apiBase = `${this.cfg.recordingApiBaseUrl}/api/projects`
-            const url = `${apiBase}/${this.teamId}/recordings/${this.sessionId}/block?${params}`
+            const url = `${apiBase}/${this.teamId}/recordings/${encodeURIComponent(this.sessionId)}/block?${params}`
             const resp = await internalFetch(url, {
-                headers: { 'X-Internal-Api-Secret': this.cfg.recordingApiSecret },
+                headers: this.authHeaders(),
             })
             if (resp.status < 200 || resp.status >= 300) {
                 const text = await resp.text()

@@ -4,6 +4,7 @@ import { useState } from 'react'
 
 import { formatPropertyLabel } from 'lib/components/PropertyFilters/utils'
 import { taxonomicFilterMocksDecorator } from 'lib/components/TaxonomicFilter/__mocks__/taxonomicFilterMocksDecorator'
+import { FEATURE_FLAGS } from 'lib/constants'
 
 import { actionsModel } from '~/models/actionsModel'
 import { getCoreFilterDefinition } from '~/taxonomy/helpers'
@@ -296,6 +297,11 @@ function DwhConfigContainer(): JSX.Element {
 export const DataWarehouseConfig: Story = {
     render: () => <DwhConfigContainer />,
     parameters: {
+        featureFlags: { [FEATURE_FLAGS.TAXONOMIC_FILTER_MENU_REBUILD]: true },
+        testOptions: {
+            waitForSelector: '[data-attr="dwh-config-back"]',
+            snapshotTargetSelector: '[data-slot="dialog-content"]',
+        },
         docs: {
             description: {
                 story: 'DataWarehouse config form rendered standalone so it lands on the DWH interface immediately. Wide table with mixed types (string / integer / decimal / datetime / boolean / lazy_table / view) exercises every column-type filter in the dropdowns plus the linked-tables hint in the HogQL fallback. Tabs are configured to mirror the funnel popover (Aggregation target / Timestamp / Unique ID).',
@@ -364,6 +370,57 @@ export const DefaultSurfaceWithRecents: Story = {
         docs: {
             description: {
                 story: 'The default "All" surface staff land on, brought in line with the pill variant: recents lead, then pinned, then the cross-tab content in fixed (learnable) order. Recent/pinned rows are tagged with their source (e.g. "Events - recent"), and the category dropdown exposes Recent and Pinned alongside the content categories so they stay navigable.',
+            },
+        },
+    },
+}
+
+// ---- Renamed series selection -------------------------------------------
+// Renders the combobox directly on the `all` scope with a committed selection
+// whose series carries a rename: the promoted first row is labelled with the
+// rename ("Completed sign-up") and keeps the raw event key visible beneath it.
+
+function RenamedSeriesSelectionContainer(): JSX.Element {
+    useMountedLogic(actionsModel)
+    const selectedEntry: MenuFilterEntry = {
+        item: { name: 'signed up', id: 'signed up' } as never,
+        group: {
+            type: TaxonomicFilterGroupType.Events,
+            name: 'Events',
+            getName: (t: any) => t?.name,
+            getValue: (t: any) => t?.name ?? t?.id,
+        } as unknown as TaxonomicFilterGroup,
+        name: 'signed up',
+    }
+    return (
+        <TaxonomicFilterHeadless.Root
+            bindRootProps={false}
+            taxonomicGroupTypes={[TaxonomicFilterGroupType.Events, TaxonomicFilterGroupType.Actions]}
+        >
+            <div className="border rounded overflow-hidden flex flex-col w-[720px] h-[420px] bg-surface-primary">
+                <MenuFilterCombobox
+                    drillTo="all"
+                    selectedEntry={selectedEntry}
+                    selectedRename={{ label: 'Completed sign-up', raw: 'signed up' }}
+                    onCommit={() => {}}
+                    onBack={() => {}}
+                />
+            </div>
+        </TaxonomicFilterHeadless.Root>
+    )
+}
+
+export const RenamedSeriesSelection: Story = {
+    // Excluded from the snapshot/flake gate for the same reason as
+    // DefaultSurfaceWithRecents: the `all` scope fetches content lists and the
+    // preview pane loads async, so the render isn't pixel-stable. Kept for the
+    // Storybook demo; the rename labelling is covered by RTL in Combobox.test.tsx.
+    tags: ['test-skip'],
+    render: () => <RenamedSeriesSelectionContainer />,
+    parameters: {
+        docs: {
+            description: {
+                story: 'Reopening the rebuilt menu on a renamed series: the committed selection is promoted to the first row, labelled with the series\' rename ("Completed sign-up") while the raw `signed up` event key stays inline beneath it, with the checkmark and preview pane tracking the same row.',
             },
         },
     },

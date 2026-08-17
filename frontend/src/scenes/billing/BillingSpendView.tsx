@@ -12,10 +12,11 @@ import { RestrictionScope, useRestrictedArea } from 'lib/components/RestrictedAr
 import { LemonInputSelect } from 'lib/lemon-ui/LemonInputSelect/LemonInputSelect'
 import { LemonLabel } from 'lib/lemon-ui/LemonLabel/LemonLabel'
 import { Tooltip } from 'lib/lemon-ui/Tooltip'
+import { getAccessControlDisabledReason } from 'lib/utils/accessControlUtils'
 
-import { ExporterFormat } from '~/types'
+import { AccessControlLevel, AccessControlResourceType, ExporterFormat } from '~/types'
 
-import { buildBillingCsv, currencyFormatter } from './billing-utils'
+import { buildBillingCsv, currencyFormatter, getSpendTypeOptions } from './billing-utils'
 import { BillingDataTable } from './BillingDataTable'
 import { BillingEarlyAccessBanner } from './BillingEarlyAccessBanner'
 import { BillingEmptyState } from './BillingEmptyState'
@@ -23,7 +24,6 @@ import { BillingLineGraph } from './BillingLineGraph'
 import { billingLogic } from './billingLogic'
 import { BillingNoAccess } from './BillingNoAccess'
 import { billingSpendLogic } from './billingSpendLogic'
-import { USAGE_TYPES } from './constants'
 
 export function BillingSpendView(): JSX.Element {
     const { minimumBillingAccessLevel } = useValues(billingLogic)
@@ -64,6 +64,12 @@ export function BillingSpendView(): JSX.Element {
         return <BillingNoAccess title="Spend" reason={restrictionReason} />
     }
 
+    // Creating an export requires editor access to the export resource.
+    const exportAccessControlDisabledReason = getAccessControlDisabledReason(
+        AccessControlResourceType.Export,
+        AccessControlLevel.Editor
+    )
+
     const onExportCsv = (): void => {
         const csv = buildBillingCsv({
             series,
@@ -97,7 +103,7 @@ export function BillingSpendView(): JSX.Element {
                             value={filters.usage_types || []}
                             onChange={(value: string[]) => setFilters({ usage_types: value })}
                             placeholder="All products"
-                            options={USAGE_TYPES.map((opt) => ({ key: opt.value, label: opt.label }))}
+                            options={getSpendTypeOptions()}
                             allowCustomValues={false}
                         />
                     </div>
@@ -190,7 +196,12 @@ export function BillingSpendView(): JSX.Element {
                                 Clear filters
                             </LemonButton>
                             {showSeries && (
-                                <LemonButton type="secondary" size="medium" onClick={onExportCsv}>
+                                <LemonButton
+                                    type="secondary"
+                                    size="medium"
+                                    onClick={onExportCsv}
+                                    disabledReason={exportAccessControlDisabledReason ?? undefined}
+                                >
                                     Export CSV
                                 </LemonButton>
                             )}

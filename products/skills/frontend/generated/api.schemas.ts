@@ -7,16 +7,150 @@
  * PostHog API - generated
  * OpenAPI spec version: 1.0.0
  */
-export interface LLMSkillOutlineEntryApi {
+/**
+ * * `official` - Official
+ * * `verified` - Verified
+ * * `community` - Community
+ */
+export type TrustTierEnumApi = (typeof TrustTierEnumApi)[keyof typeof TrustTierEnumApi]
+
+export const TrustTierEnumApi = {
+    Official: 'official',
+    Verified: 'verified',
+    Community: 'community',
+} as const
+
+/**
+ * Arbitrary key-value metadata carried from the skill's frontmatter.
+ */
+export type CommunitySkillListApiMetadata = { [key: string]: unknown }
+
+/**
+ * List serializer that omits body and file manifest — progressive disclosure.
+ */
+export interface CommunitySkillListApi {
+    readonly id: string
+    /** Stable identifier matching the skill's directory in the community-skills repo. */
+    readonly slug: string
+    /** Display name of the skill. */
+    readonly name: string
+    /** What the skill does and when to use it. */
+    readonly description: string
+    /** License name or reference. */
+    readonly license: string
+    /** Environment requirements declared by the skill. */
+    readonly compatibility: string
+    /** Tools the skill declares it may use. Surface these to the user before install. */
+    allowed_tools?: string[]
+    /** Arbitrary key-value metadata carried from the skill's frontmatter. */
+    metadata?: CommunitySkillListApiMetadata
+    /** Free-form tags used for filtering and discovery. */
+    tags?: string[]
+    /** Moderation tier: 'official' (PostHog-authored), 'verified' (reviewed), or 'community'.
+     *
+     * * `official` - Official
+     * * `verified` - Verified
+     * * `community` - Community */
+    trust_tier: TrustTierEnumApi
+    /** GitHub handle (or name) of the contributor who published the skill. */
+    readonly author_handle: string
+    /** Link to the skill's source directory on GitHub. */
+    readonly github_url: string
+    /** Number of times this skill has been installed into a team. */
+    readonly install_count: number
+    /** Total number of upvotes this skill has received. */
+    readonly vote_count: number
+    /** Whether the requesting user has upvoted this skill. */
+    readonly has_voted: boolean
     /**
-     * Markdown heading level (1-6).
-     * @minimum 1
-     * @maximum 6
+     * When the skill was first published to the community repo.
+     * @nullable
      */
-    level: number
-    /** Heading text. */
-    text: string
+    readonly published_at: string | null
+    readonly created_at: string
+    readonly updated_at: string
 }
+
+export interface PaginatedCommunitySkillListListApi {
+    count: number
+    /** @nullable */
+    next?: string | null
+    /** @nullable */
+    previous?: string | null
+    results: CommunitySkillListApi[]
+}
+
+/**
+ * Arbitrary key-value metadata carried from the skill's frontmatter.
+ */
+export type CommunitySkillApiMetadata = { [key: string]: unknown }
+
+export interface CommunitySkillFileManifestApi {
+    /** @maxLength 500 */
+    path: string
+    /** @maxLength 100 */
+    content_type?: string
+}
+
+export interface CommunitySkillApi {
+    readonly id: string
+    /** Stable identifier matching the skill's directory in the community-skills repo. */
+    readonly slug: string
+    /** Display name of the skill. */
+    readonly name: string
+    /** What the skill does and when to use it. */
+    readonly description: string
+    /** The SKILL.md instruction content (markdown). */
+    readonly body: string
+    /** License name or reference. */
+    readonly license: string
+    /** Environment requirements declared by the skill. */
+    readonly compatibility: string
+    /** Tools the skill declares it may use. Surface these to the user before install. */
+    allowed_tools?: string[]
+    /** Arbitrary key-value metadata carried from the skill's frontmatter. */
+    metadata?: CommunitySkillApiMetadata
+    /** Free-form tags used for filtering and discovery. */
+    tags?: string[]
+    /** Moderation tier: 'official' (PostHog-authored), 'verified' (reviewed), or 'community'.
+     *
+     * * `official` - Official
+     * * `verified` - Verified
+     * * `community` - Community */
+    trust_tier: TrustTierEnumApi
+    /** GitHub handle (or name) of the contributor who published the skill. */
+    readonly author_handle: string
+    /** Link to the skill's source directory on GitHub. */
+    readonly github_url: string
+    /** Bundled files manifest — path and content_type only. File contents are copied in on install. */
+    readonly files: readonly CommunitySkillFileManifestApi[]
+    /** Number of times this skill has been installed into a team. */
+    readonly install_count: number
+    /** Total number of upvotes this skill has received. */
+    readonly vote_count: number
+    /** Whether the requesting user has upvoted this skill. */
+    readonly has_voted: boolean
+    /**
+     * When the skill was first published to the community repo.
+     * @nullable
+     */
+    readonly published_at: string | null
+    readonly created_at: string
+    readonly updated_at: string
+}
+
+export interface CommunitySkillInstallApi {
+    /**
+     * Name for the installed skill in your team. Defaults to the community skill's slug.
+     * @maxLength 64
+     */
+    new_name?: string
+}
+
+/**
+ * Arbitrary key-value metadata.
+ */
+export type LLMSkillApiMetadata = { [key: string]: unknown }
 
 /**
  * * `engineering` - Engineering
@@ -26,6 +160,7 @@ export interface LLMSkillOutlineEntryApi {
  * * `leadership` - Leadership
  * * `marketing` - Marketing
  * * `sales` - Sales / Success
+ * * `student` - Student
  * * `other` - Other
  */
 export type RoleAtOrganizationEnumApi = (typeof RoleAtOrganizationEnumApi)[keyof typeof RoleAtOrganizationEnumApi]
@@ -38,6 +173,7 @@ export const RoleAtOrganizationEnumApi = {
     Leadership: 'leadership',
     Marketing: 'marketing',
     Sales: 'sales',
+    Student: 'student',
     Other: 'other',
 } as const
 
@@ -73,6 +209,90 @@ export interface UserBasicApi {
     role_at_organization?: RoleAtOrganizationEnumApi | BlankEnumApi | null
 }
 
+export interface LLMSkillFileManifestApi {
+    /** @maxLength 500 */
+    path: string
+    /** @maxLength 100 */
+    content_type?: string
+}
+
+export interface LLMSkillOutlineEntryApi {
+    /**
+     * Markdown heading level (1-6).
+     * @minimum 1
+     * @maximum 6
+     */
+    level: number
+    /** Heading text. */
+    text: string
+}
+
+export interface LLMSkillApi {
+    readonly id: string
+    /**
+     * Unique skill name. Lowercase letters, numbers, and hyphens only. Max 64 characters.
+     * @maxLength 64
+     */
+    name: string
+    /**
+     * What this skill does and when to use it. Max 4096 characters.
+     * @maxLength 4096
+     */
+    description: string
+    /** Total length of the full body in characters, independent of any body_offset/body_length paging. Compare against the length of the returned body to detect a truncated response. */
+    readonly body_total_length: number
+    /**
+     * When body_length paging stops before the end of the body, the character offset to request next (pass as body_offset). Null when the returned body reaches the end.
+     * @nullable
+     */
+    readonly body_next_offset: number | null
+    /** The SKILL.md instruction content (markdown). */
+    body: string
+    /**
+     * License name or reference to a bundled license file.
+     * @maxLength 255
+     */
+    license?: string
+    /**
+     * Environment requirements (intended product, system packages, network access, etc.).
+     * @maxLength 500
+     */
+    compatibility?: string
+    /** List of pre-approved tools the skill may use. Tool names cannot contain whitespace. */
+    allowed_tools?: string[]
+    /** Arbitrary key-value metadata. */
+    metadata?: LLMSkillApiMetadata
+    /** Server-owned classification — set by the producing system (the Signals harness stamps "scout"), not writable via the API. Empty for an ordinary skill. Groups skills into their own surface (e.g. the Scouts tab) independently of the skill name. */
+    readonly category: string
+    /** Users who own this skill, seed-creator first. Ownership is keyed on the logical skill (not a version), so it's stable across edits. Prefer this over created_by to learn who to route reviews or questions to. Set via the owners field on create/update (a list of user UUIDs). Empty for scout sandbox fetches of skills that haven't opted into the report channel. */
+    readonly owners: readonly UserBasicApi[]
+    /** Bundled files manifest. Each entry is path + content_type only; fetch content via /llm_skills/name/{name}/files/{path}/. */
+    readonly files: readonly LLMSkillFileManifestApi[]
+    /** Flat list of markdown headings parsed from the skill body. Useful as a lightweight table of contents. */
+    readonly outline: readonly LLMSkillOutlineEntryApi[]
+    readonly version: number
+    /**
+     * Optional note describing what changed in this version. Set when the version is published.
+     * @nullable
+     */
+    readonly version_description: string | null
+    readonly created_by: UserBasicApi
+    readonly created_at: string
+    readonly updated_at: string
+    readonly deleted: boolean
+    readonly is_latest: boolean
+    readonly latest_version: number
+    readonly version_count: number
+    readonly first_version_created_at: string
+}
+
+export interface CommunitySkillVoteResponseApi {
+    /** Total upvotes after applying the toggle. */
+    vote_count: number
+    /** Whether the requesting user is now an upvoter. */
+    has_voted: boolean
+}
+
 /**
  * Arbitrary key-value metadata.
  */
@@ -103,13 +323,22 @@ export interface LLMSkillListApi {
      * @maxLength 500
      */
     compatibility?: string
-    /** List of pre-approved tools the skill may use. */
+    /** List of pre-approved tools the skill may use. Tool names cannot contain whitespace. */
     allowed_tools?: string[]
     /** Arbitrary key-value metadata. */
     metadata?: LLMSkillListApiMetadata
+    /** Server-owned classification — set by the producing system (the Signals harness stamps "scout"), not writable via the API. Empty for an ordinary skill. Groups skills into their own surface (e.g. the Scouts tab) independently of the skill name. */
+    readonly category: string
+    /** Users who own this skill, seed-creator first. Ownership is keyed on the logical skill (not a version), so it's stable across edits. Prefer this over created_by to learn who to route reviews or questions to. Set via the owners field on create/update (a list of user UUIDs). Empty for scout sandbox fetches of skills that haven't opted into the report channel. */
+    readonly owners: readonly UserBasicApi[]
     /** Flat list of markdown headings parsed from the skill body. Useful as a lightweight table of contents. */
     readonly outline: readonly LLMSkillOutlineEntryApi[]
     readonly version: number
+    /**
+     * Optional note describing what changed in this version. Set when the version is published.
+     * @nullable
+     */
+    readonly version_description: string | null
     readonly created_by: UserBasicApi
     readonly created_at: string
     readonly updated_at: string
@@ -150,7 +379,7 @@ export interface LLMSkillFileInputApi {
 }
 
 /**
- * Create serializer — accepts bundled files as write-only input on POST.
+ * Create serializer — accepts bundled files and owners as write-only input on POST.
  */
 export interface LLMSkillCreateApi {
     readonly id: string
@@ -164,6 +393,13 @@ export interface LLMSkillCreateApi {
      * @maxLength 4096
      */
     description: string
+    /** Total length of the full body in characters, independent of any body_offset/body_length paging. Compare against the length of the returned body to detect a truncated response. */
+    readonly body_total_length: number
+    /**
+     * When body_length paging stops before the end of the body, the character offset to request next (pass as body_offset). Null when the returned body reaches the end.
+     * @nullable
+     */
+    readonly body_next_offset: number | null
     /** The SKILL.md instruction content (markdown). */
     body: string
     /**
@@ -176,15 +412,27 @@ export interface LLMSkillCreateApi {
      * @maxLength 500
      */
     compatibility?: string
-    /** List of pre-approved tools the skill may use. */
+    /** List of pre-approved tools the skill may use. Tool names cannot contain whitespace. */
     allowed_tools?: string[]
     /** Arbitrary key-value metadata. */
     metadata?: LLMSkillCreateApiMetadata
+    /** Server-owned classification — set by the producing system (the Signals harness stamps "scout"), not writable via the API. Empty for an ordinary skill. Groups skills into their own surface (e.g. the Scouts tab) independently of the skill name. */
+    readonly category: string
+    /**
+     * User UUIDs to set as the skill's owners. Each must be a member of this project. Defaults to the creating user when omitted; pass an empty list to create with no owners.
+     * @maxItems 25
+     */
+    owners?: string[]
     /** Bundled files to include with the initial version (scripts, references, assets). */
     files?: LLMSkillFileInputApi[]
     /** Flat list of markdown headings parsed from the skill body. Useful as a lightweight table of contents. */
     readonly outline: readonly LLMSkillOutlineEntryApi[]
     readonly version: number
+    /**
+     * Optional note describing what changed in this version. Set when the version is published.
+     * @nullable
+     */
+    readonly version_description: string | null
     readonly created_by: UserBasicApi
     readonly created_at: string
     readonly updated_at: string
@@ -193,61 +441,86 @@ export interface LLMSkillCreateApi {
     readonly latest_version: number
     readonly version_count: number
     readonly first_version_created_at: string
+}
+
+export interface LLMSkillImportApi {
+    /** A spec-compliant skill .zip (a SKILL.md plus optional bundled files under scripts/, references/, assets/). */
+    file: string
 }
 
 /**
- * Arbitrary key-value metadata.
+ * * `absent` - absent
+ * * `exists` - exists
+ * * `created` - created
+ * * `rotated` - rotated
  */
-export type LLMSkillApiMetadata = { [key: string]: unknown }
+export type LLMSkillMarketplaceCommandStatusEnumApi =
+    (typeof LLMSkillMarketplaceCommandStatusEnumApi)[keyof typeof LLMSkillMarketplaceCommandStatusEnumApi]
 
-export interface LLMSkillFileManifestApi {
-    /** @maxLength 500 */
-    path: string
-    /** @maxLength 100 */
-    content_type?: string
+export const LLMSkillMarketplaceCommandStatusEnumApi = {
+    Absent: 'absent',
+    Exists: 'exists',
+    Created: 'created',
+    Rotated: 'rotated',
+} as const
+
+export interface LLMSkillMarketplaceCommandApi {
+    /** absent: no credential yet. exists: one already exists (no token returned). created: a new credential was just minted. rotated: the existing credential was rolled.
+     *
+     * * `absent` - absent
+     * * `exists` - exists
+     * * `created` - created
+     * * `rotated` - rotated */
+    status: LLMSkillMarketplaceCommandStatusEnumApi
+    /** Whether this user already has a marketplace credential for the team's skill store. */
+    connected: boolean
+    /** The plugin name the command installs (Claude Code and Codex). */
+    plugin_name: string
+    /** The marketplace name, used by the Codex install command. */
+    marketplace_name: string
+    /** Label of this user's marketplace credential (a scoped Personal API Key). */
+    label: string
+    /** The marketplace git repository URL, with no credential embedded. */
+    repo_url: string
+    /**
+     * Claude Code: ready-to-paste `/plugin marketplace add` command with the live token embedded. Returned only when a token was just issued (status created/rotated); null otherwise.
+     * @nullable
+     */
+    command: string | null
+    /** Claude Code install command with a YOUR_PHS_TOKEN placeholder instead of a live token; always present. */
+    command_template: string
+    /**
+     * OpenAI Codex: two-line `codex plugin marketplace add` + `codex plugin add` command with the live token embedded. Returned only when a token was just issued (status created/rotated); null otherwise.
+     * @nullable
+     */
+    codex_command: string | null
+    /** Codex install command with a YOUR_PHS_TOKEN placeholder instead of a live token; always present. */
+    codex_command_template: string
+    /**
+     * The raw read-only `phx_` credential. Returned once, only when minted or rotated; it cannot be retrieved again afterwards.
+     * @nullable
+     */
+    token: string | null
+    /**
+     * Masked preview of the existing credential (e.g. phx_...abcd).
+     * @nullable
+     */
+    mask_value: string | null
+    /**
+     * When the credential was created.
+     * @nullable
+     */
+    created_at: string | null
+    /**
+     * When the credential was last rotated.
+     * @nullable
+     */
+    last_rolled_at: string | null
 }
 
-export interface LLMSkillApi {
-    readonly id: string
-    /**
-     * Unique skill name. Lowercase letters, numbers, and hyphens only. Max 64 characters.
-     * @maxLength 64
-     */
-    name: string
-    /**
-     * What this skill does and when to use it. Max 4096 characters.
-     * @maxLength 4096
-     */
-    description: string
-    /** The SKILL.md instruction content (markdown). */
-    body: string
-    /**
-     * License name or reference to a bundled license file.
-     * @maxLength 255
-     */
-    license?: string
-    /**
-     * Environment requirements (intended product, system packages, network access, etc.).
-     * @maxLength 500
-     */
-    compatibility?: string
-    /** List of pre-approved tools the skill may use. */
-    allowed_tools?: string[]
-    /** Arbitrary key-value metadata. */
-    metadata?: LLMSkillApiMetadata
-    /** Bundled files manifest. Each entry is path + content_type only; fetch content via /llm_skills/name/{name}/files/{path}/. */
-    readonly files: readonly LLMSkillFileManifestApi[]
-    /** Flat list of markdown headings parsed from the skill body. Useful as a lightweight table of contents. */
-    readonly outline: readonly LLMSkillOutlineEntryApi[]
-    readonly version: number
-    readonly created_by: UserBasicApi
-    readonly created_at: string
-    readonly updated_at: string
-    readonly deleted: boolean
-    readonly is_latest: boolean
-    readonly latest_version: number
-    readonly version_count: number
-    readonly first_version_created_at: string
+export interface LLMSkillMarketplaceIssueApi {
+    /** Roll the existing marketplace credential to issue a fresh token, replacing the old one (this invalidates any setup using the previous token). Ignored when no credential exists yet — the first call always mints one. Only affects this user's own credential. */
+    rotate?: boolean
 }
 
 /**
@@ -292,7 +565,7 @@ export interface PatchedLLMSkillPublishApi {
      * @maxLength 500
      */
     compatibility?: string
-    /** List of pre-approved tools the skill may use. */
+    /** List of pre-approved tools the skill may use. Tool names cannot contain whitespace. */
     allowed_tools?: string[]
     /** Arbitrary key-value metadata. */
     metadata?: PatchedLLMSkillPublishApiMetadata
@@ -301,10 +574,20 @@ export interface PatchedLLMSkillPublishApi {
     /** Per-file find/replace updates. Each entry targets one existing file by path and applies sequential edits to its content. Non-targeted files carry forward unchanged. Cannot add, remove, or rename files — use 'files' for that. Mutually exclusive with files. */
     file_edits?: LLMSkillFileEditApi[]
     /**
-     * Latest version you are editing from. Used for optimistic concurrency checks.
+     * Replace the skill's owners with these user UUIDs (each a member of this project). Omit to leave owners unchanged; pass an empty list to clear them. Owners are keyed on the logical skill, so setting them is independent of the version being published — a body edit alone never changes ownership.
+     * @maxItems 25
+     */
+    owners?: string[]
+    /**
+     * Latest version you are editing from. Used for optimistic concurrency checks. Required when publishing content changes; optional for an owner-only update (when omitted, owners are replaced without a concurrency check).
      * @minimum 1
      */
     base_version?: number
+    /**
+     * Optional note describing what changed in this version. Shown in the version history.
+     * @maxLength 400
+     */
+    version_description?: string
 }
 
 export interface LLMSkillDuplicateApi {
@@ -364,6 +647,8 @@ export interface LLMSkillFileApi {
 export interface LLMSkillVersionSummaryApi {
     readonly id: string
     readonly version: number
+    /** @nullable */
+    readonly version_description: string | null
     readonly created_by: UserBasicApi
     readonly created_at: string
     readonly is_latest: boolean
@@ -375,7 +660,64 @@ export interface LLMSkillResolveResponseApi {
     has_more: boolean
 }
 
+export type CommunitySkillsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number
+    /**
+     * Sort key. Defaults to most-installed first.
+     *
+     * * `-created_at` - -created_at
+     * * `-install_count` - -install_count
+     * * `-name` - -name
+     * * `-published_at` - -published_at
+     * * `-vote_count` - -vote_count
+     * * `created_at` - created_at
+     * * `install_count` - install_count
+     * * `name` - name
+     * * `published_at` - published_at
+     * * `vote_count` - vote_count
+     * @minLength 1
+     */
+    order_by?: string
+    /**
+     * Substring filter on skill names and descriptions; also matches a tag exactly (case-insensitive).
+     */
+    search?: string
+    /**
+     * Return only skills carrying this exact tag (case-insensitive).
+     */
+    tag?: string
+    /**
+     * Filter to a single moderation tier.
+     *
+     * * `official` - Official
+     * * `verified` - Verified
+     * * `community` - Community
+     * @minLength 1
+     */
+    trust_tier?: CommunitySkillsListTrustTier
+}
+
+export type CommunitySkillsListTrustTier =
+    (typeof CommunitySkillsListTrustTier)[keyof typeof CommunitySkillsListTrustTier]
+
+export const CommunitySkillsListTrustTier = {
+    Official: 'official',
+    Verified: 'verified',
+    Community: 'community',
+} as const
+
 export type LlmSkillsListParams = {
+    /**
+     * Filter skills to this exact category. Pass "scout" for Signals scouts, or an empty string to return only uncategorized skills. Omit the parameter entirely to return skills of every category.
+     */
+    category?: string
     /**
      * Filter skills by the ID of the user who created them.
      */
@@ -395,6 +737,24 @@ export type LlmSkillsListParams = {
 }
 
 export type LlmSkillsNameRetrieveParams = {
+    /**
+     * Maximum number of characters of the body to return starting at body_offset. Omit to return the whole body from the offset onwards. When the slice stops before the end, body_next_offset is the offset to request next.
+     * @minimum 1
+     */
+    body_length?: number
+    /**
+     * Zero-based character offset to start the returned body from. Use with body_length to page through a large body that a client would otherwise truncate. Compare the returned body length against body_total_length to detect truncation, then re-fetch from body_next_offset. Defaults to 0 (start of body).
+     * @minimum 0
+     */
+    body_offset?: number
+    /**
+     * Specific skill version to fetch. If omitted, the latest version is returned.
+     * @minimum 1
+     */
+    version?: number
+}
+
+export type LlmSkillsNameExportRetrieveParams = {
     /**
      * Specific skill version to fetch. If omitted, the latest version is returned.
      * @minimum 1

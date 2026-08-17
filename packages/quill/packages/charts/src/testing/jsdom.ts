@@ -1,29 +1,32 @@
+import { buildDimensions } from '../core/canvas-size'
 import { DEFAULT_MARGINS } from '../core/hooks/useChartMargins'
 import type { ChartDimensions, ResolvedSeries, Series } from '../core/types'
-
-export const dimensions: ChartDimensions = {
-    width: 800,
-    height: 400,
-    plotLeft: DEFAULT_MARGINS.left,
-    plotTop: DEFAULT_MARGINS.top,
-    plotWidth: 800 - DEFAULT_MARGINS.left - DEFAULT_MARGINS.right,
-    plotHeight: 400 - DEFAULT_MARGINS.top - DEFAULT_MARGINS.bottom,
-}
 
 export const mockRect: DOMRect = {
     x: 0,
     y: 0,
-    width: dimensions.width,
-    height: dimensions.height,
+    width: 800,
+    height: 400,
     top: 0,
     left: 0,
-    bottom: dimensions.height,
-    right: dimensions.width,
+    bottom: 400,
+    right: 800,
     toJSON: () => ({}),
 }
 
+export const dimensions: ChartDimensions = buildDimensions(mockRect, DEFAULT_MARGINS)
+
 export function makeSeries(overrides: Partial<Series> & { key: string; data: number[] }): ResolvedSeries {
     return { label: overrides.key, color: '#000', ...overrides }
+}
+
+/** Pixel position (client coords) of a given label index, vertically centered in the plot. */
+export function clientForIndex(index: number, totalLabels: number): { clientX: number; clientY: number } {
+    const step = dimensions.plotWidth / Math.max(1, totalLabels - 1)
+    return {
+        clientX: dimensions.plotLeft + step * index,
+        clientY: dimensions.plotTop + dimensions.plotHeight / 2,
+    }
 }
 
 /** Mock ResizeObserver and getBoundingClientRect so hog-charts components
@@ -51,6 +54,13 @@ export function setupSyncRaf(): () => void {
         cb(0)
         return 0
     }) as typeof global.requestAnimationFrame
+
+    // Ensure `performance` is available in jsdom — the hover animation hook
+    // calls `performance.now()` and older jsdom versions don't expose it.
+    if (typeof global.performance === 'undefined') {
+        global.performance = { now: () => 0 } as unknown as Performance
+    }
+
     return () => {
         global.requestAnimationFrame = original
     }

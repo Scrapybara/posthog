@@ -11,10 +11,11 @@ import { RestrictionScope, useRestrictedArea } from 'lib/components/RestrictedAr
 import { LemonInputSelect } from 'lib/lemon-ui/LemonInputSelect/LemonInputSelect'
 import { LemonLabel } from 'lib/lemon-ui/LemonLabel/LemonLabel'
 import { Tooltip } from 'lib/lemon-ui/Tooltip'
+import { getAccessControlDisabledReason } from 'lib/utils/accessControlUtils'
 
-import { ExporterFormat } from '~/types'
+import { AccessControlLevel, AccessControlResourceType, ExporterFormat } from '~/types'
 
-import { buildBillingCsv } from './billing-utils'
+import { buildBillingCsv, getUsageTypeOptions } from './billing-utils'
 import { BillingDataTable } from './BillingDataTable'
 import { BillingEarlyAccessBanner } from './BillingEarlyAccessBanner'
 import { BillingEmptyState } from './BillingEmptyState'
@@ -22,7 +23,6 @@ import { BillingLineGraph } from './BillingLineGraph'
 import { billingLogic } from './billingLogic'
 import { BillingNoAccess } from './BillingNoAccess'
 import { billingUsageLogic } from './billingUsageLogic'
-import { USAGE_TYPES } from './constants'
 
 export function BillingUsage(): JSX.Element {
     const { minimumBillingAccessLevel } = useValues(billingLogic)
@@ -63,6 +63,12 @@ export function BillingUsage(): JSX.Element {
         return <BillingNoAccess title="Usage" reason={restrictionReason} />
     }
 
+    // Creating an export requires editor access to the export resource.
+    const exportAccessControlDisabledReason = getAccessControlDisabledReason(
+        AccessControlResourceType.Export,
+        AccessControlLevel.Editor
+    )
+
     const onExportCsv = (): void => {
         const csv = buildBillingCsv({
             series,
@@ -95,7 +101,7 @@ export function BillingUsage(): JSX.Element {
                             value={filters.usage_types || []}
                             onChange={(value) => setFilters({ usage_types: value })}
                             placeholder="All products"
-                            options={USAGE_TYPES.map((opt) => ({ key: opt.value, label: opt.label }))}
+                            options={getUsageTypeOptions()}
                             allowCustomValues={false}
                         />
                     </div>
@@ -188,7 +194,12 @@ export function BillingUsage(): JSX.Element {
                                 Clear filters
                             </LemonButton>
                             {showSeries && (
-                                <LemonButton type="secondary" size="medium" onClick={onExportCsv}>
+                                <LemonButton
+                                    type="secondary"
+                                    size="medium"
+                                    onClick={onExportCsv}
+                                    disabledReason={exportAccessControlDisabledReason ?? undefined}
+                                >
                                     Export CSV
                                 </LemonButton>
                             )}

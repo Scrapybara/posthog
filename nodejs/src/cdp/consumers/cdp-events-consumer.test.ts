@@ -1,7 +1,9 @@
 import { createMockJobQueue } from '../../../tests/helpers/mocks/job-queue.mock'
 import { mockProducerObserver } from '../../../tests/helpers/mocks/producer.mock'
 
-import { HogFlow } from '~/schema/hogflow'
+import { HogFlow } from '~/cdp/schema/hogflow'
+import { GroupReadRepository } from '~/common/groups/repositories/group-repository.interface'
+import { closeHub, createHub } from '~/common/utils/db/hub'
 
 import { createCdpConsumerDeps } from '../../../tests/helpers/cdp'
 import {
@@ -13,8 +15,6 @@ import {
     updateOrganizationAvailableFeatures,
 } from '../../../tests/helpers/sql'
 import { Hub, Team } from '../../types'
-import { closeHub, createHub } from '../../utils/db/hub'
-import { GroupReadRepository } from '../../worker/ingestion/groups/repositories/group-repository.interface'
 import { FixtureHogFlowBuilder } from '../_tests/builders/hogflow.builder'
 import { HOG_EXAMPLES, HOG_FILTERS_EXAMPLES, HOG_INPUTS_EXAMPLES } from '../_tests/examples'
 import {
@@ -1157,6 +1157,40 @@ describe('hog flow processing', () => {
 
             expect(invocations).toHaveLength(1)
             expect(globals.groups).toEqual({})
+        })
+    })
+
+    describe('push open tracking', () => {
+        it('emits a push_opened app-metric for a $push_notification_opened event, attributed to its workflow', async () => {
+            const flow = await _insertHogFlow(hub.postgres, new FixtureHogFlowBuilder().withTeamId(team.id).build())
+
+            const globals = createHogExecutionGlobals({
+                project: { id: team.id } as any,
+                event: {
+                    uuid: 'push-open-uuid',
+                    event: '$push_notification_opened',
+                    properties: {
+                        $notification_workflow_id: flow.id,
+                        $notification_invocation_id: 'inv-open-1',
+                        $notification_action_id: 'push_step_1',
+                    },
+                } as any,
+            })
+
+            const { backgroundTask } = await processor.processBatch([globals])
+            await backgroundTask
+
+            const pushOpened = mockProducerObserver
+                .getProducedKafkaMessagesForTopic('clickhouse_app_metrics2_test')
+                .filter((m: any) => m.value.metric_name === 'push_opened')
+            expect(pushOpened).toHaveLength(1)
+            expect(pushOpened[0].value).toMatchObject({
+                app_source: 'hog_flow',
+                app_source_id: flow.id,
+                instance_id: 'push_step_1',
+                metric_name: 'push_opened',
+                count: 1,
+            })
         })
     })
 })

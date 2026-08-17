@@ -4,9 +4,9 @@ import { instanceSettingActivityDescriber } from 'lib/components/ActivityLog/act
 import { tagActivityDescriber } from 'lib/components/ActivityLog/activityDescriptions/tagActivityDescriber'
 import { ActivityLogItem, Describer, defaultDescriber } from 'lib/components/ActivityLog/humanizeActivity'
 import { actionActivityDescriber } from 'scenes/actions/actionActivityDescriber'
-import { alertConfigurationActivityDescriber } from 'scenes/alerts/activityDescriptions'
 import { annotationActivityDescriber } from 'scenes/annotations/activityDescriptions'
 import { userActivityDescriber } from 'scenes/authentication/shared/activityDescriptions'
+import { billingActivityDescriber } from 'scenes/billing/activityDescriptions'
 import { cohortActivityDescriber } from 'scenes/cohorts/activityDescriptions'
 import { dashboardActivityDescriber } from 'scenes/dashboard/dashboardActivityDescriber'
 import { dataManagementActivityDescriber } from 'scenes/data-management/dataManagementDescribers'
@@ -14,6 +14,7 @@ import { batchExportActivityDescriber } from 'scenes/data-pipelines/batch-export
 import { batchImportActivityDescriber } from 'scenes/data-pipelines/batch-imports/activityDescriptions'
 import { dataWarehouseSavedQueryActivityDescriber } from 'scenes/data-warehouse/saved_queries/activityDescriptions'
 import { experimentActivityDescriber } from 'scenes/experiments/experimentActivityDescriber'
+import { exportedAssetActivityDescriber } from 'scenes/exports/activityDescriptions'
 import { flagActivityDescriber } from 'scenes/feature-flags/activityDescriptions'
 import { groupActivityDescriber } from 'scenes/groups/activityDescriptions'
 import { hogFunctionActivityDescriber } from 'scenes/hog-functions/misc/activityDescriptions'
@@ -37,6 +38,10 @@ import { teamActivityDescriber } from 'scenes/team-activity/teamActivityDescribe
 
 import { ActivityScope } from '~/types'
 
+import { promptActivityDescriber } from 'products/ai_observability/frontend/prompts/promptActivityDescriber'
+import { promptLabelActivityDescriber } from 'products/ai_observability/frontend/prompts/promptLabelActivityDescriber'
+import { alertConfigurationActivityDescriber } from 'products/alerts/frontend/components/activityDescriptions'
+import { canvasActivityDescriber } from 'products/canvas/frontend/activityDescriber'
 import { ticketActivityDescriber } from 'products/conversations/frontend/activityDescriber'
 import { externalDataSourceActivityDescriber } from 'products/data_warehouse/frontend/shared/components/activityDescriptions'
 import { endpointActivityDescriber } from 'products/endpoints/frontend/activityDescriber'
@@ -55,6 +60,12 @@ export const describerFor = (logItem?: ActivityLogItem): Describer | undefined =
             return batchExportActivityDescriber
         case ActivityScope.BATCH_IMPORT:
             return batchImportActivityDescriber
+        case ActivityScope.BILLING:
+            return billingActivityDescriber
+        case ActivityScope.CANVAS:
+            return canvasActivityDescriber
+        case ActivityScope.EXPORTED_ASSET:
+            return exportedAssetActivityDescriber
         case ActivityScope.DASHBOARD:
             return dashboardActivityDescriber
         case ActivityScope.FEATURE_FLAG:
@@ -123,6 +134,10 @@ export const describerFor = (logItem?: ActivityLogItem): Describer | undefined =
             return ticketActivityDescriber
         case ActivityScope.SIGNAL_SCOUT_CONFIG:
             return signalScoutConfigActivityDescriber
+        case ActivityScope.LLM_PROMPT:
+            return promptActivityDescriber
+        case ActivityScope.LLM_PROMPT_LABEL:
+            return promptLabelActivityDescriber
         default:
             return defaultDescriber
     }

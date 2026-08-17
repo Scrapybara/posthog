@@ -46,14 +46,6 @@ class TeamExperimentsConfig(models.Model):
         help_text="Default value for 'only count matured users' on new experiments in this environment.",
     )
 
-    funnel_steps_data_disabled = models.BooleanField(
-        default=False,
-        help_text=(
-            "Default for disabling per-step session/event sample data on funnel experiment metrics. "
-            "Overridden by the experiment-level `funnel_steps_data_disabled` parameter when set."
-        ),
-    )
-
     default_cuped_enabled = models.BooleanField(
         default=False,
         help_text=(
@@ -101,6 +93,17 @@ class TeamExperimentsConfig(models.Model):
             "Default tuning parameter for sequential testing. Roughly the sample size at which the "
             "confidence sequence is tightest. Overridden by the experiment-level "
             "`stats_config.frequentist.sequential_tuning_parameter` setting when set."
+        ),
+    )
+
+    flag_cleanup_repository = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text=(
+            "Default GitHub repository (organization/repository) for experiment flag-cleanup PRs in "
+            "this environment. Used when an experiment has no repository of its own. It must belong "
+            "to the team's GitHub installation at cleanup time or it is ignored."
         ),
     )
 

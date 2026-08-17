@@ -2,7 +2,7 @@ import './TaxonomicPropertyFilter.scss'
 
 import clsx from 'clsx'
 import { useActions, useValues } from 'kea'
-import { useMemo } from 'react'
+import { useId } from 'react'
 
 import { IconPlusSmall } from '@posthog/icons'
 import { LemonButton, LemonDropdown, Link } from '@posthog/lemon-ui'
@@ -30,7 +30,8 @@ import { TaxonomicMenuToggle } from 'lib/components/TaxonomicPopover/TaxonomicMe
 import { TaxonomicPopoverMenu } from 'lib/components/TaxonomicPopover/TaxonomicPopoverMenu'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
-import { isOperatorMulti, isOperatorRegex, toParams } from 'lib/utils'
+import { isOperatorMulti, isOperatorRegex } from 'lib/utils/operators'
+import { toParams } from 'lib/utils/url'
 import { teamLogic } from 'scenes/teamLogic'
 
 import { cohortsModel } from '~/models/cohortsModel'
@@ -48,8 +49,10 @@ import { joinsLogic } from 'products/data_warehouse/frontend/shared/logics/joins
 import { OperandTag } from './OperandTag'
 import { taxonomicPropertyFilterLogic } from './taxonomicPropertyFilterLogic'
 
-let uniqueMemoizedIndex = 0
 export const DEFAULT_TAXONOMIC_GROUP_TYPES = [
+    // Only materializes when the picker is scoped to $mcp_* events (see taxonomicGroups),
+    // leading with the known MCP schema there; a no-op everywhere else.
+    TaxonomicFilterGroupType.MCPProperties,
     TaxonomicFilterGroupType.EventProperties,
     TaxonomicFilterGroupType.PersonProperties,
     TaxonomicFilterGroupType.EventFeatureFlags,
@@ -88,8 +91,13 @@ export function TaxonomicPropertyFilter({
     endpointFilters,
     hogQLGlobals,
     triggerVariant = 'button',
+    staticValueOptions,
+    propertyDefinitionsOverride,
+    propertyKeyEditable = true,
+    singleLine,
 }: PropertyFilterInternalProps): JSX.Element {
-    const pageKey = useMemo(() => pageKeyInput || `filter-${uniqueMemoizedIndex++}`, [pageKeyInput])
+    const generatedKey = useId()
+    const pageKey = pageKeyInput || `filter-${generatedKey}`
     const baseGroupTypes = taxonomicGroupTypes || DEFAULT_TAXONOMIC_GROUP_TYPES
     const groupTypes = [TaxonomicFilterGroupType.SuggestedFilters, ...baseGroupTypes]
     const taxonomicOnChange: (group: TaxonomicFilterGroup, value: TaxonomicFilterValue, item: any) => void = (
@@ -153,9 +161,10 @@ export function TaxonomicPropertyFilter({
 
     // For data warehouse person properties, use columnsJoinedToPersons, otherwise use property definitions
     const propertyDefinitions =
-        filter?.type === PropertyFilterType.DataWarehousePersonProperty
+        propertyDefinitionsOverride ??
+        (filter?.type === PropertyFilterType.DataWarehousePersonProperty
             ? columnsJoinedToPersons
-            : propertyDefinitionsByType(basePropertyType, groupTypeIndex)
+            : propertyDefinitionsByType(basePropertyType, groupTypeIndex))
 
     // Look up cohort name, if not already provided in filter
     const cohortValue =
@@ -212,6 +221,7 @@ export function TaxonomicPropertyFilter({
                       })}`
                     : filter?.key && activeTaxonomicGroup?.valuesEndpoint?.(filter.key)
             }
+            staticValues={typeof filter?.key === 'string' ? (staticValueOptions?.(filter.key) ?? null) : null}
             eventNames={eventNames}
             addRelativeDateTimeOptions={allowRelativeDateOptions}
             onChange={(newOperator, newValue) => {
@@ -249,7 +259,9 @@ export function TaxonomicPropertyFilter({
             ? cohortName || `Cohort #${filter?.value}`
             : filter?.type === PropertyFilterType.EventMetadata && filter?.key?.startsWith('$group_')
               ? filter.label || `Group ${filter?.value}`
-              : filter?.type === PropertyFilterType.Flag && filter?.label
+              : (filter?.type === PropertyFilterType.Flag ||
+                      filter?.type === PropertyFilterType.AccountCustomProperty) &&
+                  filter?.label
                 ? filter.label
                 : filter?.key && (
                       <PropertyKeyInfo
@@ -387,9 +399,13 @@ export function TaxonomicPropertyFilter({
                             )}
                         </div>
                     )}
-                    <div className="TaxonomicPropertyFilter__row-items">
+                    <div
+                        className={clsx('TaxonomicPropertyFilter__row-items', {
+                            'TaxonomicPropertyFilter__row-items--single-line': singleLine,
+                        })}
+                    >
                         {showOperatorValueSelect && placeOperatorValueSelectOnLeft && operatorValueSelect}
-                        {editable ? editablePicker : filterContent}
+                        {editable && propertyKeyEditable ? editablePicker : filterContent}
                         {showOperatorValueSelect && !placeOperatorValueSelectOnLeft && operatorValueSelect}
                     </div>
                 </div>

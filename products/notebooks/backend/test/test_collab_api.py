@@ -5,8 +5,11 @@ from posthog.test.base import APIBaseTest
 from unittest.mock import patch
 
 from django.conf import settings
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 import fakeredis
+from parameterized import parameterized
 from rest_framework import status
 
 from posthog import redis as redis_module
@@ -183,7 +186,7 @@ class TestNotebookCollabSaveAPI(APIBaseTest):
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    @patch("products.notebooks.backend.api.notebook.submit_steps")
+    @patch("products.notebooks.backend.presentation.views.notebook.submit_steps")
     def test_collab_save_returns_410_when_steps_expired(self, mock_submit):
         notebook = self._create_notebook(SAMPLE_DOC)
 
@@ -236,7 +239,7 @@ class TestNotebookCollabSaveAPI(APIBaseTest):
     def test_collab_save_rejected_stale_logs_attempted_content(self):
         notebook = self._create_notebook(SAMPLE_DOC)
 
-        with patch("products.notebooks.backend.api.notebook.submit_steps") as mock_submit:
+        with patch("products.notebooks.backend.presentation.views.notebook.submit_steps") as mock_submit:
             mock_submit.return_value = SubmitResult(status="stale", version=5, steps_since=None)
             self._collab_save(
                 notebook,
@@ -341,7 +344,7 @@ class TestNotebookCollabStreamAPI(APIBaseTest):
 
         assert response.status_code == status.HTTP_200_OK
         assert response["Content-Type"] == "text/event-stream"
-        assert response["Cache-Control"] == "no-cache"
+        assert response["Cache-Control"] == "no-cache, no-transform"
         assert response["X-Accel-Buffering"] == "no"
 
         body = self._consume_stream(response)
@@ -395,7 +398,10 @@ class TestNotebookCollabStreamAPI(APIBaseTest):
         assert "event: step" not in body
         assert ": keepalive" in body
 
-    @patch("products.notebooks.backend.api.notebook.transaction.on_commit", side_effect=lambda callback: callback())
+    @patch(
+        "products.notebooks.backend.presentation.views.notebook.transaction.on_commit",
+        side_effect=lambda callback: callback(),
+    )
     def test_stream_delivers_update_event_after_full_doc_patch(self, _mock_on_commit):
         notebook = self._create_notebook()
         response = self.client.patch(
@@ -562,6 +568,34 @@ class TestNotebookCollabStreamAPI(APIBaseTest):
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    @parameterized.expand([("presence", "post"), ("stream", "get"), ("activity", "get")])
+    def test_identity_only_endpoints_do_not_select_notebook_content(self, action: str, method: str):
+        notebook = self._create_notebook()
+        urls = {
+            "presence": self._presence_url(notebook["short_id"]),
+            "stream": self._stream_url(notebook["short_id"]),
+            "activity": f"/api/projects/{self.team.id}/notebooks/{notebook['short_id']}/activity/",
+        }
+
+        with CaptureQueriesContext(connection) as captured:
+            if method == "post":
+                response = self.client.post(
+                    urls[action],
+                    data={"client_id": "caret-client", "version": notebook["version"], "cursor": {"head": 1}},
+                    format="json",
+                )
+            else:
+                response = self.client.get(urls[action])
+            assert response.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT)
+            if response.streaming:
+                self._consume_stream(response)
+
+        notebook_queries = [q["sql"] for q in captured.captured_queries if "posthog_notebook" in q["sql"]]
+        assert notebook_queries
+        for sql in notebook_queries:
+            assert '"posthog_notebook"."content"' not in sql
+            assert '"posthog_notebook"."text_content"' not in sql
+
 
 def _markdown_doc(markdown: str) -> dict:
     return {
@@ -653,7 +687,10 @@ class TestNotebookMarkdownSaveAPI(APIBaseTest):
         assert nb.version == version + 1
         assert nb.content == _markdown_doc("base text plus A")
 
-    @patch("products.notebooks.backend.api.notebook.transaction.on_commit", side_effect=lambda callback: callback())
+    @patch(
+        "products.notebooks.backend.presentation.views.notebook.transaction.on_commit",
+        side_effect=lambda callback: callback(),
+    )
     def test_markdown_save_conflict_replays_legacy_patch_diff(self, _mock_on_commit):
         from products.notebooks.backend.markdown_collab import apply_utf16_text_changes
 

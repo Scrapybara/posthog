@@ -34,7 +34,7 @@ from posthog.schema import (
 
 from posthog import event_usage
 from posthog.cloud_utils import is_cloud
-from posthog.event_usage import report_user_action
+from posthog.event_usage import EventSource, report_user_action
 from posthog.models import Team, User
 from posthog.ph_client import get_client
 from posthog.sync import database_sync_to_async
@@ -45,7 +45,7 @@ from products.posthog_ai.backend.models.assistant import Conversation
 from ee.hogai.core.ai_event_truncation import ai_event_truncator
 from ee.hogai.core.base import BaseAssistantGraph
 from ee.hogai.core.stream_processor import AssistantStreamProcessorProtocol
-from ee.hogai.tool import ApprovalRequest
+from ee.hogai.tool import ApprovalRequest, ClientToolCallRequest
 from ee.hogai.utils.exceptions import (
     AGENT_RUN_UNHANDLED_ERROR_COUNTER,
     HTTPX_TRANSPORT_EXCEPTIONS,
@@ -121,6 +121,7 @@ class BaseAgentRunner(ABC):
     _slack_thread_context: Optional["SlackThreadContext"]
     _is_agent_billable: bool
     _resume_payload: Optional[dict[str, Any]]
+    _event_source: EventSource
 
     def __init__(
         self,
@@ -146,10 +147,12 @@ class BaseAgentRunner(ABC):
         is_agent_billable: bool = True,
         is_impersonated: bool = False,
         resume_payload: Optional[dict[str, Any]] = None,
+        event_source: EventSource = EventSource.POSTHOG_AI,
     ):
         self._team = team
         self._contextual_tools = contextual_tools or {}
         self._user = user
+        self._event_source = event_source
         self._session_id = session_id
         self._conversation = conversation
         self._latest_message = new_message.model_copy(deep=True, update={"id": str(uuid4())}) if new_message else None
@@ -200,17 +203,22 @@ class BaseAgentRunner(ABC):
 
             # flush_at=1 flushes each event immediately so traces deliver before short runs end;
             # before_send truncates oversized AI blobs so they clear the SDK's per-event size drop.
-            client_kwargs = {"flush_at": 1, "before_send": ai_event_truncator}
+            def make_client(region: str):
+                return get_client(
+                    region,
+                    flush_at=1,
+                    before_send=ai_event_truncator,
+                )
 
             # Local deployment or hobby
             if not is_cloud() and (local_client := posthoganalytics.default_client):
                 self._callback_handlers.append(init_handler(local_client))
             elif region := get_instance_region():
                 # Add regional client first
-                self._callback_handlers.append(init_handler(get_client(region, **client_kwargs)))
+                self._callback_handlers.append(init_handler(make_client(region)))
                 # If we're in EU, add the US client as well, so we can see US and EU traces
                 if region == "EU":
-                    self._callback_handlers.append(init_handler(get_client("US", **client_kwargs)))
+                    self._callback_handlers.append(init_handler(make_client("US")))
 
         self._trace_id = trace_id
         self._parent_span_id = parent_span_id
@@ -466,6 +474,10 @@ class BaseAgentRunner(ABC):
                             # No need to yield a message here - the form will be displayed to the user through the tool call args
                             # and the answers comes through the tool call result ui_payload
                             should_not_update_state = True
+                        elif isinstance(interrupt.value, ClientToolCallRequest):
+                            # Nothing to stream (the tool call args are already in the thread); skipping
+                            # the state update lets an abandoned round trip start fresh, like approvals
+                            should_not_update_state = True
                         elif isinstance(interrupt.value, ApprovalRequest):
                             # Check if this is an ApprovalRequest from interrupt() in a tool
                             should_not_update_state = True
@@ -515,6 +527,7 @@ class BaseAgentRunner(ABC):
                 "is_subagent": not self._use_checkpointer,
                 "slack_thread_context": self._slack_thread_context,
                 "is_agent_billable": self._is_agent_billable,
+                "event_source": self._event_source,
                 # Metadata to be sent to PostHog SDK (error tracking, etc).
                 "sdk_metadata": {
                     "tag": "max_ai",

@@ -13,12 +13,14 @@ Prepare test durations for pytest-split sharding.
 Merges timing artifacts from CI shards and removes migration-tax
 contamination using JUnit call times as a setup-free contamination signal.
 
-Under --reuse-db the per-shard Django DB build (~7 min on master) is
-absorbed into whichever test first touches the DB, inflating its recorded
-duration and skewing pytest-split. This script merges the per-shard
-artifacts, floors any test recorded far above its JUnit call time (or
-sitting at a flat-default placeholder) back to that call time, and outputs
-clean durations for balanced distribution.
+Jobs without a restored schema cache build the test DB in the "Migrate
+test_posthog from scratch" workflow step, but when that step fails,
+--reuse-db falls back to building it in-process and the walk is absorbed
+into whichever test first touches the DB, inflating its recorded duration
+and skewing pytest-split.
+This script merges the per-shard artifacts, floors any test recorded far
+above its JUnit call time (or sitting at a flat-default placeholder) back
+to that call time, and outputs clean durations for balanced distribution.
 """
 
 import re
@@ -27,6 +29,7 @@ import glob
 import json
 import logging
 import argparse
+import statistics
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
@@ -42,10 +45,11 @@ MIN_DURATION = 0.01
 # are candidates for migration carriers (real tests rarely exceed this)
 CARRIER_THRESHOLD_SECONDS = 200.0
 # A test recorded this far above its JUnit call time absorbed per-shard DB
-# setup. Under --reuse-db the migration walk lands on whichever test first
-# touches the DB (not reliably the first test in the file), so detect it by
-# the call-time gap rather than by position. Migration/DB setup is hundreds
-# of seconds; legit per-test setup is tens at most, so this separates them.
+# setup. When the out-of-process migrate step fell back to in-pytest, the
+# walk lands on whichever test first touches the DB (not reliably the first
+# test in the file), so detect it by the call-time gap rather than by
+# position. Migration/DB setup is hundreds of seconds; legit per-test setup
+# is tens at most, so this separates them.
 MIGRATION_TAX_THRESHOLD_SECONDS = 120.0
 # pytest-split writes these flat values for tests it has no timing for. They
 # are placeholders, not measurements — when JUnit has a real call time for
@@ -199,6 +203,28 @@ def _pick_outlier(values: list[float]) -> float:
     return outliers[0] if outliers else most_common_val
 
 
+def average_durations(sources: list[dict[str, float]], strategy: str = "mean") -> dict[str, float]:
+    """Combine N already-merged, de-taxed per-RUN duration vectors into one.
+
+    Different from outlier_merge_durations: that picks the fresh value among a
+    single run's stale shard passthroughs. This one assumes every input is a
+    clean per-run vector and averages a test across runs. A single run's per-test
+    times are noisy and the file-granularity plan chases that noise; averaging the
+    last few runs damps it (measured ~-8pp makespan/mean on real PRs going 1 -> 5
+    runs, with the floor itself near 0%).
+
+    Membership is anchored to the FIRST source -- pass the LATEST run first -- so a
+    test deleted since an older run never lingers in the plan, while each surviving
+    test is averaged only over the runs that actually measured it. ``mean`` is the
+    validated default; ``median`` is offered for extra robustness to a stray run.
+    """
+    if not sources:
+        return {}
+    aggregate = statistics.median if strategy == "median" else statistics.fmean
+    anchor = sources[0]
+    return {test: aggregate([s[test] for s in sources if test in s]) for test in anchor}
+
+
 class TimingMerger:
     """Merges per-shard timing artifacts using outlier detection.
 
@@ -216,10 +242,13 @@ class TimingMerger:
 class MigrationTaxCorrector:
     """Removes migration-tax contamination from merged durations.
 
-    Under --reuse-db the per-shard Django DB build (~7 min on master) lands
-    on whichever test first touches the DB, inflating that test's recorded
-    setup+call duration and skewing pytest-split's shard balancing. The
-    outlier-merge then prefers that inflated value over the test's real one.
+    When a job's out-of-process migrate step fails, --reuse-db builds the
+    DB in-process and the walk lands on whichever test first touches the
+    DB, inflating that test's recorded setup+call duration and skewing
+    pytest-split's shard balancing. The outlier-merge then prefers that
+    inflated value over the test's real one. Normally the walk happens in
+    its own workflow step (or a cached schema is restored), so no test
+    carries tax and both modes below are cheap no-ops.
 
     Two modes:
     - JUnit-based (preferred): JUnit call time is the call phase only, so a
@@ -329,7 +358,11 @@ class MigrationTaxCorrector:
 
         Uses expected_shard_count as the number of carriers to look for.
         Only selects tests above CARRIER_THRESHOLD_SECONDS to avoid
-        false positives from genuinely slow tests.
+        false positives from genuinely slow tests. That guard is now the
+        whole story on tax-free runs (the normal path migrates
+        out-of-process): a genuine test above the threshold would be
+        misread as a carrier and floored, so if one ever appears, raise
+        the threshold or drop this mode rather than trusting it.
         """
         candidates = sorted(self.durations.items(), key=lambda x: -x[1])
 
@@ -488,6 +521,38 @@ def run_merge_files(input_files: list[Path], output_file: Path) -> None:
     logger.info("Merged %d tests across %d segment(s) into %s", len(merged), len(sources), output_file)
 
 
+def run_average_files(input_files: list[Path], output_file: Path, strategy: str = "mean") -> None:
+    """Average mode: combine already-merged per-RUN files into one output.
+
+    Pass the LATEST run's file first -- membership anchors to it. Fails loudly if
+    no inputs survive, same guard as run_merge_files: an empty per-segment file
+    would silently un-balance every PR's file-mode shards.
+    """
+    sources: list[dict[str, float]] = []
+    for path in input_files:
+        if not path.exists():
+            logger.info("  skipping missing input %s", path)
+            continue
+        with open(path) as f:
+            sources.append(json.load(f))
+    if not sources:
+        logger.error("No input files found to average — refusing to write empty %s", output_file)
+        sys.exit(1)
+
+    averaged = average_durations(sources, strategy=strategy)
+    # Membership anchors to the first (newest) source, so an empty newest file would
+    # empty the whole result even when older runs carry data. Refuse to write it —
+    # the workflow's `|| echo warning` then leaves file-mode to scope the union.
+    if not averaged:
+        logger.error("Averaged durations are empty (newest run scoped to nothing?) — refusing to write %s", output_file)
+        sys.exit(1)
+
+    with open(output_file, "w") as f:
+        json.dump(averaged, f, indent=4, sort_keys=True)
+        f.write("\n")
+    logger.info("Averaged %d tests across %d run(s) [%s] into %s", len(averaged), len(sources), strategy, output_file)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -518,12 +583,40 @@ def main():
         help="Filter to only tests that exist in the codebase (runs pytest --collect-only)",
     )
     parser.add_argument(
+        "--scope-to-junit",
+        action="store_true",
+        help=(
+            "Filter the output to exactly the nodeids the JUnit artifacts saw run "
+            "(requires --junit-dir). The shared .test_durations is a union across all "
+            "CI jobs, so a segment's artifacts still carry stale cross-segment nodeids "
+            "(other segments' param variants, product-routed files). This scopes a "
+            "per-segment file to what THAT segment actually ran -- the run-set is already "
+            "in the JUnit, so no extra collection is needed. Used to emit "
+            ".test_durations.<segment> for --split-granularity=file."
+        ),
+    )
+    parser.add_argument(
         "--merge-files",
         type=Path,
         nargs="+",
         default=None,
         help="Merge mode: outlier-merge the given duration files and write to output_file. "
         "Ignores artifacts_dir and the other artifact-processing flags.",
+    )
+    parser.add_argument(
+        "--average-files",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Average mode: combine already-merged per-RUN duration files (LATEST first) into "
+        "output_file by per-test mean/median. Builds a multi-run .test_durations.<segment> that "
+        "is robust to one run's timing noise. Ignores artifacts_dir.",
+    )
+    parser.add_argument(
+        "--average-strategy",
+        choices=["mean", "median"],
+        default="mean",
+        help="Aggregation for --average-files (default: mean).",
     )
 
     args = parser.parse_args()
@@ -532,8 +625,12 @@ def main():
         run_merge_files(args.merge_files, args.output_file)
         return
 
+    if args.average_files:
+        run_average_files(args.average_files, args.output_file, args.average_strategy)
+        return
+
     if args.artifacts_dir is None:
-        parser.error("artifacts_dir is required unless --merge-files is given")
+        parser.error("artifacts_dir is required unless --merge-files or --average-files is given")
 
     # Load per-shard timing data
     logger.info("Loading timing artifacts from %s...", args.artifacts_dir)
@@ -576,6 +673,26 @@ def main():
                 result.migration_tax_seconds,
                 result.migration_tax_seconds / 60,
             )
+
+    # Scope to exactly what this segment's JUnit saw run. The shared timing
+    # artifacts each carry the full union (every shard restores the merged file
+    # then refreshes its own slice), so a per-segment merge still contains other
+    # segments' nodeids -- their param variants and product-routed files -- which
+    # would poison a file-granularity plan (it budgets weight for tests that never
+    # collect in this segment). The JUnit call_times map is the segment's real
+    # run-set at nodeid granularity, already loaded above, so this costs nothing.
+    if args.scope_to_junit:
+        if not junit_shards:
+            logger.error("--scope-to-junit requires --junit-dir with matching artifacts")
+            sys.exit(1)
+        ran = set().union(*(s.call_times.keys() for s in junit_shards))
+        before_count = len(durations)
+        durations = {k: v for k, v in durations.items() if k in ran}
+        logger.info(
+            "  Scoped to %d nodeids the JUnit saw run (dropped %d cross-segment/stale)",
+            len(durations),
+            before_count - len(durations),
+        )
 
     # Filter to only existing tests if requested
     if args.filter_existing:

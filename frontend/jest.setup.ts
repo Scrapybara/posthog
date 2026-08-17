@@ -1,5 +1,4 @@
 import 'jest-canvas-mock'
-import 'whatwg-fetch'
 
 import { configure } from '@testing-library/react'
 import { TextDecoder, TextEncoder } from 'util'
@@ -122,6 +121,9 @@ mockResizeObserver.mockReturnValue({
 })
 ;(globalThis as any).ResizeObserver = mockResizeObserver
 
+// jsdom has no layout, so hit-testing at a point can't return anything
+document.elementsFromPoint = document.elementsFromPoint ?? ((): Element[] => [])
+
 // Tell React Testing Library to use "data-attr" as the test ID attribute
 configure({ testIdAttribute: 'data-attr' })
 
@@ -176,6 +178,7 @@ jest.mock('posthog-js', () => {
         isFeatureEnabled: jest.fn(),
         getEarlyAccessFeatures: jest.fn(),
         getSurveys: jest.fn(),
+        displaySurvey: jest.fn(),
         onFeatureFlags: jest.fn(() => () => {}),
         debug: jest.fn(),
         get_session_id: jest.fn(),
@@ -187,6 +190,7 @@ jest.mock('posthog-js', () => {
         updateEarlyAccessFeatureEnrollment: jest.fn(),
         people: { set: jest.fn() },
         featureFlags: { override: jest.fn() },
+        metrics: { count: jest.fn(), gauge: jest.fn(), histogram: jest.fn() },
     }
     mock.init = jest.fn(() => mock)
 

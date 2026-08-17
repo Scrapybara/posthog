@@ -1,11 +1,20 @@
+import { fireEvent } from '@testing-library/react'
+
 import { useChartLayout } from '../../core/chart-context'
 import type { ChartTheme, Series } from '../../core/types'
-import { renderHogChart } from '../../testing'
+import { getHogChart, renderHogChart } from '../../testing'
 import { TimeSeriesBarChart } from './TimeSeriesBarChart'
 
-const THEME: ChartTheme = { colors: ['#111', '#222', '#333'], backgroundColor: '#ffffff' }
+const THEME: ChartTheme = {
+    colors: ['#111', '#222', '#333'],
+    backgroundColor: '#ffffff',
+}
 const LABELS = ['Mon', 'Tue', 'Wed']
 const SERIES: Series[] = [{ key: 'a', label: 'A', data: [1, 2, 3] }]
+const MULTI_SERIES: Series[] = [
+    { key: 'a', label: 'A', data: [1, 2, 3] },
+    { key: 'b', label: 'B', data: [3, 2, 1] },
+]
 
 describe('TimeSeriesBarChart', () => {
     describe('config.xAxis', () => {
@@ -27,6 +36,21 @@ describe('TimeSeriesBarChart', () => {
                 />
             )
             expect(chart.xTicks()).toEqual(['tick-0', 'tick-1', 'tick-2'])
+        })
+
+        it('rotates rendered ticks when xAxis.tickLabelRotation is set', () => {
+            const { chart } = renderHogChart(
+                <TimeSeriesBarChart
+                    series={SERIES}
+                    labels={LABELS}
+                    theme={THEME}
+                    config={{ xAxis: { tickLabelRotation: -45 } }}
+                />
+            )
+            const ticks = chart.element.querySelectorAll<HTMLElement>('[data-attr="hog-chart-axis-tick-x"]')
+
+            expect(ticks.length).toBeGreaterThan(0)
+            expect(Array.from(ticks).every((tick) => tick.style.transform === 'rotate(-45deg)')).toBe(true)
         })
 
         it('builds an auto date formatter from xAxis.timezone + xAxis.interval', () => {
@@ -52,7 +76,11 @@ describe('TimeSeriesBarChart', () => {
                     labels={['2024-06-10', '2024-06-11', '2024-06-12']}
                     theme={THEME}
                     config={{
-                        xAxis: { tickFormatter: explicit, timezone: 'UTC', interval: 'day' },
+                        xAxis: {
+                            tickFormatter: explicit,
+                            timezone: 'UTC',
+                            interval: 'day',
+                        },
                     }}
                 />
             )
@@ -105,7 +133,12 @@ describe('TimeSeriesBarChart', () => {
                     series={SERIES}
                     labels={LABELS}
                     theme={THEME}
-                    config={{ yAxis: { tickFormatter: explicit, format: 'percentage' } }}
+                    config={{
+                        yAxis: {
+                            tickFormatter: explicit,
+                            format: 'percentage',
+                        },
+                    }}
                 />
             )
             expect(chart.yTicks().every((t) => t.startsWith('y:'))).toBe(true)
@@ -154,7 +187,10 @@ describe('TimeSeriesBarChart', () => {
                     series={[{ key: 'a', label: 'A', data: [50] }]}
                     labels={['Mon']}
                     theme={THEME}
-                    config={{ yAxis: { format: 'percentage' }, valueLabels: true }}
+                    config={{
+                        yAxis: { format: 'percentage' },
+                        valueLabels: true,
+                    }}
                 />
             )
             expect(chart.valueLabels().map((l) => l.text)).toEqual(['50%'])
@@ -167,7 +203,10 @@ describe('TimeSeriesBarChart', () => {
                     series={SERIES}
                     labels={LABELS}
                     theme={THEME}
-                    config={{ yAxis: { tickFormatter: explicit }, valueLabels: true }}
+                    config={{
+                        yAxis: { tickFormatter: explicit },
+                        valueLabels: true,
+                    }}
                 />
             )
             expect(chart.valueLabels().map((l) => l.text)).toEqual(['y:1', 'y:2', 'y:3'])
@@ -231,6 +270,43 @@ describe('TimeSeriesBarChart', () => {
                 />
             )
             expect(chart.referenceLines()).toHaveLength(1)
+        })
+    })
+
+    describe('config.valueDomain', () => {
+        // 246 nices past the data max at every tick count (e.g. → 300 or 400), so a tick above
+        // 246 is the observable signature of the default un-pinned domain.
+        const SPIKY_SERIES: Series[] = [{ key: 'a', label: 'A', data: [10, 246, 30] }]
+        const maxTick = (chart: { yTicks: () => string[] }): number =>
+            Math.max(...chart.yTicks().map((t) => Number(t.replace(/,/g, ''))))
+
+        it('pins the value axis to a fixed domain instead of nicing past the data max', () => {
+            const unpinned = renderHogChart(
+                <TimeSeriesBarChart series={SPIKY_SERIES} labels={LABELS} theme={THEME} />
+            ).chart
+            expect(maxTick(unpinned)).toBeGreaterThan(246)
+
+            const pinned = renderHogChart(
+                <TimeSeriesBarChart
+                    series={SPIKY_SERIES}
+                    labels={LABELS}
+                    theme={THEME}
+                    config={{ valueDomain: { min: 0, max: 246 } }}
+                />
+            ).chart
+            expect(maxTick(pinned)).toBeLessThanOrEqual(246)
+        })
+
+        it('a fixed domain wins over the goal-line stretch', () => {
+            const { chart } = renderHogChart(
+                <TimeSeriesBarChart
+                    series={SPIKY_SERIES}
+                    labels={LABELS}
+                    theme={THEME}
+                    config={{ valueDomain: { min: 0, max: 246 }, goalLines: [{ value: 1000, label: 'Target' }] }}
+                />
+            )
+            expect(maxTick(chart)).toBeLessThanOrEqual(246)
         })
     })
 
@@ -300,6 +376,27 @@ describe('TimeSeriesBarChart', () => {
         })
     })
 
+    describe('config.margins', () => {
+        // Guards against `margins` being misplaced under `bars` instead of top-level, where `Chart`
+        // reads it as `marginsOverride` — a misplacement like that would silently no-op with a green
+        // suite otherwise, since nothing else here reaches `useChartMargins`' override path.
+        it('widens the left gutter and shifts the y-axis ticks over', () => {
+            const { chart: defaultChart } = renderHogChart(
+                <TimeSeriesBarChart series={SERIES} labels={LABELS} theme={THEME} />
+            )
+            const defaultTick = defaultChart.element.querySelector<HTMLElement>('[data-attr="hog-chart-axis-tick-y"]')
+            const { chart: widenedChart } = renderHogChart(
+                <TimeSeriesBarChart series={SERIES} labels={LABELS} theme={THEME} config={{ margins: { left: 200 } }} />
+            )
+            const widenedTick = widenedChart.element.querySelector<HTMLElement>('[data-attr="hog-chart-axis-tick-y"]')
+            expect(defaultTick).not.toBeNull()
+            expect(widenedTick).not.toBeNull()
+            // Left-side tick position is `right: box.width - box.plotLeft + gap` — widening the left
+            // margin increases `plotLeft`, which decreases this `right` offset.
+            expect(parseFloat(widenedTick!.style.right)).toBeLessThan(parseFloat(defaultTick!.style.right))
+        })
+    })
+
     it('forwards children alongside built-in overlays', () => {
         const { container } = renderHogChart(
             <TimeSeriesBarChart series={SERIES} labels={LABELS} theme={THEME}>
@@ -307,5 +404,27 @@ describe('TimeSeriesBarChart', () => {
             </TimeSeriesBarChart>
         )
         expect(container.querySelector('[data-attr="custom-overlay"]')).not.toBeNull()
+    })
+
+    describe('interactive legend', () => {
+        it('toggles a series off and on when its legend row is clicked', () => {
+            const { container, chart } = renderHogChart(
+                <TimeSeriesBarChart
+                    series={MULTI_SERIES}
+                    labels={LABELS}
+                    theme={THEME}
+                    config={{ legend: { show: true } }}
+                />
+            )
+            expect(chart.seriesCount).toBe(2)
+            const buttons = (): HTMLButtonElement[] =>
+                Array.from(container.querySelectorAll('[data-attr="hog-chart-timeseries-bar-legend"] button'))
+
+            fireEvent.click(buttons()[1])
+            expect(getHogChart(container).seriesCount).toBe(1)
+
+            fireEvent.click(buttons()[1])
+            expect(getHogChart(container).seriesCount).toBe(2)
+        })
     })
 })

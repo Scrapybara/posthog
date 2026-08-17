@@ -34,6 +34,7 @@ class QueryExecutorNode(AssistantNode):
                 name=content.name,
                 description=content.description,
                 insight_id=artifact.artifact_id,
+                event_source=self.context_manager.event_source,
             )
             formatted_query_result = await context.execute_and_format()
         except MaxToolRetryableError as err:
@@ -58,6 +59,9 @@ class QueryExecutorNode(AssistantNode):
         last_message = state.messages[-1]
         if isinstance(last_message, FailureMessage):
             return None  # Exit early - something failed earlier
+
+        if isinstance(last_message, AssistantToolCallMessage):
+            return None  # Exit early - a generator already produced a terminal tool response (e.g. graceful failure)
 
         if not isinstance(last_message, ArtifactRefMessage):
             raise ValueError(f"Expected an ArtifactRefMessage, found {type(last_message)}")

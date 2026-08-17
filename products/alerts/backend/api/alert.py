@@ -1,59 +1,102 @@
 import uuid
+from typing import Annotated, Any, cast
 from zoneinfo import ZoneInfo
 
-from django.db.models import OuterRef, QuerySet, Subquery
+from django.db import transaction
+from django.db.models import OuterRef, Prefetch, Q, QuerySet, Subquery
 
+import posthoganalytics
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, extend_schema_view
-from rest_framework import serializers, viewsets
+from pydantic import (
+    Field as PydanticField,
+    RootModel,
+)
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from posthog.schema import (
     AlertCalculationInterval,
     AlertCondition,
-    AlertState,
     DetectorConfig,
+    FunnelsAlertConfig,
+    HogQLAlertConfig,
     InsightThreshold,
+    MetricsAlertConfig,
+    NodeKind,
     TrendsAlertConfig,
 )
 
 from posthog.api.documentation import extend_schema_field
+from posthog.api.fields import OptionalBooleanField
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.scoped_related_fields import TeamScopedPrimaryKeyRelatedField
 from posthog.api.shared import SearchMatchTypeSerializerMixin, UserBasicSerializer
 from posthog.event_usage import get_request_analytics_properties
-from posthog.helpers.trigram_search import MAX_SEARCH_LENGTH, NAME_FIELD, apply_trigram_search
+from posthog.exceptions_capture import capture_exception
+from posthog.helpers.trigram_search import (
+    MAX_SEARCH_LENGTH,
+    NAME_FIELD,
+    apply_trigram_search,
+    drop_similar_when_exact_exists,
+)
 from posthog.models import User
+from posthog.models.tag import tagify
+from posthog.models.tagged_item import TaggedItem
+from posthog.permissions import get_authenticator_scopes
+from posthog.rate_limit import AlertTestDeliveryThrottle
 from posthog.resource_limits import LimitKey, check_count_limit
 from posthog.schema_migrations.upgrade_manager import upgrade_query
 from posthog.tasks.alerts.detector import MAX_DETECTOR_BREAKDOWN_VALUES
 from posthog.tasks.alerts.schedule_restriction import validate_and_normalize_schedule_restriction
 from posthog.tasks.alerts.utils import (
-    THRESHOLD_BOUNDS_REQUIRED_MESSAGE,
     next_check_at_after_schedule_restriction_change,
-    validate_alert_config,
+    send_test_alert_email,
+    trigger_alert_hog_functions,
 )
 from posthog.utils import relative_date_parse
 
 from products.alerts.backend.api.alert_schedule_restriction import AlertScheduleRestriction
+from products.alerts.backend.destination_configs import DestinationType
+from products.alerts.backend.destinations import count_active_alert_destinations
+from products.alerts.backend.evaluation.contract import AlertExtractionError
 from products.alerts.backend.evaluation.detector import simulate_detector_on_insight
+from products.alerts.backend.evaluation.validation import (
+    THRESHOLD_BOUNDS_REQUIRED_MESSAGE,
+    should_default_check_ongoing_interval,
+    validate_alert_config,
+)
+from products.alerts.backend.insight_alert_state_machine import (
+    apply_disable,
+    apply_enable,
+    apply_snooze,
+    apply_threshold_change,
+    apply_unsnooze,
+)
 from products.alerts.backend.models.alert import AlertCheck, AlertConfiguration, AlertSubscription, Threshold
 from products.product_analytics.backend.models.insight import Insight
 
+INSIGHT_ALERT_FIRING_EVENT = "$insight_alert_firing"
 
-def _validate_every_15_minutes_interval(
+
+def _validate_interval_entitlement(
     *,
     calculation_interval: str | AlertCalculationInterval | None,
-    request,
     organization,
 ) -> None:
-    if error := AlertConfiguration.every_15_minutes_interval_validation_error(
+    if error := AlertConfiguration.interval_entitlement_error(
         calculation_interval=calculation_interval,
-        user_distinct_id=str(request.user.distinct_id),
         organization=organization,
     ):
         raise ValidationError({"calculation_interval": [error]})
+
+
+def _require_insight_viewer_access(context: dict[str, Any], insight: Insight) -> None:
+    # Team scoping alone doesn't gate per-object insight access controls, so require viewer access
+    # explicitly — alert write/simulate access must not expose a restricted insight's results.
+    if not context["view"].user_access_control.check_access_level_for_object(insight, "viewer"):
+        raise ValidationError("Viewer access to this insight is required.")
 
 
 @extend_schema_field(InsightThreshold)  # type: ignore[arg-type]
@@ -66,8 +109,71 @@ class AlertConditionField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(TrendsAlertConfig)  # type: ignore[arg-type]
-class TrendsAlertConfigField(serializers.JSONField):
+def _insight_alert_flag_enabled(context: dict[str, Any], flag: str) -> bool:
+    # Scope the flag to the alert's organization (via team scope), not the user's current
+    # organization — otherwise a user in multiple orgs could flip their current org to a
+    # flag-on org and create an alert in a team where the flag is disabled. get_organization is
+    # always injected by TeamAndOrgViewSetMixin; access it unconditionally so the org-scoping
+    # invariant can't silently degrade to an unscoped check.
+    user = context["request"].user
+    org = context["get_organization"]()
+    return bool(
+        posthoganalytics.feature_enabled(
+            flag,
+            str(user.distinct_id),
+            groups={"organization": str(org.id)},
+        )
+    )
+
+
+def _enforce_alert_feature_flags(context: dict[str, Any], insight: Insight) -> None:
+    # Shared by create/update (AlertSerializer) and simulate (AlertSimulateSerializer), so a
+    # flag-gated insight kind gets the same rejection on every alerts entry point.
+    kind = insight.alertable_query_kind
+    if kind is None:
+        raise ValidationError("Alerts are not supported for this insight.")
+    # Gated on the Metrics product flag itself: anyone who can see the product can alert on it.
+    if kind == NodeKind.METRICS_QUERY and not _insight_alert_flag_enabled(context, "metrics"):
+        raise ValidationError("Metrics insight alerts are not enabled for your account.")
+
+
+# Matches insights whose (bare or one-level-wrapped) query is a MetricsQuery — the shapes the
+# product persists today. Used to hide metric alert data from tokens lacking the metrics scope.
+_METRICS_INSIGHT_QUERY_FILTER = Q(insight__query__kind="MetricsQuery") | Q(insight__query__source__kind="MetricsQuery")
+
+
+def _token_lacks_metrics_scope(request) -> bool:
+    # Session auth (no token scopes) is exempt: those users are gated by team membership and
+    # insight viewer access instead.
+    key_scopes = get_authenticator_scopes(request.successful_authenticator)
+    if key_scopes is None or "*" in key_scopes:
+        return False
+    return not any(scope in key_scopes for scope in ("metrics:read", "metrics:write"))
+
+
+def _require_metrics_scope_for_programmatic_auth(context: dict[str, Any], insight: Insight) -> None:
+    # An alert on a metrics insight executes the query as `created_by` and delivers the computed
+    # value and labels in notifications, so a programmatic token must also carry the metrics data
+    # scope — otherwise `alert:write` alone becomes a metrics-read oracle bypassing the explicit
+    # product-scope gate on the query endpoints.
+    if insight.alertable_query_kind != NodeKind.METRICS_QUERY:
+        return
+    if _token_lacks_metrics_scope(context["request"]):
+        raise PermissionDenied("API key missing required scope 'metrics:read'")
+
+
+class AlertConfigUnion(RootModel):
+    """Per-insight-kind alert config, discriminated by ``type`` — keeps the OpenAPI (and the
+    generated frontend types and MCP tool schemas) in sync with every kind alerts support."""
+
+    root: Annotated[
+        TrendsAlertConfig | HogQLAlertConfig | FunnelsAlertConfig | MetricsAlertConfig,
+        PydanticField(discriminator="type"),
+    ]
+
+
+@extend_schema_field(AlertConfigUnion)  # type: ignore[arg-type]
+class AlertConfigField(serializers.JSONField):
     pass
 
 
@@ -89,6 +195,7 @@ class ThresholdSerializer(serializers.ModelSerializer):
     name = serializers.CharField(
         required=False,
         allow_blank=True,
+        max_length=255,
         help_text="Optional name for the threshold.",
     )
 
@@ -111,10 +218,47 @@ class ThresholdSerializer(serializers.ModelSerializer):
         return data
 
 
+def _destination_deliveries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Only Slack names its own channel; the rest repeat a bare type name, so carry the hog
+    # function id to tell two apart — never the webhook URL, which is the credential.
+    labelled = []
+    for row in rows:
+        label = row.get("target") or "Destination"
+        target_id = row.get("target_id")
+        if target_id and row.get("template") != DestinationType.SLACK.value:
+            label = f"{label} · {target_id[-4:]}"
+        labelled.append({**row, "display_label": label})
+    return labelled
+
+
+class AlertDeliverySerializer(serializers.Serializer):
+    channel = serializers.CharField(help_text="Delivery channel: 'email' or 'hog_function' (destinations).")
+    target = serializers.CharField(help_text="Email address, or destination name, that received the notification.")
+    target_id = serializers.CharField(
+        required=False, allow_null=True, help_text="Hog function ID, for destination deliveries. Null for email."
+    )
+    template = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text="Destination template: 'slack', 'discord', 'webhook', or 'teams'. Null for email.",
+    )
+    status = serializers.CharField(help_text="Delivery status. Always 'accepted', for a confirmed send.")
+    at = serializers.DateTimeField(allow_null=True, help_text="When the delivery was recorded.")
+    display_label = serializers.CharField(
+        help_text="Ready-to-display description of the delivery, e.g. 'Email: a@example.com' or 'Slack #eng-alerts'."
+    )
+
+
 class AlertCheckSerializer(serializers.ModelSerializer):
     targets_notified = serializers.SerializerMethodField()
     investigation_notebook_short_id = serializers.SerializerMethodField(
         help_text="Short ID of the Notebook produced by the investigation agent, when the agent ran for this check."
+    )
+    deliveries = serializers.SerializerMethodField(
+        allow_null=True,
+        help_text="Destinations that accepted this check's notification, one record per destination "
+        "(channel, target, status, at). Null when no delivery receipt was recorded, which covers "
+        "checks that notified nobody and checks predating delivery receipts.",
     )
 
     class Meta:
@@ -136,6 +280,7 @@ class AlertCheckSerializer(serializers.ModelSerializer):
             "investigation_notebook_short_id",
             "notification_sent_at",
             "notification_suppressed_by_agent",
+            "deliveries",
         ]
         read_only_fields = fields
 
@@ -145,6 +290,24 @@ class AlertCheckSerializer(serializers.ModelSerializer):
     def get_investigation_notebook_short_id(self, instance: AlertCheck) -> str | None:
         notebook = instance.investigation_notebook
         return notebook.short_id if notebook is not None else None
+
+    @extend_schema_field(AlertDeliverySerializer(many=True))
+    def get_deliveries(self, instance: AlertCheck) -> list[dict[str, Any]] | None:
+        if not instance.has_delivery_receipts:
+            return None
+        notified = instance.targets_notified or {}
+        accepted_at = instance.notification_sent_at.isoformat() if instance.notification_sent_at else None
+        emails = [
+            {
+                "channel": "email",
+                "target": email,
+                "status": "accepted",
+                "at": accepted_at,
+                "display_label": f"Email: {email}",
+            }
+            for email in notified.get("users") or []
+        ]
+        return emails + _destination_deliveries(notified.get("destinations") or [])
 
 
 class AlertSubscriptionSerializer(serializers.ModelSerializer):
@@ -197,19 +360,41 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
         allow_null=True,
         help_text="Alert condition type. Determines how the value is evaluated: absolute_value, relative_increase, or relative_decrease.",
     )
-    config = TrendsAlertConfigField(
+    config = AlertConfigField(
         required=False,
         allow_null=True,
-        help_text="Trends-specific alert configuration. Includes series_index (which series to monitor) and check_ongoing_interval (whether to check the current incomplete interval).",
+        help_text=(
+            "Per-insight-kind alert configuration, discriminated by `type`. TrendsAlertConfig: series_index "
+            "(which series to monitor) and check_ongoing_interval (whether to check the current incomplete "
+            "interval). HogQLAlertConfig (SQL insights): column (which result column to evaluate, defaults to "
+            "the single numeric column), evaluation ('last_row' checks the latest value of an oldest->newest query, "
+            "'first_row' checks the first value of a newest->oldest query, 'any_row' fires if any row breaches), and "
+            "label_column (names the evaluated row(s) in breach messages, in every evaluation mode). "
+            "FunnelsAlertConfig (funnel insights): funnel_step (the step to monitor, null for the overall "
+            "last step), metric ('conversion_from_start' or 'conversion_from_previous'), and "
+            "check_ongoing_interval (historical-trend funnels: also evaluate the current in-progress period). "
+            "Steps funnels support only absolute_value conditions; historical-trend funnels also support "
+            "relative_increase/relative_decrease (compared against the prior period)."
+        ),
     )
     detector_config = DetectorConfigField(required=False, allow_null=True)
     insight = TeamScopedPrimaryKeyRelatedField(
         queryset=Insight.objects.all(),
         help_text="Insight ID monitored by this alert. Note: Response returns full InsightBasicSerializer object.",
     )
+    insight_short_id = serializers.CharField(
+        source="insight.short_id",
+        read_only=True,
+        help_text="Short ID of the insight monitored by this alert.",
+    )
+    insight_display_name = serializers.SerializerMethodField(
+        read_only=True,
+        help_text="Display name of the insight monitored by this alert.",
+    )
     name = serializers.CharField(
         required=False,
         allow_blank=True,
+        max_length=255,
         help_text="Human-readable name for the alert.",
     )
     # nosemgrep: unscoped-primary-key-related-field — User model is not team-scoped; validate_subscribed_users() checks team membership
@@ -227,7 +412,7 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
     calculation_interval = serializers.ChoiceField(
         choices=AlertConfiguration.CALCULATION_INTERVAL_CHOICES,
         required=False,
-        help_text="How often the alert is checked: every 15 minutes (Boost+), hourly, daily, weekly, or monthly.",
+        help_text="How often the alert is checked: real time (Scale+), every 15 minutes (Boost+), hourly, daily, weekly, or monthly.",
     )
     snoozed_until = RelativeDateTimeField(
         allow_null=True,
@@ -256,7 +441,7 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
     investigation_inconclusive_action = serializers.ChoiceField(
         choices=[("notify", "Notify"), ("suppress", "Suppress")],
         required=False,
-        help_text="How to handle an 'inconclusive' verdict when notifications are gated. 'notify' is the safe default — an agent that can't be sure is itself useful signal.",
+        help_text="How to handle an 'inconclusive' verdict: whether gated notifications fire and whether the investigation surfaces in the Signals inbox. 'notify' is the safe default — an agent that can't be sure is itself useful signal. False positives never reach the inbox regardless of this setting.",
     )
     state = serializers.CharField(
         read_only=True,
@@ -271,6 +456,9 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
     def get_checks_total(self, obj: AlertConfiguration) -> int | None:
         return getattr(obj, "checks_total", None)
 
+    def get_insight_display_name(self, obj: AlertConfiguration) -> str:
+        return obj.insight.name or obj.insight.derived_name or "Untitled insight"
+
     class Meta:
         model = AlertConfiguration
         fields = [
@@ -278,6 +466,8 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
             "created_by",
             "created_at",
             "insight",
+            "insight_short_id",
+            "insight_display_name",
             "name",
             "subscribed_users",
             "threshold",
@@ -363,29 +553,19 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
         )
         return instance
 
+    @transaction.atomic
     def update(self, instance, validated_data):
-        if "snoozed_until" in validated_data:
-            snoozed_until_param = validated_data.pop("snoozed_until")
+        enabled_changed = "enabled" in validated_data and validated_data["enabled"] != instance.enabled
+        resulting_enabled = validated_data.get("enabled", instance.enabled)
+        if enabled_changed and validated_data["enabled"]:
+            apply_enable(instance)
 
-            if snoozed_until_param is None:
-                instance.state = AlertState.NOT_FIRING
-                instance.snoozed_until = None
-            else:
-                # always store snoozed_until as UTC time
-                # as we look at current UTC time to check when to run alerts
-                snoozed_until = relative_date_parse(
-                    snoozed_until_param, ZoneInfo("UTC"), increase=True, always_truncate=True
-                )
-                instance.state = AlertState.SNOOZED
-                instance.snoozed_until = snoozed_until
-
-            AlertCheck.objects.create(
-                alert_configuration=instance,
-                calculated_value=None,
-                condition=instance.condition,
-                targets_notified={},
-                state=instance.state,
-                error=None,
+        snoozed_until_param = validated_data.pop("snoozed_until", serializers.empty)
+        snooze_changed = snoozed_until_param is not serializers.empty
+        snoozed_until = None
+        if snooze_changed and snoozed_until_param is not None:
+            snoozed_until = relative_date_parse(
+                snoozed_until_param, ZoneInfo("UTC"), increase=True, always_truncate=True
             )
 
         conditions_or_threshold_changed = False
@@ -422,7 +602,29 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
             and validated_data["calculation_interval"] != instance.calculation_interval
         )
         if conditions_or_threshold_changed or calculation_interval_changed:
-            instance.mark_for_recheck(reset_state=conditions_or_threshold_changed)
+            if conditions_or_threshold_changed:
+                apply_threshold_change(instance)
+            instance.next_check_at = None
+
+        if snooze_changed:
+            instance.snoozed_until = snoozed_until
+            if snoozed_until_param is None:
+                apply_unsnooze(instance)
+            else:
+                apply_snooze(instance)
+
+        if not resulting_enabled:
+            apply_disable(instance)
+
+        if snooze_changed:
+            AlertCheck.objects.create(
+                alert_configuration=instance,
+                calculated_value=None,
+                condition=instance.condition,
+                targets_notified={},
+                state=instance.state,
+                error=None,
+            )
 
         schedule_restriction_changed = False
         if "schedule_restriction" in validated_data:
@@ -501,8 +703,10 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
         return value
 
     def validate_insight(self, value):
-        if value and not value.are_alerts_supported:
-            raise ValidationError("Alerts are not supported for this insight.")
+        if not value:
+            return value
+        _require_insight_viewer_access(self.context, value)
+        _enforce_alert_feature_flags(self.context, value)
         return value
 
     def validate_subscribed_users(self, value):
@@ -526,6 +730,13 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
         insight = attrs.get("insight") or (self.instance.insight if self.instance else None)
         if insight is None:
             raise ValidationError({"insight": ["Insight is required."]})
+        # Enforced from the object-level validate() so it runs on every create and update — including
+        # a PATCH that omits `insight` (which skips the field-level validator), so an alert can't be
+        # repointed at a flag-gated insight kind (or a scope-gated one) in an account where the flag
+        # is off or the token lacks the data scope. The model stays flag-agnostic so existing alerts
+        # keep working when the flag is off.
+        _enforce_alert_feature_flags(self.context, insight)
+        _require_metrics_scope_for_programmatic_auth(self.context, insight)
         with upgrade_query(insight):
             query = insight.query
             if query is None:
@@ -553,6 +764,19 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
             self.instance is None or "threshold" in attrs or "detector_config" in attrs
         )
 
+        # Mirror the UI's default for cadences finer than the insight interval. Applied before
+        # validate_alert_config so the validated config is the persisted config.
+        if isinstance(config, dict) and config.get("check_ongoing_interval") is None:
+            if should_default_check_ongoing_interval(
+                query=query,
+                config=config,
+                condition=condition,
+                threshold_config=threshold_config,
+                calculation_interval=calculation_interval,
+            ):
+                config = {**config, "check_ongoing_interval": True}
+                attrs["config"] = config
+
         try:
             validate_alert_config(
                 query,
@@ -569,13 +793,14 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
             raise ValidationError(str(e))
 
         organization = self.context["get_organization"]()
-        _validate_every_15_minutes_interval(
+        _validate_interval_entitlement(
             calculation_interval=calculation_interval,
-            request=self.context["request"],
             organization=organization,
         )
 
-        # Investigation agent is only supported for detector-based alerts.
+        # Investigation agent is supported for detector-based alerts (the agent
+        # workflow) and for metrics threshold alerts (a synchronous facade
+        # investigation attached to the firing check) — nothing else.
         investigation_enabled = attrs.get(
             "investigation_agent_enabled",
             self.instance.investigation_agent_enabled if self.instance else False,
@@ -585,7 +810,7 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
                 "detector_config",
                 self.instance.detector_config if self.instance else None,
             )
-            if not detector_config:
+            if not detector_config and insight.alertable_query_kind != NodeKind.METRICS_QUERY:
                 raise ValidationError(
                     {
                         "investigation_agent_enabled": [
@@ -610,12 +835,28 @@ class AlertSerializer(SearchMatchTypeSerializerMixin, serializers.ModelSerialize
                 }
             )
 
-        # only validate alert count when creating a new alert
-        if self.context["request"].method != "POST":
-            return attrs
+        if self.context["request"].method == "POST":
+            if msg := AlertConfiguration.check_alert_limit(self.context["team_id"], self.context["get_organization"]()):
+                raise ValidationError({"alert": [msg]})
 
-        if msg := AlertConfiguration.check_alert_limit(self.context["team_id"], self.context["get_organization"]()):
-            raise ValidationError({"alert": [msg]})
+        existing_enabled = self.instance.enabled if self.instance else True
+        if msg := AlertConfiguration.real_time_alert_validation_error(
+            team_id=self.context["team_id"],
+            organization=organization,
+            calculation_interval=calculation_interval,
+            enabled=attrs.get("enabled", existing_enabled) is True,
+            existing=self.instance,
+        ):
+            posthoganalytics.capture(
+                distinct_id=str(self.context["request"].user.distinct_id),
+                event="real time alert limit reached",
+                properties={
+                    "team_id": self.context["team_id"],
+                    "organization_id": str(organization.id),
+                },
+                groups={"organization": str(organization.id)},
+            )
+            raise ValidationError({"calculation_interval": [msg]})
 
         return attrs
 
@@ -628,17 +869,36 @@ class AlertSimulateSerializer(serializers.Serializer):
     detector_config = DetectorConfigField(
         help_text="Detector configuration to simulate.",
     )
+    # TODO: fold series_index and date_from into a per-kind range on `config` once a second insight
+    # kind needs a range knob. They stay flat today because date_from is a preview-only range with
+    # no home in the persisted alert config, and trends is the only kind with a range knob — but the
+    # duplication (series_index already lives in TrendsAlertConfig) should be removed at that point.
     series_index = serializers.IntegerField(
         default=0,
-        help_text="Zero-based index of the series to analyze.",
+        help_text="Zero-based index of the series to analyze (trends insights only).",
     )
     date_from = serializers.CharField(
         required=False,
         allow_null=True,
         default=None,
         help_text="Relative date string for how far back to simulate (e.g. '-24h', '-30d', '-4w'). "
-        "If not provided, uses the detector's minimum required samples.",
+        "If not provided, uses the detector's minimum required samples. Trends insights only — a SQL "
+        "query's own rows are the series.",
     )
+    config = AlertConfigField(
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="Per-insight-kind alert config. For SQL insights, selects the evaluated column and "
+        "read direction (last_row/first_row) so the preview matches the alert; ignored for trends.",
+    )
+
+    def validate_insight(self, value):
+        _require_insight_viewer_access(self.context, value)
+        # Same feature gate as create/update: a flag-gated insight kind must get the gated
+        # rejection here too, not fall through to the unsupported-detector error.
+        _enforce_alert_feature_flags(self.context, value)
+        return value
 
     def validate_detector_config(self, value):
         if value is None:
@@ -717,6 +977,20 @@ class AlertSimulateResponseSerializer(serializers.Serializer):
     )
 
 
+class AlertTestDeliveryResponseSerializer(serializers.Serializer):
+    destination_count = serializers.IntegerField(help_text="Number of active destinations queued for test delivery.")
+    email_recipient_count = serializers.IntegerField(help_text="Number of subscribed users sent a test email.")
+    failed_delivery_channels = serializers.ListField(
+        child=serializers.ChoiceField(choices=("email", "destination")),
+        help_text="Configured delivery channels that failed to schedule or send.",
+    )
+
+
+class AlertListFiltersSerializer(serializers.Serializer):
+    insight_tag = serializers.CharField(required=False, max_length=255)
+    has_detector = OptionalBooleanField(required=False)
+
+
 @extend_schema_view(
     list=extend_schema(
         parameters=[
@@ -742,6 +1016,18 @@ class AlertSimulateResponseSerializer(serializers.Serializer):
                 location=OpenApiParameter.QUERY,
                 description="Optional. Restrict results to alerts on this insight ID.",
             ),
+            OpenApiParameter(
+                "insight_tag",
+                OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Optional. Restrict results to alerts whose insight has this tag.",
+            ),
+            OpenApiParameter(
+                "has_detector",
+                OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                description="Optional. Restrict results by whether the alert uses anomaly detection.",
+            ),
         ],
     ),
 )
@@ -749,19 +1035,40 @@ class AlertViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
     scope_object = "alert"
     queryset = (
         AlertConfiguration.objects.select_related("team", "insight", "threshold", "created_by")
-        .prefetch_related("subscribed_users")
+        .prefetch_related(
+            "subscribed_users",
+            Prefetch(
+                "insight__tagged_items",
+                queryset=TaggedItem.objects.select_related("tag"),
+                to_attr="prefetched_tags",
+            ),
+        )
         .order_by("-created_at")
     )
     serializer_class = AlertSerializer
 
     def safely_get_queryset(self, queryset) -> QuerySet:
         filters = self.request.query_params
+        list_filters = AlertListFiltersSerializer(data=filters)
+        list_filters.is_valid(raise_exception=True)
+
         if "insight" in filters:
             queryset = queryset.filter(insight_id=filters["insight"])
 
         insight_id = filters.get("insight_id")
         if insight_id is not None:
             queryset = queryset.filter(insight_id=insight_id)
+
+        insight_tag = list_filters.validated_data.get("insight_tag")
+        if insight_tag:
+            queryset = queryset.filter(
+                insight__tagged_items__tag__name=tagify(insight_tag),
+                insight__tagged_items__tag__team_id=self.team_id,
+            )
+
+        has_detector = list_filters.validated_data.get("has_detector")
+        if has_detector is not None:
+            queryset = queryset.filter(detector_config__isnull=not has_detector)
 
         created_by = filters.get("created_by")
         if created_by:
@@ -779,10 +1086,33 @@ class AlertViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
                 )
             queryset = self._apply_search(queryset, search)
 
+        # Gate on viewer access to the linked insight. Alert read/write access does not imply access
+        # to the insight's results (carried in AlertCheck.triggered_metadata / calculated_value), and
+        # "alert" isn't an access-control resource — so without this an alert leaks a restricted
+        # insight's data via check history, or via a PATCH that omits `insight` (skipping the
+        # create-time check). Filtering here covers list, retrieve, update, delete, and the embedded
+        # checks, since get_object() resolves detail routes from this queryset.
+        viewable_insights = self.user_access_control.filter_queryset_by_access_level(
+            Insight.objects.filter(team_id=self.team_id)
+        )
+        queryset = queryset.filter(insight_id__in=viewable_insights.values("id"))
+
+        # Read-side twin of the write-side metrics scope gate: a programmatic token without the
+        # metrics data scope must not read metric alert results (last_value, check history, breach
+        # labels) that a session user scheduled. Filtering here covers list, retrieve, update,
+        # delete, and the embedded checks, since get_object() resolves from this queryset.
+        # filter-then-exclude-by-id rather than exclude(Q) — NOT over a JSON path is three-valued,
+        # so a plain exclude also drops rows whose query lacks the key entirely.
+        if _token_lacks_metrics_scope(self.request):
+            queryset = queryset.exclude(id__in=queryset.filter(_METRICS_INSIGHT_QUERY_FILTER).values("id"))
+
         latest_check = AlertCheck.objects.filter(alert_configuration=OuterRef("pk")).order_by("-created_at")
         queryset = queryset.annotate(last_value=Subquery(latest_check.values("calculated_value")[:1]))
 
         return queryset
+
+    def filter_queryset(self, queryset: QuerySet) -> QuerySet:
+        return drop_similar_when_exact_exists(super().filter_queryset(queryset))
 
     @staticmethod
     def _apply_search(queryset: QuerySet, search: str) -> QuerySet:
@@ -899,11 +1229,91 @@ class AlertViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @extend_schema(
+        request=None,
+        responses={202: AlertTestDeliveryResponseSerializer},
+        description="Send a synthetic test notification to subscribed users and every active destination on this alert.",
+    )
+    @action(
+        detail=True,
+        methods=["POST"],
+        url_path="test-delivery",
+        required_scopes=["alert:write"],
+        throttle_classes=[AlertTestDeliveryThrottle],
+    )
+    def test_delivery(self, request, *args, **kwargs):
+        alert = self.get_object()
+        destination_count = count_active_alert_destinations(
+            team_id=alert.team_id,
+            alert_id=str(alert.id),
+            allowed_event_ids=(INSIGHT_ALERT_FIRING_EVENT,),
+        )
+        email_targets = alert.get_subscribed_users_emails()
+        if destination_count == 0 and not email_targets:
+            return Response(
+                {"detail": "Add an email recipient or active destination before sending a test."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        failed_delivery_channels: list[str] = []
+        successful_email_count = 0
+        successful_destination_count = 0
+        if email_targets:
+            try:
+                send_test_alert_email(alert, recipients=email_targets, idempotency_key=str(uuid.uuid4()))
+                successful_email_count = len(email_targets)
+            except Exception as error:
+                capture_exception(
+                    error,
+                    additional_properties={"alert_id": str(alert.id), "feature": "alerts", "channel": "email"},
+                )
+                failed_delivery_channels.append("email")
+        if destination_count and trigger_alert_hog_functions(
+            alert,
+            {
+                "breaches": "Test alert from PostHog. No action is needed.",
+                "is_test": True,
+                "alert_name": f"[TEST] {alert.name}",
+            },
+        ):
+            successful_destination_count = destination_count
+        elif destination_count:
+            failed_delivery_channels.append("destination")
+
+        if successful_email_count == 0 and successful_destination_count == 0:
+            return Response(
+                {"detail": "Unable to start the test delivery. Check the configured channels and try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        posthoganalytics.capture(
+            distinct_id=str(request.user.distinct_id),
+            event="insight alert test delivery scheduled",
+            properties={
+                **get_request_analytics_properties(request),
+                "alert_id": str(alert.id),
+                "destination_count": successful_destination_count,
+                "email_recipient_count": successful_email_count,
+                "failed_delivery_channels": failed_delivery_channels,
+                "team_id": alert.team_id,
+            },
+        )
+        return Response(
+            {
+                "destination_count": successful_destination_count,
+                "email_recipient_count": successful_email_count,
+                "failed_delivery_channels": failed_delivery_channels,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @extend_schema(
         request=AlertSimulateSerializer,
         responses={200: AlertSimulateResponseSerializer},
         description="Simulate a detector on an insight's historical data. Read-only — no AlertCheck records are created.",
     )
-    @action(detail=False, methods=["POST"], url_path="simulate", required_scopes=["alert:read"])
+    # Returns an insight's computed result series, so it requires insight read in addition to
+    # alert read — an alert-scoped token must not read insight/query data it isn't scoped for.
+    # (Object-level insight viewer access is enforced separately in AlertSimulateSerializer.)
+    @action(detail=False, methods=["POST"], url_path="simulate", required_scopes=["alert:read", "insight:read"])
     def simulate(self, request, *args, **kwargs):
         serializer = AlertSimulateSerializer(data=request.data, context=self.get_serializer_context())
         serializer.is_valid(raise_exception=True)
@@ -912,6 +1322,7 @@ class AlertViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         detector_config = serializer.validated_data["detector_config"]
         series_index = serializer.validated_data["series_index"]
         date_from = serializer.validated_data.get("date_from")
+        config = serializer.validated_data.get("config")
 
         try:
             result = simulate_detector_on_insight(
@@ -920,8 +1331,10 @@ class AlertViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
                 detector_config=detector_config,
                 series_index=series_index,
                 date_from=date_from,
+                user=cast(User, request.user),
+                config=config,
             )
-        except (ValueError, IndexError) as e:
+        except (ValueError, IndexError, AlertExtractionError) as e:
             raise ValidationError(str(e))
         except RuntimeError:
             raise ValidationError("Simulation failed: unable to compute results for this insight.")
@@ -942,3 +1355,10 @@ class ThresholdViewSet(TeamAndOrgViewSetMixin, viewsets.ReadOnlyModelViewSet):
     scope_object = "alert"
     queryset = Threshold.objects.all()
     serializer_class = ThresholdWithAlertSerializer
+
+    def safely_get_queryset(self, queryset) -> QuerySet:
+        # Thresholds embed full alerts (including check values), so they get the same read-side
+        # metrics scope gate as the alerts endpoints. Same null-safe filter-then-exclude shape.
+        if _token_lacks_metrics_scope(self.request):
+            queryset = queryset.exclude(id__in=queryset.filter(_METRICS_INSIGHT_QUERY_FILTER).values("id"))
+        return queryset

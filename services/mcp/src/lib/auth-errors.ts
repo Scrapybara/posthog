@@ -38,6 +38,38 @@ export function mapErrorToAuthResponse(error: unknown): Response | null {
     return null
 }
 
+export type McpAuthFailureReason =
+    | 'insufficient_scope'
+    | 'inactive_oauth_token'
+    | 'invalid_api_key'
+    | 'missing_token'
+    | 'invalid_token_format'
+    | 'unknown'
+
+export interface McpAuthFailure {
+    reason: McpAuthFailureReason
+    status: number | undefined
+    missingScope: string | undefined
+}
+
+export function classifyAuthFailure(error: unknown): McpAuthFailure {
+    const status = mapErrorToAuthResponse(error)?.status
+
+    const permissionError = findPostHogPermissionError(error)
+    if (permissionError) {
+        return { reason: 'insufficient_scope', status, missingScope: permissionError.missingScope }
+    }
+
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes(ErrorCode.INACTIVE_OAUTH_TOKEN)) {
+        return { reason: 'inactive_oauth_token', status, missingScope: undefined }
+    }
+    if (message.includes(ErrorCode.INVALID_API_KEY)) {
+        return { reason: 'invalid_api_key', status, missingScope: undefined }
+    }
+    return { reason: 'unknown', status, missingScope: undefined }
+}
+
 // Map a response body string to an auth response if it embeds a known error code.
 // Used to translate downstream API errors that surface as 200/4xx with a known
 // marker in the body (e.g. SDK transport wrappers).
@@ -82,7 +114,7 @@ export function buildInvalidTokenFormatResponse(): Response {
 // Validate the bearer token format. Accepts:
 //   * Personal API keys (`phx_…`) and OAuth access tokens (`pha_…`).
 //   * ID-JAG access tokens — RFC 9068 JWTs with `typ: at+jwt` (issued by the
-//     PostHog ID-JAG endpoint at `/id-jag/token`).
+//     ID-JAG JWT Bearer grant served from the OAuth token endpoint at `/oauth/token`).
 // Returns the auth-error response if invalid, or null if the token is well-formed.
 export function validateBearerToken(
     token: string | undefined,

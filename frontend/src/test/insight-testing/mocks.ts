@@ -1,5 +1,3 @@
-import { RestRequest } from 'msw'
-
 import { useMocks } from '~/mocks/jest'
 import { ActorsQueryResponse, NodeKind, TrendsQueryResponse } from '~/queries/schema/schema-general'
 import { EventDefinition, PropertyDefinition, RawAnnotationType } from '~/types'
@@ -35,9 +33,16 @@ export interface QueryBody {
     [key: string]: unknown
 }
 
-function hasFormula(query: QueryBody): boolean {
+/** Display labels the real runner would give each formula (custom name or "Formula (…)"). */
+function formulaLabels(query: QueryBody): string[] {
     const tf = query.trendsFilter
-    return !!(tf?.formula || tf?.formulas?.length || tf?.formulaNodes?.length)
+    if (tf?.formulaNodes?.length) {
+        return (tf.formulaNodes as Array<{ formula?: string; custom_name?: string }>).map(
+            (node) => node.custom_name ?? `Formula (${node.formula})`
+        )
+    }
+    const formulas = tf?.formulas?.length ? tf.formulas : tf?.formula ? [tf.formula] : []
+    return formulas.map((formula) => `Formula (${formula})`)
 }
 
 interface FunnelsQueryResponseLike {
@@ -76,24 +81,54 @@ export function buildActorsResponse(
     } as ActorsQueryResponse
 }
 
-// `isFormula` only models the single-formula shape: the real runner combines series per
-// formula (`action: null`, `order` = formula index). This mock doesn't combine series, so
-// it stamps `order: 0` on every row, which works for a single formula. A future multi-formula
-// test would need this to derive the formula index per row (0 for A, 1 for B, …).
-function buildTrendsResponse(series: SeriesData[], opts: { isFormula?: boolean } = {}): TrendsQueryResponse {
+// A single formula keeps the legacy shape: every input row is returned with `action: null`
+// and `order: 0`, without combining series. Multiple formulas mirror the real runner more
+// closely: the first query series' rows act as the per-breakdown template, and each formula
+// emits one result per template row (`order` = formula index, `label` = formula label), with
+// values scaled per formula so rows stay distinguishable in assertions.
+function buildTrendsResponse(series: SeriesData[], opts: { formulaLabels?: string[] } = {}): TrendsQueryResponse {
+    const isFormula = !!opts.formulaLabels?.length
+    if (opts.formulaLabels && opts.formulaLabels.length > 1) {
+        const templateRows = series.filter((s) => (s.seriesIndex ?? 0) === 0)
+        return {
+            results: opts.formulaLabels.flatMap((label, formulaIdx) =>
+                templateRows.map((s) => {
+                    const data = s.data.map((v) => v * (formulaIdx + 1))
+                    return {
+                        action: null,
+                        order: formulaIdx,
+                        label,
+                        count: data.reduce((a, b) => a + b, 0),
+                        aggregated_value: data.reduce((a, b) => a + b, 0),
+                        data,
+                        labels: s.labels ?? s.data.map((_, j) => `Day ${j + 1}`),
+                        days: s.days ?? s.data.map((_, j) => `2024-01-0${j + 1}`),
+                        breakdown_value: s.breakdown_value,
+                        compare: s.compare,
+                        compare_label: s.compare_label,
+                    }
+                })
+            ),
+        } as TrendsQueryResponse
+    }
     return {
         results: series.map((s, i) => {
-            const seriesOrder = s.compare || s.breakdown_value != null ? 0 : i
+            // Breakdown/compare rows carry their parent series' identity (event name and
+            // order), like the real runner. Plain rows keep their own label as the entity
+            // name so fixtures can model several distinct series under one canned event.
+            const isChildRow = s.compare || s.breakdown_value != null
+            const seriesOrder = isChildRow ? (s.seriesIndex ?? 0) : i
+            const entityName = (isChildRow ? s.eventName : undefined) ?? s.label
             return {
-                action: opts.isFormula
+                action: isFormula
                     ? null
                     : {
-                          id: `$${s.label.toLowerCase().replace(/\s+/g, '_')}`,
+                          id: `$${entityName.toLowerCase().replace(/\s+/g, '_')}`,
                           type: 'events',
-                          name: s.label,
+                          name: entityName,
                           order: seriesOrder,
                       },
-                order: opts.isFormula ? 0 : seriesOrder,
+                order: isFormula ? 0 : seriesOrder,
                 label: s.label,
                 count: s.data.reduce((a, b) => a + b, 0),
                 aggregated_value: s.data.reduce((a, b) => a + b, 0),
@@ -115,12 +150,16 @@ function buildStickinessResponse(series: SeriesData[]): TrendsQueryResponse {
     return {
         results: series.map((s, i) => {
             const buckets = s.data.length
+            // Compare current/previous and breakdown rows share their series' identity, mirroring the real runner.
+            const isChildRow = s.compare || s.breakdown_value != null
+            const seriesOrder = isChildRow ? (s.seriesIndex ?? 0) : i
+            const entityName = (isChildRow ? s.eventName : undefined) ?? s.label
             return {
                 action: {
-                    id: `$${s.label.toLowerCase().replace(/\s+/g, '_')}`,
+                    id: `$${entityName.toLowerCase().replace(/\s+/g, '_')}`,
                     type: 'events',
-                    name: s.label,
-                    order: i,
+                    name: entityName,
+                    order: seriesOrder,
                 },
                 label: s.label,
                 count: s.data.reduce((a, b) => a + b, 0),
@@ -129,6 +168,8 @@ function buildStickinessResponse(series: SeriesData[]): TrendsQueryResponse {
                 labels: Array.from({ length: buckets }, (_, j) => `${j + 1} day${j === 0 ? '' : 's'}`),
                 days: Array.from({ length: buckets }, (_, j) => j + 1),
                 breakdown_value: s.breakdown_value,
+                compare: s.compare,
+                compare_label: s.compare_label,
             }
         }),
     } as TrendsQueryResponse
@@ -190,15 +231,15 @@ function resolveSeriesData(query: QueryBody): SeriesData[] {
     const breakdownProp = query.breakdownFilter?.breakdowns?.[0]?.property ?? query.breakdownFilter?.breakdown ?? null
     const isCompare = !!(query as Record<string, unknown>).compareFilter
 
-    return (query.series ?? []).flatMap((s) => {
+    return (query.series ?? []).flatMap((s, seriesIndex) => {
         const eventName = s.event ?? s.name ?? 'Unknown'
         if (isCompare) {
             const compareSeries = lookupCompareSeries(eventName)
             if (compareSeries) {
-                return compareSeries
+                return compareSeries.map((row) => ({ ...row, seriesIndex, eventName }))
             }
         }
-        return lookupSeries(eventName, breakdownProp ?? undefined)
+        return lookupSeries(eventName, breakdownProp ?? undefined).map((row) => ({ ...row, seriesIndex, eventName }))
     })
 }
 
@@ -239,7 +280,7 @@ export function setupInsightMocks({
     const defaults: MockResponse[] = [
         {
             match: (query) => query.kind === NodeKind.TrendsQuery,
-            response: (query) => buildTrendsResponse(resolveSeriesData(query), { isFormula: hasFormula(query) }),
+            response: (query) => buildTrendsResponse(resolveSeriesData(query), { formulaLabels: formulaLabels(query) }),
         },
         {
             match: (query) => query.kind === NodeKind.StickinessQuery,
@@ -261,23 +302,24 @@ export function setupInsightMocks({
     ]
     const responses: MockResponse[] = mockResponses ?? [...(additionalMockResponses ?? []), ...defaults]
 
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- useMocks is an MSW test helper, not a React hook
     useMocks({
         get: {
-            '/api/projects/:team/event_definitions': (req: RestRequest) => {
-                const search = req.url.searchParams.get('search') ?? ''
+            '/api/projects/:team/event_definitions': ({ request }) => {
+                const search = new URL(request.url).searchParams.get('search') ?? ''
                 const results = filterBySearch(eventDefs, search)
                 return [200, { results, count: results.length }]
             },
-            '/api/projects/:team/property_definitions': (req: RestRequest) => {
-                const search = req.url.searchParams.get('search') ?? ''
+            '/api/projects/:team/property_definitions': ({ request }) => {
+                const search = new URL(request.url).searchParams.get('search') ?? ''
                 const results = filterBySearch(propDefs, search)
                 return [200, { results, count: results.length }]
             },
             '/api/projects/:team/actions': { results: actionDefinitions },
             '/api/environments/:team/persons/properties': personProperties,
             '/api/environments/:team/sessions/property_definitions': { results: sessionPropertyDefinitions },
-            '/api/environments/:team/events/values': (req: RestRequest) => {
-                const key = req.url.searchParams.get('key') ?? ''
+            '/api/environments/:team/events/values': ({ request }) => {
+                const key = new URL(request.url).searchParams.get('key') ?? ''
                 const values = (propValues[key] ?? []).map((name) => ({ name }))
                 return [200, values]
             },
@@ -295,8 +337,8 @@ export function setupInsightMocks({
             },
         },
         post: {
-            '/api/environments/:team_id/query/:kind': (req: RestRequest) => {
-                const queryBody = extractQueryBody(req.body)
+            '/api/environments/:team_id/query/:kind': async ({ request }) => {
+                const queryBody = extractQueryBody(await request.json())
 
                 for (const mock of responses) {
                     if (mock.match(queryBody)) {

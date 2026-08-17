@@ -1,3 +1,4 @@
+import clsx from 'clsx'
 import { useActions, useValues } from 'kea'
 import { useEffect } from 'react'
 
@@ -12,11 +13,14 @@ import { TeamMembershipLevel } from 'lib/constants'
 import { dayjs } from 'lib/dayjs'
 import { GitHubRepoSummary } from 'lib/integrations/GitHubRepoSummary'
 import { IntegrationScopesWarning } from 'lib/integrations/IntegrationScopesWarning'
+import { eventUsageLogic } from 'lib/utils/eventUsageLogic'
+import { teamLogic } from 'scenes/teamLogic'
+import { urls } from 'scenes/urls'
 
 import { IntegrationType } from '~/types'
 
 import { integrationsLogic } from './integrationsLogic'
-import { getIntegrationNameFromKind } from './utils'
+import { DARK_MODE_INVERT_ICON_KINDS, getIntegrationNameFromKind } from './utils'
 
 export function IntegrationView({
     integration,
@@ -28,6 +32,8 @@ export function IntegrationView({
     schema?: { requiredScopes?: string }
 }): JSX.Element {
     const { deleteIntegration } = useActions(integrationsLogic)
+    const { reportIntegrationConnectClicked } = useActions(eventUsageLogic)
+    const { currentTeam } = useValues(teamLogic)
     const restrictedReason = useRestrictedArea({
         scope: RestrictionScope.Project,
         minimumAccessLevel: TeamMembershipLevel.Admin,
@@ -71,7 +77,10 @@ export function IntegrationView({
                         src={integration.icon_url}
                         alt={`Integration for ${integrationName}`}
                         title={integrationName}
-                        className="w-10 h-10 rounded"
+                        className={clsx(
+                            'w-10 h-10 rounded',
+                            DARK_MODE_INVERT_ICON_KINDS.has(integration.kind) && 'dark:invert'
+                        )}
                     />
                     <div>
                         <div className="flex gap-2">
@@ -109,6 +118,22 @@ export function IntegrationView({
                                 installationId={integration.config?.installation_id}
                                 accountType={integration.config?.account?.type}
                                 accountName={integration.config?.account?.name}
+                                onBeforeManage={
+                                    currentTeam?.id
+                                        ? async () => {
+                                              await api.create(
+                                                  `api/projects/${currentTeam.id}/integrations/github/prepare_callback/`,
+                                                  {
+                                                      next: urls.project(
+                                                          currentTeam.id,
+                                                          urls.settings('project-integrations')
+                                                      ),
+                                                      installation_id: integration.config?.installation_id,
+                                                  }
+                                              )
+                                          }
+                                        : undefined
+                                }
                             />
                         )}
                     </div>
@@ -128,6 +153,12 @@ export function IntegrationView({
                                 kind: integration.kind,
                                 next: window.location.pathname,
                             }),
+                            onClick: () =>
+                                reportIntegrationConnectClicked(
+                                    integration.kind,
+                                    integration.kind,
+                                    'error_banner_reconnect'
+                                ),
                             disabledReason: restrictedReason,
                         }}
                     >

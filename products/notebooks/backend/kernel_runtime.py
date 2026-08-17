@@ -23,7 +23,7 @@ from posthog.models import Team, User
 from posthog.redis import get_client
 
 from products.notebooks.backend.models import KernelRuntime, Notebook
-from products.tasks.backend.services.sandbox import (
+from products.tasks.backend.facade.sandbox import (
     SandboxBase,
     SandboxClass,
     SandboxConfig,
@@ -33,6 +33,12 @@ from products.tasks.backend.services.sandbox import (
 )
 
 logger = structlog.get_logger(__name__)
+
+# Hard lifetime of a notebook kernel sandbox, used when the notebook sets no
+# `kernel_idle_timeout_seconds`. A kernel serves one interactive session, so nobody waits on it
+# once the tab closes and this TTL is what reclaims it. The task-agent default
+# (`SANDBOX_TTL_SECONDS`) is longer because it has to outlast an unattended agent run.
+NOTEBOOK_KERNEL_TTL_SECONDS = 1 * 60 * 60
 
 
 @dataclass
@@ -234,6 +240,7 @@ def build_notebook_sandbox_config(notebook: Notebook) -> SandboxConfig:
         template=SandboxTemplate.NOTEBOOK_BASE,
         cpu_cores=1,
         memory_gb=2,
+        ttl_seconds=NOTEBOOK_KERNEL_TTL_SECONDS,
     )
     if notebook.kernel_cpu_cores:
         sandbox_config.cpu_cores = notebook.kernel_cpu_cores
@@ -552,7 +559,9 @@ class KernelRuntimeService:
         else:
             try:
                 placeholders = self._parse_hogql_placeholders_payload(placeholders_payload)
-                response = execute_hogql_query(query=query, team=team, placeholders=placeholders)
+                response = execute_hogql_query(
+                    query=query, team=team, placeholders=placeholders, user=handle.runtime.user
+                )
                 if hasattr(response, "model_dump"):
                     response_payload = response.model_dump(exclude_none=True)
                 else:
@@ -708,7 +717,7 @@ class KernelRuntimeService:
         if handle.backend in (KernelRuntime.Backend.MODAL, KernelRuntime.Backend.DOCKER):
             if not handle.sandbox_id:
                 return False
-            from products.tasks.backend.services.sandbox import SandboxStatus
+            from products.tasks.backend.facade.sandbox import SandboxStatus
 
             try:
                 sandbox_class = self._get_sandbox_class(handle.backend)
@@ -771,7 +780,12 @@ class KernelRuntimeService:
         kernel_id = f"kernel-{runtime.id}"
         sandbox_config = build_notebook_sandbox_config(notebook)
         sandbox_class = self._get_sandbox_class(backend)
-        sandbox = sandbox_class.create(sandbox_config)
+        try:
+            sandbox = sandbox_class.create(sandbox_config)
+        except Exception as err:
+            detail = getattr(err, "context", None) or str(err)
+            self._mark_runtime_error(runtime, f"Failed to provision sandbox: {detail}")
+            raise
 
         try:
             kernel_pid = self._start_kernel_process(sandbox, connection_file)

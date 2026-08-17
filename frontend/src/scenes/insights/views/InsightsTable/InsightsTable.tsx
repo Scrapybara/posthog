@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { LemonTable, LemonTableColumn } from 'lib/lemon-ui/LemonTable'
-import { COUNTRY_CODE_TO_LONG_NAME } from 'lib/utils/geography/country'
+import { COUNTRY_CODE_TO_LONG_NAME } from 'lib/utils/country'
 import { formatAggregationAxisValue } from 'scenes/insights/aggregationAxisFormat'
 import { insightLogic } from 'scenes/insights/insightLogic'
 import { formatBreakdownLabel } from 'scenes/insights/utils'
@@ -30,7 +30,7 @@ import {
 import { BreakdownColumnItem, BreakdownColumnTitle, MultipleBreakdownColumnTitle } from './columns/BreakdownColumn'
 import { ColorCustomizationColumnItem, ColorCustomizationColumnTitle } from './columns/ColorCustomizationColumn'
 import { SeriesCheckColumnItem, SeriesCheckColumnTitle } from './columns/SeriesCheckColumn'
-import { SeriesColumnItem } from './columns/SeriesColumn'
+import { SeriesColumnItem, formatCompareLabel } from './columns/SeriesColumn'
 import { ValueColumnItem, ValueColumnTitle } from './columns/ValueColumn'
 import { WorldMapColumnItem, WorldMapColumnTitle } from './columns/WorldMapColumn'
 import { AggregationType, insightsTableDataLogic } from './insightsTableDataLogic'
@@ -154,7 +154,7 @@ export function InsightsTable({
 
     columns.push({
         title: (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 min-w-0">
                 {hasCheckboxes && (
                     <SeriesCheckColumnTitle
                         indexedResults={indexedResults}
@@ -185,6 +185,10 @@ export function InsightsTable({
                     item={item}
                     formatItemBreakdownLabel={formatItemBreakdownLabel!}
                     breakdownFilter={breakdownFilter}
+                    compareValue={
+                        // Formula results synthesized from filler rows can carry compare_label without compare
+                        (item.compare || item.compare_label) && !isCompareTable ? formatCompareLabel(item) : undefined
+                    }
                 />
             ) : (
                 <SeriesColumnItem

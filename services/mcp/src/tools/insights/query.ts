@@ -1,5 +1,6 @@
 import type { z } from 'zod'
 
+import type { AccessControlFilterWarning, DataWarehouseSyncWarning } from '@/api/client'
 import { withUiApp } from '@/resources/ui-apps'
 import type { Insight } from '@/schema/insights'
 import { InsightQueryInputSchema } from '@/schema/tool-inputs'
@@ -16,6 +17,7 @@ type Result = WithPostHogUrl<{
     query: unknown
     insight: Insight & { url: string }
     results: unknown
+    warnings?: (DataWarehouseSyncWarning | AccessControlFilterWarning)[] | null
     [POSTHOG_FORMATTED_RESULTS_OVERRIDE_KEY]?: string
 }>
 
@@ -42,6 +44,9 @@ export const queryHandler: ToolBase<typeof schema, Result>['handler'] = async (c
     const { insightId, output_format, variables_override, filters_override } = params
     const projectId = await context.stateManager.getProjectId()
 
+    const normalizedVariables = normalizeOverride(variables_override)
+    const normalizedFilters = normalizeOverride(filters_override)
+
     // Threading overrides through the .get() call lets the Django retrieve endpoint
     // merge them server-side (via apply_dashboard_variables_to_dict /
     // apply_dashboard_filters_to_dict). The merged query is then POSTed to /query/
@@ -49,8 +54,8 @@ export const queryHandler: ToolBase<typeof schema, Result>['handler'] = async (c
     // mutating the saved insight.
     const insightResult = await context.api.insights({ projectId }).get({
         insightId,
-        variables_override: normalizeOverride(variables_override),
-        filters_override: normalizeOverride(filters_override),
+        variables_override: normalizedVariables,
+        filters_override: normalizedFilters,
     })
 
     if (!insightResult.success) {
@@ -65,20 +70,33 @@ export const queryHandler: ToolBase<typeof schema, Result>['handler'] = async (c
         throw new Error(`Failed to query insight: ${queryResult.error.message}`)
     }
 
-    const path = `/insights/${insightResult.data.short_id}`
+    // Carry the overrides into the link as query params so opening the insight in
+    // the UI reflects the same filtered/variabled view that was rendered — matching
+    // the frontend's own `urls.insightView` encoding. Without this the link resolves
+    // to the bare saved insight and silently drops the overrides.
+    const overrideParams = [
+        { key: 'variables_override', value: normalizedVariables },
+        { key: 'filters_override', value: normalizedFilters },
+    ]
+        .filter((p): p is { key: string; value: string } => Boolean(p.value))
+        .map((p) => `${p.key}=${encodeURIComponent(p.value)}`)
+        .join('&')
+    const path = `/insights/${insightResult.data.short_id}${overrideParams ? `?${overrideParams}` : ''}`
     const fullUrl = `${context.api.getProjectBaseUrl(projectId)}${path}`
     const queryInfo = analyzeQuery(insightResult.data.query)
 
-    // Trends/funnel UI visualizers consume the raw results array; every other
-    // visualization (HogQL/table, retention, lifecycle, paths) expects the
-    // `{ columns, results }` shape the structural guards look for.
-    const isSeries = queryInfo.visualization === 'trends' || queryInfo.visualization === 'funnel'
-    const results = isSeries
-        ? queryResult.data.results
-        : {
+    // Only HogQL/table results carry a separate `columns` array, so they're the only
+    // shape the UI app wraps as `{ columns, results }`. Every chart visualizer
+    // (trends, funnel, retention, lifecycle, stickiness, paths) consumes the raw
+    // results array directly — wrapping those breaks the structural guards and renders
+    // an empty table.
+    const isTabular = queryInfo.visualization === 'table'
+    const results = isTabular
+        ? {
               columns: queryResult.data.columns || [],
               results: queryResult.data.results || [],
           }
+        : queryResult.data.results
 
     // Optimized output surfaces the server-formatted summary as the model-facing text, but the
     // UI app still needs the structured results in structuredContent. Carry the formatted string
@@ -95,6 +113,7 @@ export const queryHandler: ToolBase<typeof schema, Result>['handler'] = async (c
                 ...insightResult.data,
             },
             results,
+            ...(queryResult.data.warnings ? { warnings: queryResult.data.warnings } : {}),
             ...(surfaceFormatted
                 ? { [POSTHOG_FORMATTED_RESULTS_OVERRIDE_KEY]: queryResult.data.formatted_results }
                 : {}),

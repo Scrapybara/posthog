@@ -363,7 +363,7 @@ jobs:
     # Build and packages all the platform-specific things
     build-local-artifacts:
         name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
-        # Let the initial task tell us to not run (currently very blunt)
+        # Let the initial task tell us to not run (very blunt)
         needs:
             - release
             - plan-release
@@ -436,11 +436,16 @@ jobs:
                   ${{ matrix.packages_install }}
             - name: Setup pnpm
               uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+            - name: Fix node-gyp permissions
+              # This job also runs on the Windows runner, where the default
+              # shell is PowerShell and `find` resolves to Windows FIND.exe.
+              # Force bash (git-bash) so find/chmod are the Unix tools.
+              shell: bash
+              run: find ~/setup-pnpm -name gyp_main.py -exec chmod +x {} +
             - name: Setup Node.js
               uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
               with:
                   node-version-file: .nvmrc
-                  cache: 'pnpm'
             - name: Install API CLI dependencies
               run: pnpm --filter '@posthog/mcp...' install --frozen-lockfile
             - name: Build API CLI release bundle
@@ -522,11 +527,12 @@ jobs:
                   merge-multiple: true
             - name: Setup pnpm
               uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+            - name: Fix node-gyp permissions
+              run: find ~/setup-pnpm -name gyp_main.py -exec chmod +x {} +
             - name: Setup Node.js
               uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
               with:
                   node-version-file: .nvmrc
-                  cache: 'pnpm'
             - name: Install API CLI dependencies
               run: pnpm --filter '@posthog/mcp...' install --frozen-lockfile
             - name: Build API CLI release bundle
@@ -539,6 +545,8 @@ jobs:
               run: |
                   dist build ${{ needs.plan-release.outputs.tag-flag }} --output-format=json "--artifacts=global" > dist-manifest.json
                   echo "dist ran successfully"
+
+                  node .github/scripts/patch-cli-npm-installer.mjs target/distrib dist-manifest.json
 
                   # Parse out what we just built and upload it to scratch storage
                   echo "paths<<EOF" >> "$GITHUB_OUTPUT"

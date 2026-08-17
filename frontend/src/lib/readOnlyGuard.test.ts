@@ -100,9 +100,24 @@ describe('readOnlyGuard', () => {
                 ['AI conversation queue clear', 'POST', '/api/environments/2/conversations/abc-123/queue/clear'],
                 ['AI conversation append message', 'POST', '/api/environments/2/conversations/abc-123/append_message'],
                 ['AI conversation cancel', 'PATCH', '/api/environments/2/conversations/abc-123/cancel/'],
+                ['signals report viewed', 'POST', '/api/projects/2/signals/reports/abc-123/viewed/'],
+                [
+                    'signals report viewed with query string',
+                    'POST',
+                    '/api/projects/2/signals/reports/abc-123/viewed/?foo=bar',
+                ],
                 ['session replay export create', 'POST', '/api/environments/2/exports/'],
                 ['session replay export create (projects)', 'POST', '/api/projects/2/exports/'],
                 ['export create with query string', 'POST', '/api/environments/2/exports/?export_format=video/mp4'],
+                // markViewed PATCH /session_recordings/:id — passive view-tracking
+                // telemetry. DELETE on the same path is destructive and stays blocked
+                // (see the blocked-list below).
+                ['session recording markViewed', 'PATCH', '/api/environments/2/session_recordings/abc-123/'],
+                [
+                    'session recording markViewed with query string',
+                    'PATCH',
+                    '/api/environments/2/session_recordings/abc-123/?foo=bar',
+                ],
             ] as const)('lets %s through (%s %s)', (_label, method, url) => {
                 const notifier = jest.fn()
                 setReadOnlyNotifier(notifier)
@@ -119,6 +134,8 @@ describe('readOnlyGuard', () => {
                 ['insight non-viewed sub-action blocked', 'POST', '/api/environments/2/insights/123/viewed_by'],
                 ['insight non-timing sub-action blocked', 'POST', '/api/environments/2/insights/123/timing_breakdown'],
                 ['metalytics-like prefix blocked', 'POST', '/api/projects/2/metalyticsfoo/'],
+                // Only the passive viewed telemetry passes; rating a report is an active write.
+                ['signals report feedback blocked', 'POST', '/api/projects/2/signals/reports/abc-123/feedback/'],
                 ['ticket saved views write blocked', 'POST', '/api/environments/2/conversations/views/'],
                 [
                     'ticket saved views write blocked (no trailing slash)',
@@ -135,6 +152,12 @@ describe('readOnlyGuard', () => {
                 ['conversations-like prefix blocked', 'POST', '/api/environments/2/conversationsfoo/'],
                 ['export detail write blocked', 'DELETE', '/api/environments/2/exports/123/'],
                 ['exports-like prefix blocked', 'POST', '/api/environments/2/exportsfoo/'],
+                // /session_recordings/:id allows PATCH only — DELETE is the destructive
+                // recording-delete endpoint and must stay blocked. POST/PUT are not
+                // used by markViewed either and stay blocked as defense in depth.
+                ['session recording DELETE blocked', 'DELETE', '/api/environments/2/session_recordings/abc-123/'],
+                ['session recording POST blocked', 'POST', '/api/environments/2/session_recordings/abc-123/'],
+                ['session recording PUT blocked', 'PUT', '/api/environments/2/session_recordings/abc-123/'],
             ] as const)('still blocks %s (%s %s) — only allowlisted paths pass', (_l, method, url) => {
                 expect(() => assertNotReadOnly(method, url)).toThrow(ReadOnlyModeError)
             })

@@ -9,7 +9,8 @@
 import { fireEvent } from '@testing-library/react'
 
 import type { TooltipContext } from '../core/types'
-import { dimensions } from './jsdom'
+import { dragSelection } from './interactions'
+import { clientForIndex } from './jsdom'
 import { type HogChartTooltip, waitForHogChartTooltip } from './tooltip'
 
 /** A single entry of `TooltipContext.seriesData`. */
@@ -62,6 +63,8 @@ interface SlopeLegendItemSummary {
 export interface HogChart<Meta = unknown> {
     /** The wrapper div of this chart. */
     element: HTMLElement
+    /** The static (data) canvas, as opposed to the `aria-hidden` hover overlay. */
+    canvas: HTMLCanvasElement
     /** Number of non-excluded data series rendered (read from the chart's aria-label). */
     seriesCount: number
     /** Visible y-axis tick labels (left axis). */
@@ -97,6 +100,7 @@ export interface HogChart<Meta = unknown> {
     /** Hover at the index, wait for the tooltip to settle, then click. Mirrors the
      *  hover-then-click sequence the chart's onClick handler relies on. */
     clickAtIndex(index: number): Promise<void>
+    dragSelection(fromIndex: number, toIndex: number): void
     /** Wait for the tooltip to mount, then return a snapshot — every `TooltipContext` field
      *  plus the rendered portal element and an `isPinned` getter. Only available when the
      *  chart was rendered via `renderHogChart`; throws otherwise. */
@@ -150,14 +154,6 @@ function readReferenceLine(el: HTMLElement): ReferenceLineSummary {
     return { color, orientation, position, label }
 }
 
-function clientForIndex(totalLabels: number, index: number): { clientX: number; clientY: number } {
-    const step = dimensions.plotWidth / Math.max(1, totalLabels - 1)
-    return {
-        clientX: dimensions.plotLeft + step * index,
-        clientY: dimensions.plotTop + dimensions.plotHeight / 2,
-    }
-}
-
 export function getHogChart<Meta = unknown>(
     scope: HTMLElement = document.body,
     options: GetHogChartOptions<Meta> = {}
@@ -181,6 +177,7 @@ export function getHogChart<Meta = unknown>(
 
     return {
         element: wrapper,
+        canvas,
         seriesCount,
         get hasRightAxis(): boolean {
             return wrapper.querySelectorAll('[data-attr="hog-chart-axis-tick-yr"]').length > 0
@@ -250,17 +247,23 @@ export function getHogChart<Meta = unknown>(
             if (totalLabels === undefined) {
                 throw new Error('chart.hoverAtIndex requires renderHogChart (which captures labels.length)')
             }
-            fireEvent.mouseMove(wrapper, clientForIndex(totalLabels, index))
+            fireEvent.mouseMove(wrapper, clientForIndex(index, totalLabels))
         },
         async clickAtIndex(index: number): Promise<void> {
             if (totalLabels === undefined) {
                 throw new Error('chart.clickAtIndex requires renderHogChart (which captures labels.length)')
             }
-            fireEvent.mouseMove(wrapper, clientForIndex(totalLabels, index))
+            fireEvent.mouseMove(wrapper, clientForIndex(index, totalLabels))
             // Wait for the hover state to flush — the click handler reads live tooltipCtx
             // synchronously to choose between pinning and onPointClick.
             await waitForHogChartTooltip()
             fireEvent.click(wrapper)
+        },
+        dragSelection(fromIndex: number, toIndex: number): void {
+            if (totalLabels === undefined) {
+                throw new Error('chart.dragSelection requires renderHogChart (which captures labels.length)')
+            }
+            dragSelection(wrapper, fromIndex, toIndex, totalLabels)
         },
         async waitForTooltip(timeout?: number): Promise<TooltipSnapshot<Meta>> {
             const element = await waitForHogChartTooltip(timeout)

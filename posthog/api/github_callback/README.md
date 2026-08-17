@@ -77,13 +77,37 @@ newlines. `GITHUB_APP_SLUG` and `GITHUB_WEBHOOK_SECRET` are instance settings
 Env vars alone create nothing — you must complete the install flow:
 
 1. Start the stack via `bin/start` / `hogli start`.
-2. Go to `http://localhost:8010/project/<id>/settings/project-integrations`.
+2. Go to `http://localhost:8010/project/<id>/integrations/github`.
 3. Connect **GitHub Integration** → you're sent to
    `github.com/apps/<slug>/installations/new`.
 4. Install the App on the account/org that owns your target repos.
 5. GitHub returns you to `/integrations/github/callback` with `installation_id`
    - `code`; the frontend POSTs them and the `Integration(kind="github")` row is
      created (and the repository cache begins syncing).
+
+### Connecting a second project to the same org
+
+A GitHub App installs **once per org**, so a second PostHog project in the same
+org can't reinstall it: GitHub shows "already configured" and may not redirect
+back with a fresh `code`. For that case the GitHub integration settings expose a
+**Link existing installation** button (`GithubIntegration` in
+`Integrations.tsx`), which POSTs to `integrations/github/link_existing`
+(`link_existing_team_github_integration`) and reuses the org's existing
+installation without the install redirect. A team admin can link without a
+personal GitHub OAuth link; non-admins still need one as an ownership proof (see
+`authorize_link_existing_installation`).
+
+The same endpoint also **adopts orphan installations**: ones installed on
+GitHub (e.g. an install request approved by a GitHub org admin directly on
+github.com, which never round-trips the setup callback) but not linked to any
+PostHog team. `github/available_installations` surfaces them from the user's
+personal `GET /user/installations`. Adoption (`adopt_orphan_installation`)
+requires both PostHog project admin — a new installation entering the org is
+held to the setup callback's first-time-connect bar, since adoption has no
+GitHub-side gate on who submits the installation id — and the personal-token
+access proof. Sibling reuse stays member-grade with proof. An installation
+linked solely to projects the caller can't access is refused, not offered for
+adoption.
 
 ## Callback routes
 

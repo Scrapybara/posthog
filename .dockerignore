@@ -13,6 +13,7 @@
 !common/plugin_transpiler/src
 !common/tailwind
 !packages/quill
+!packages/llm-normalizer
 !dags
 !docs/onboarding
 !ee
@@ -49,6 +50,16 @@
 !services/mcp/types.d.ts
 !services/mcp/worker-configuration.d.ts
 !services/mcp/public
+!packages/quill
+services/agent-*/node_modules
+services/agent-*/dist
+services/agent-*/.next
+!services/agent-proxy
+!services/agent-proxy/package.json
+!services/agent-proxy/tsconfig.json
+!services/agent-proxy/scripts
+!services/agent-proxy/src
+!services/agent-proxy/types.d.ts
 !pnpm-lock.yaml
 !pnpm-workspace.yaml
 !pyproject.toml
@@ -64,6 +75,8 @@
 !tailwind.config.js
 !tools/hogli
 !tools/openapi-codegen
+!tools/owners
+!tools/pr-approval-agent
 !tsconfig.json
 !unit.json.tpl
 common/*/*/node_modules
@@ -72,12 +85,29 @@ common/*/*/dist
 common/*/dist
 packages/quill/**/node_modules
 packages/quill/**/dist
+packages/llm-normalizer/**/node_modules
+packages/llm-normalizer/**/dist
 products/**/node_modules
+# Nested standalone workspace, not imported by any server image; `!products` above
+# would otherwise pull ~56 MiB of desktop assets into every image build context.
+products/desktop
 nodejs/node_modules
+# The image-scrub sidecar is a standalone package nested in nodejs/src; keep its deps and (Stage-2) model
+# artifacts out of the plugin-server build context.
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/node_modules
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/models
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/corpus
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/test-data
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/out
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/tmp
+nodejs/src/ingestion/pipelines/sessionreplay/ml-mirror-image-scrub-sidecar/*.traineddata
 services/mcp/node_modules
 services/mcp/dist
 services/mcp/.wrangler
 services/mcp/tests
+services/agent-proxy/node_modules
+services/agent-proxy/dist
+services/agent-proxy/tests
 ee/**/node_modules
 docs/**/node_modules
 **/__pycache__

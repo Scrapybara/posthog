@@ -6,6 +6,7 @@ import structlog
 from posthog.schema import (
     CachedWebNotableChangesQueryResponse,
     HogQLQueryModifiers,
+    WebAnalyticsPreComputeStrategy,
     WebNotableChangeItem,
     WebNotableChangesQuery,
     WebNotableChangesQueryResponse,
@@ -13,11 +14,11 @@ from posthog.schema import (
 
 from posthog.hogql import ast
 from posthog.hogql.database.schema.channel_type import wrap_with_null_if_empty
-from posthog.hogql.property import property_to_expr
 from posthog.hogql.query import execute_hogql_query
 
 from products.web_analytics.backend.hogql_queries.pre_aggregated.properties import STATS_TABLE_SUPPORTED_FILTERS
 from products.web_analytics.backend.hogql_queries.pre_aggregated.query_builder import (
+    PeriodFilters,
     WebAnalyticsPreAggregatedQueryBuilder,
 )
 from products.web_analytics.backend.hogql_queries.web_analytics_query_runner import WebAnalyticsQueryRunner
@@ -63,7 +64,7 @@ class WebNotableChangesQueryRunner(WebAnalyticsQueryRunner[WebNotableChangesQuer
         pre_agg_response = self._get_pre_aggregated_response()
         if pre_agg_response is not None:
             response = pre_agg_response
-            used_preagg = True
+            strategy = WebAnalyticsPreComputeStrategy.PRE_AGGREGATED
         else:
             response = execute_hogql_query(
                 query_type="web_notable_changes_query",
@@ -74,14 +75,13 @@ class WebNotableChangesQueryRunner(WebAnalyticsQueryRunner[WebNotableChangesQuer
                 modifiers=self.modifiers,
                 limit_context=self.limit_context,
             )
-            used_preagg = False
+            strategy = WebAnalyticsPreComputeStrategy.LIVE
 
         if not response.results:
             return WebNotableChangesQueryResponse(
                 results=[],
-                samplingRate=self._sample_rate,
                 modifiers=self.modifiers,
-                usedPreAggregatedTables=used_preagg,
+                preComputeStrategy=strategy,
             )
 
         scored_items = self._score_results(response.results)
@@ -90,9 +90,8 @@ class WebNotableChangesQueryRunner(WebAnalyticsQueryRunner[WebNotableChangesQuer
 
         return WebNotableChangesQueryResponse(
             results=top_items,
-            samplingRate=self._sample_rate,
             modifiers=self.modifiers,
-            usedPreAggregatedTables=used_preagg,
+            preComputeStrategy=strategy,
         )
 
     def _get_pre_aggregated_response(self):
@@ -127,10 +126,7 @@ class WebNotableChangesQueryRunner(WebAnalyticsQueryRunner[WebNotableChangesQuer
             return None
 
     def _raw_events_query(self) -> Union[ast.SelectQuery, ast.SelectSetQuery]:
-        all_properties = property_to_expr(
-            [*self.query.properties, *self._test_account_filters],
-            team=self.team,
-        )
+        all_properties = self.all_properties()
         periods = self._periods_expression("timestamp")
         current_period = self._current_period_expression("start_timestamp")
         previous_period = self._previous_period_expression("start_timestamp")
@@ -252,12 +248,12 @@ class _NotableChangesPreAggregatedQueryBuilder(WebAnalyticsPreAggregatedQueryBui
         super().__init__(runner=runner, supported_props_filters=STATS_TABLE_SUPPORTED_FILTERS)
 
     def get_query(self) -> Union[ast.SelectQuery, ast.SelectSetQuery]:
-        previous_period_filter, current_period_filter = self.get_date_ranges()
+        period_filters = self.get_date_ranges()
         table_name = self.stats_table
 
         subqueries: list[ast.SelectQuery] = []
         for dim in DIMENSIONS:
-            subquery = self._build_dimension_subquery(dim, table_name, current_period_filter, previous_period_filter)
+            subquery = self._build_dimension_subquery(dim, table_name, period_filters=period_filters)
             subqueries.append(subquery)
 
         return ast.SelectSetQuery.create_from_queries(subqueries, "UNION ALL")
@@ -266,8 +262,8 @@ class _NotableChangesPreAggregatedQueryBuilder(WebAnalyticsPreAggregatedQueryBui
         self,
         dim: DimensionConfig,
         table_name: str,
-        current_period_filter: ast.Expr,
-        previous_period_filter: ast.Expr,
+        *,
+        period_filters: PeriodFilters,
     ) -> ast.SelectQuery:
         label = dim["label"]
 
@@ -286,11 +282,11 @@ class _NotableChangesPreAggregatedQueryBuilder(WebAnalyticsPreAggregatedQueryBui
 
         current_visitors = ast.Call(
             name="uniqMergeIf",
-            args=[ast.Field(chain=["persons_uniq_state"]), current_period_filter],
+            args=[ast.Field(chain=["persons_uniq_state"]), period_filters.current_period],
         )
         previous_visitors = ast.Call(
             name="uniqMergeIf",
-            args=[ast.Field(chain=["persons_uniq_state"]), previous_period_filter],
+            args=[ast.Field(chain=["persons_uniq_state"]), period_filters.previous_period],
         )
 
         filters = self._get_filters(table_name=table_name)

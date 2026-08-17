@@ -35,10 +35,9 @@ export interface _CompareFilterApi {
  * * `span_attribute` - span_attribute
  * * `span_resource_attribute` - span_resource_attribute
  */
-export type _SpanPropertyFilterTypeEnumApi =
-    (typeof _SpanPropertyFilterTypeEnumApi)[keyof typeof _SpanPropertyFilterTypeEnumApi]
+export type SpanPropertyTypeEnumApi = (typeof SpanPropertyTypeEnumApi)[keyof typeof SpanPropertyTypeEnumApi]
 
-export const _SpanPropertyFilterTypeEnumApi = {
+export const SpanPropertyTypeEnumApi = {
     Span: 'span',
     SpanAttribute: 'span_attribute',
     SpanResourceAttribute: 'span_resource_attribute',
@@ -49,6 +48,10 @@ export const _SpanPropertyFilterTypeEnumApi = {
  * * `is_not` - is_not
  * * `icontains` - icontains
  * * `not_icontains` - not_icontains
+ * * `starts_with` - starts_with
+ * * `not_starts_with` - not_starts_with
+ * * `ends_with` - ends_with
+ * * `not_ends_with` - not_ends_with
  * * `regex` - regex
  * * `not_regex` - not_regex
  * * `gt` - gt
@@ -64,6 +67,10 @@ export const _SpanPropertyFilterOperatorEnumApi = {
     IsNot: 'is_not',
     Icontains: 'icontains',
     NotIcontains: 'not_icontains',
+    StartsWith: 'starts_with',
+    NotStartsWith: 'not_starts_with',
+    EndsWith: 'ends_with',
+    NotEndsWith: 'not_ends_with',
     Regex: 'regex',
     NotRegex: 'not_regex',
     Gt: 'gt',
@@ -80,13 +87,17 @@ export interface _SpanPropertyFilterApi {
      * * `span` - span
      * * `span_attribute` - span_attribute
      * * `span_resource_attribute` - span_resource_attribute */
-    type: _SpanPropertyFilterTypeEnumApi
+    type: SpanPropertyTypeEnumApi
     /** Comparison operator.
      *
      * * `exact` - exact
      * * `is_not` - is_not
      * * `icontains` - icontains
      * * `not_icontains` - not_icontains
+     * * `starts_with` - starts_with
+     * * `not_starts_with` - not_starts_with
+     * * `ends_with` - ends_with
+     * * `not_ends_with` - not_ends_with
      * * `regex` - regex
      * * `not_regex` - not_regex
      * * `gt` - gt
@@ -107,6 +118,17 @@ export interface _TracingAggregationQueryBodyApi {
     serviceNames?: string[]
     /** Property filters applied to spans in both windows. */
     filterGroup?: _SpanPropertyFilterApi[]
+    /**
+     * Max rows to return, ordered by total_duration_nano DESC. Defaults to 100; hard max 5000. Keep this small to bound the response size — a high value on high-cardinality span names (e.g. untemplated URL paths) returns a very large payload. Prefer narrowing with `serviceNames`/`filterGroup` over raising the limit.
+     * @minimum 1
+     * @maximum 5000
+     */
+    limit?: number
+    /**
+     * Row offset for pagination. Combine with `limit` and the `next_offset` returned in the response to page through results beyond the first page.
+     * @minimum 0
+     */
+    offset?: number
 }
 
 export interface _TracingAggregationRequestApi {
@@ -114,16 +136,45 @@ export interface _TracingAggregationRequestApi {
     query: _TracingAggregationQueryBodyApi
 }
 
-/**
- * * `span_attribute` - span_attribute
- * * `span_resource_attribute` - span_resource_attribute
- */
-export type BreakdownTypeEnumApi = (typeof BreakdownTypeEnumApi)[keyof typeof BreakdownTypeEnumApi]
+export interface _AggregatedSpanRowApi {
+    /** Service that emitted the spans in this group. */
+    service_name: string
+    /** Span name (operation) for this group. */
+    name: string
+    /** Number of spans matched in this group. */
+    count: number
+    /** Sum of span durations in nanoseconds. */
+    total_duration_nano: number
+    /** Average span duration in nanoseconds. */
+    avg_duration_nano: number
+    /** Median span duration in nanoseconds. */
+    p50_duration_nano: number
+    /** 95th percentile span duration in nanoseconds. */
+    p95_duration_nano: number
+    /** 99th percentile span duration in nanoseconds. */
+    p99_duration_nano: number
+    /** 99.9th percentile span duration in nanoseconds. */
+    p999_duration_nano: number
+    /** Spans with OTel status code Error (status_code = 2). */
+    error_count: number
+}
 
-export const BreakdownTypeEnumApi = {
-    SpanAttribute: 'span_attribute',
-    SpanResourceAttribute: 'span_resource_attribute',
-} as const
+export interface _TracingAggregationResponseApi {
+    /** One row per (service_name, name) group, ordered by total_duration_nano descending. */
+    results: _AggregatedSpanRowApi[]
+    /**
+     * Rows for the comparison window when compareFilter.compare is true, else null.
+     * @nullable
+     */
+    compare: _AggregatedSpanRowApi[] | null
+    /** True when more rows exist beyond this page — page further with `next_offset`, or narrow the query. */
+    has_more: boolean
+    /**
+     * Offset to request the next page, or null when this is the last page.
+     * @nullable
+     */
+    next_offset: number | null
+}
 
 /**
  * * `count` - count
@@ -138,13 +189,18 @@ export const _TracingAttributeBreakdownQueryBodyOrderByEnumApi = {
 } as const
 
 export interface _TracingAttributeBreakdownQueryBodyApi {
-    /** Attribute key to group by (e.g. "server.address", "http.response.status_code"). Discover keys with apm-attributes-list. */
+    /** Attribute key to group by (e.g. "server.address", "http.response.status_code"). Discover keys with apm-attributes-list. For the "span" breakdown type, must be one of the allowlisted top-level columns: "service_name", "status_code". */
     breakdownKey: string
-    /** Where the key lives: "span_attribute" for span-level attributes, "span_resource_attribute" for resource-level attributes.
+    /** Where the key lives: "span" for allowlisted top-level span columns, "span_attribute" for span-level attributes, "span_resource_attribute" for resource-level attributes.
      *
+     * * `span` - span
      * * `span_attribute` - span_attribute
      * * `span_resource_attribute` - span_resource_attribute */
-    breakdownType: BreakdownTypeEnumApi
+    breakdownType: SpanPropertyTypeEnumApi
+    /** Drop filters targeting the breakdown key itself (including serviceNames for a service_name breakdown), so a facet's value list stays complete while one of its values is selected. */
+    excludeBreakdownFilter?: boolean
+    /** Type-ahead filter over the breakdown field's own values (case-insensitive substring match). An empty string means no filter. Lets a facet's value search reach past the row limit. */
+    facetSearch?: string
     /** Order rows by span count or error count, descending. Defaults to count.
      *
      * * `count` - count
@@ -163,6 +219,64 @@ export interface _TracingAttributeBreakdownQueryBodyApi {
 export interface _TracingAttributeBreakdownRequestApi {
     /** The attribute breakdown query to execute. */
     query: _TracingAttributeBreakdownQueryBodyApi
+}
+
+export interface _TracingAttributeBreakdownRowApi {
+    /** The attribute's value for this group. Spans without the attribute group under ''. */
+    value: string
+    /** Number of matching spans with this value. */
+    count: number
+    /** Number of matching error spans (status_code = 2). */
+    error_count: number
+    /** Median span duration in nanoseconds. */
+    p50_duration_nano: number
+    /** 95th percentile span duration in nanoseconds. */
+    p95_duration_nano: number
+}
+
+export interface _TracingAttributeBreakdownResponseApi {
+    /** One row per distinct attribute value, ordered by the requested column descending. */
+    results: _TracingAttributeBreakdownRowApi[]
+    /**
+     * Rows for the comparison window when compareFilter.compare is true, else null.
+     * @nullable
+     */
+    compare: _TracingAttributeBreakdownRowApi[] | null
+}
+
+/**
+ * * `key` - key
+ * * `value` - value
+ */
+export type MatchedOnEnumApi = (typeof MatchedOnEnumApi)[keyof typeof MatchedOnEnumApi]
+
+export const MatchedOnEnumApi = {
+    Key: 'key',
+    Value: 'value',
+} as const
+
+export interface _TracingAttributeEntryApi {
+    /** Attribute key name. */
+    name: string
+    /** Property filter type: "span_attribute" or "span_resource_attribute". Use this as the `type` field when filtering. */
+    propertyFilterType: string
+    /** How the search query matched this row: "key" if the attribute key matched, "value" if a value matched.
+     *
+     * * `key` - key
+     * * `value` - value */
+    matchedOn: MatchedOnEnumApi
+    /**
+     * Sample matching value — only set when matchedOn is "value".
+     * @nullable
+     */
+    matchedValue?: string | null
+}
+
+export interface _TracingAttributesResponseApi {
+    /** Available attribute keys matching the filters. */
+    results: _TracingAttributeEntryApi[]
+    /** Total attribute keys matched (lower bound when searching values). */
+    count: number
 }
 
 export interface _TracingCountBodyApi {
@@ -184,9 +298,11 @@ export interface _TracingCountRequestApi {
 export interface _TracingCountResponseApi {
     /** Number of spans matching the filters. */
     count: number
+    /** Number of distinct traces whose root span matches the filters — the trace count shown in the Traces view. */
+    traceCount: number
 }
 
-export interface _TracingTimeseriesQueryBodyApi {
+export interface _TracingDurationHistogramQueryBodyApi {
     /** Date range for the query. Defaults to last hour. */
     dateRange?: _TracingDateRangeApi
     /** Filter by service names. */
@@ -195,16 +311,37 @@ export interface _TracingTimeseriesQueryBodyApi {
     statusCodes?: number[]
     /** Property filters for the query. */
     filterGroup?: _SpanPropertyFilterApi[]
+    /** When true (default), bucket root-span durations only — a distribution of traces. When false, bucket every matching span — used with a span name filter for operation-scoped distributions. */
+    rootSpans?: boolean
 }
 
-export interface _TracingTimeseriesRequestApi {
-    /** The sparkline / duration-histogram query to execute. */
-    query: _TracingTimeseriesQueryBodyApi
+export interface _TracingDurationHistogramRequestApi {
+    /** The duration-histogram query to execute. */
+    query: _TracingDurationHistogramQueryBodyApi
 }
 
 export interface _HasSpansResponseApi {
     /** Whether the team has ingested any tracing spans yet. Used to gate the onboarding empty state. */
     hasSpans: boolean
+}
+
+export interface _TracingLatencyHeatmapRequestApi {
+    /** The latency-heatmap query to execute. */
+    query: _TracingDurationHistogramQueryBodyApi
+}
+
+export interface _TracingLatencyHeatmapCellApi {
+    /** ISO 8601 UTC start of the time bucket. */
+    time: string
+    /** Lower edge of the 1-2-5 series duration bucket in nanoseconds (1ms, 2ms, 5ms, 10ms, ...). 0 on the sentinel row that enumerates a time bucket with no matching spans. */
+    bucket_ns: number
+    /** Traces in this cell, bucketed by root-span duration (the default, rootSpans=true). When rootSpans is false, every matching span is counted instead. 0 only on sentinel rows. */
+    count: number
+}
+
+export interface _TracingLatencyHeatmapResponseApi {
+    /** Sparse heatmap cells ordered by time then duration bucket. Every time bucket in the window appears in at least one row, so the full x axis can be derived from the response. */
+    results: _TracingLatencyHeatmapCellApi[]
 }
 
 /**
@@ -275,11 +412,157 @@ export interface _TracingQueryRequestApi {
     query: _TracingQueryBodyApi
 }
 
+export interface _TracingSparklineQueryBodyApi {
+    /** Date range for the query. Defaults to last hour. */
+    dateRange?: _TracingDateRangeApi
+    /** Filter by service names. */
+    serviceNames?: string[]
+    /** Filter by OTel span status codes (0 Unset, 1 OK, 2 Error) — not HTTP status codes. Use [2] to select error spans. */
+    statusCodes?: number[]
+    /** Property filters for the query. */
+    filterGroup?: _SpanPropertyFilterApi[]
+    /** When true, count only root spans (one per trace) so the bars reflect the Traces view. When false (default), count every matching span — the Spans view's volume. */
+    rootSpans?: boolean
+}
+
+export interface _TracingSparklineRequestApi {
+    /** The sparkline query to execute. */
+    query: _TracingSparklineQueryBodyApi
+}
+
+export interface _SymbolStatsSymbolApi {
+    /**
+     * Opaque identifier (e.g. the function name) echoed back on the matching result row.
+     * @nullable
+     */
+    name?: string | null
+    /**
+     * First line of the symbol's range, inclusive.
+     * @minimum 1
+     */
+    startLine: number
+    /**
+     * Last line of the symbol's range, inclusive.
+     * @minimum 1
+     */
+    endLine: number
+}
+
+export interface _SymbolStatsQueryBodyApi {
+    /** Repo-relative path of the source file to aggregate (e.g. 'src/flags/flag_matching.rs'). Matched as a path suffix against the recorded OTel code.file.path / code.filepath, so a recorded path carrying an extra crate/workspace prefix still matches. Separators are normalized. */
+    filePath: string
+    /** Current period to aggregate over; the prior equal-length window is the comparison. Defaults to last 24h. */
+    dateRange?: _TracingDateRangeApi
+    /** Optional symbol (function) line ranges, supplied by the client from its own AST/LSP. When given, each span is attributed to the smallest enclosing range (one row per symbol). When omitted (or an empty list), spans are aggregated per source line (one row per line); pass a single whole-file range for a file-level total. */
+    symbols?: _SymbolStatsSymbolApi[]
+}
+
+export interface _SymbolStatsRequestApi {
+    /** The symbol-stats per-symbol aggregation query to execute. */
+    query: _SymbolStatsQueryBodyApi
+}
+
+export interface _SymbolStatsPeriodApi {
+    /** Number of spans attributed to this symbol in the period. */
+    count: number
+    /** Spans whose OTel status is Error (status_code = 2). */
+    error_count: number
+    /** Total wall-clock span duration in the period, in nanoseconds (additive across spans). */
+    sum_duration_nano: number
+    /** Median wall-clock span duration, in nanoseconds. */
+    p50_duration_nano: number
+    /** 95th-percentile wall-clock span duration, in nanoseconds. */
+    p95_duration_nano: number
+    /** 99th-percentile wall-clock span duration, in nanoseconds. */
+    p99_duration_nano: number
+    /** Spans in the period carrying an active/busy time attribute. 0 means busy_* are not meaningful. */
+    busy_count: number
+    /** Median active (busy) time, in nanoseconds. Excludes awaiting children. */
+    p50_busy_nano: number
+    /** 95th-percentile active (busy) time, in nanoseconds. */
+    p95_busy_nano: number
+    /** 99th-percentile active (busy) time, in nanoseconds. */
+    p99_busy_nano: number
+}
+
+export interface _SymbolStatsRowApi {
+    /** Number of spans attributed to this symbol in the period. */
+    count: number
+    /** Spans whose OTel status is Error (status_code = 2). */
+    error_count: number
+    /** Total wall-clock span duration in the period, in nanoseconds (additive across spans). */
+    sum_duration_nano: number
+    /** Median wall-clock span duration, in nanoseconds. */
+    p50_duration_nano: number
+    /** 95th-percentile wall-clock span duration, in nanoseconds. */
+    p95_duration_nano: number
+    /** 99th-percentile wall-clock span duration, in nanoseconds. */
+    p99_duration_nano: number
+    /** Spans in the period carrying an active/busy time attribute. 0 means busy_* are not meaningful. */
+    busy_count: number
+    /** Median active (busy) time, in nanoseconds. Excludes awaiting children. */
+    p50_busy_nano: number
+    /** 95th-percentile active (busy) time, in nanoseconds. */
+    p95_busy_nano: number
+    /** 99th-percentile active (busy) time, in nanoseconds. */
+    p99_busy_nano: number
+    /** Bucket anchor: the source line (line mode) or the symbol's startLine (symbol mode). */
+    line: number
+    /**
+     * Echoed name from the requested symbol (symbol mode only).
+     * @nullable
+     */
+    name?: string | null
+    /**
+     * endLine of the matched symbol's range (symbol mode only).
+     * @nullable
+     */
+    end_line?: number | null
+    /** The same metrics over the immediately-preceding equal-length period. */
+    previous: _SymbolStatsPeriodApi
+    /**
+     * Percentage change in count vs the previous period (180 = +180%). Null when there is no baseline (previous count 0). Use `previous.count` — not a null here — to detect a new symbol.
+     * @nullable
+     */
+    count_pct_change: number | null
+    /**
+     * Percentage change in p95 duration vs the previous period (180 = +180%). Null when the previous p95 is 0 (no comparable baseline), which can occur even when previous.count > 0 — do not read null as 'new symbol'.
+     * @nullable
+     */
+    p95_duration_pct_change: number | null
+}
+
+/**
+ * * `line` - line
+ * * `symbol` - symbol
+ */
+export type GranularityEnumApi = (typeof GranularityEnumApi)[keyof typeof GranularityEnumApi]
+
+export const GranularityEnumApi = {
+    Line: 'line',
+    Symbol: 'symbol',
+} as const
+
+export interface _SymbolStatsResponseApi {
+    /** One row per bucket, ordered by line ascending. */
+    results: _SymbolStatsRowApi[]
+    /** Bucketing applied: 'line' when no symbols were supplied, 'symbol' otherwise.
+     *
+     * * `line` - line
+     * * `symbol` - symbol */
+    granularity: GranularityEnumApi
+}
+
 export interface _TracingTraceRequestApi {
     /** Date range for the query. Defaults to last 24 hours. */
     dateRange?: _TracingDateRangeApi
     /** Omit the per-span attributes and resource attributes maps from results to keep payloads compact. Defaults to false. */
     excludeAttributes?: boolean
+    /**
+     * Pagination offset into the trace's spans (ordered by start time ascending). Each page returns up to 2000 spans; pass the response's `nextOffset` to load the next page. Defaults to 0.
+     * @minimum 0
+     */
+    offset?: number
 }
 
 export interface _TracingTreeQueryBodyApi {
@@ -300,6 +583,120 @@ export interface _TracingTreeQueryBodyApi {
 export interface _TracingTreeRequestApi {
     /** The span call-tree aggregation query to execute. */
     query: _TracingTreeQueryBodyApi
+}
+
+/**
+ * * `engineering` - Engineering
+ * * `data` - Data
+ * * `product` - Product Management
+ * * `founder` - Founder
+ * * `leadership` - Leadership
+ * * `marketing` - Marketing
+ * * `sales` - Sales / Success
+ * * `student` - Student
+ * * `other` - Other
+ */
+export type RoleAtOrganizationEnumApi = (typeof RoleAtOrganizationEnumApi)[keyof typeof RoleAtOrganizationEnumApi]
+
+export const RoleAtOrganizationEnumApi = {
+    Engineering: 'engineering',
+    Data: 'data',
+    Product: 'product',
+    Founder: 'founder',
+    Leadership: 'leadership',
+    Marketing: 'marketing',
+    Sales: 'sales',
+    Student: 'student',
+    Other: 'other',
+} as const
+
+export type BlankEnumApi = (typeof BlankEnumApi)[keyof typeof BlankEnumApi]
+
+export const BlankEnumApi = {
+    '': '',
+} as const
+
+/**
+ * @nullable
+ */
+export type UserBasicApiHedgehogConfig = { [key: string]: unknown } | null
+
+export interface UserBasicApi {
+    readonly id: number
+    readonly uuid: string
+    /**
+     * @maxLength 200
+     * @nullable
+     */
+    distinct_id?: string | null
+    /** @maxLength 150 */
+    first_name?: string
+    /** @maxLength 150 */
+    last_name?: string
+    /** @maxLength 254 */
+    email: string
+    /** @nullable */
+    is_email_verified?: boolean | null
+    /** @nullable */
+    readonly hedgehog_config: UserBasicApiHedgehogConfig
+    role_at_organization?: RoleAtOrganizationEnumApi | BlankEnumApi | null
+}
+
+/**
+ * Saved tracing filters — a subset of the frontend TracingFilters shape. May contain dateRange, serviceNames, filterGroup, orderBy, orderDirection, and viewMode.
+ */
+export type TracingViewApiFilters = { [key: string]: unknown }
+
+export interface TracingViewApi {
+    readonly id: string
+    readonly short_id: string
+    /**
+     * Human-readable name shown in the saved views list.
+     * @maxLength 400
+     */
+    name: string
+    /** Saved tracing filters — a subset of the frontend TracingFilters shape. May contain dateRange, serviceNames, filterGroup, orderBy, orderDirection, and viewMode. */
+    filters?: TracingViewApiFilters
+    /** Whether the view is pinned for quick access. */
+    pinned?: boolean
+    readonly created_at: string
+    /** User who created the view. */
+    readonly created_by: UserBasicApi | null
+    /** @nullable */
+    readonly updated_at: string | null
+}
+
+export interface PaginatedTracingViewListApi {
+    count: number
+    /** @nullable */
+    next?: string | null
+    /** @nullable */
+    previous?: string | null
+    results: TracingViewApi[]
+}
+
+/**
+ * Saved tracing filters — a subset of the frontend TracingFilters shape. May contain dateRange, serviceNames, filterGroup, orderBy, orderDirection, and viewMode.
+ */
+export type PatchedTracingViewApiFilters = { [key: string]: unknown }
+
+export interface PatchedTracingViewApi {
+    readonly id?: string
+    readonly short_id?: string
+    /**
+     * Human-readable name shown in the saved views list.
+     * @maxLength 400
+     */
+    name?: string
+    /** Saved tracing filters — a subset of the frontend TracingFilters shape. May contain dateRange, serviceNames, filterGroup, orderBy, orderDirection, and viewMode. */
+    filters?: PatchedTracingViewApiFilters
+    /** Whether the view is pinned for quick access. */
+    pinned?: boolean
+    readonly created_at?: string
+    /** User who created the view. */
+    readonly created_by?: UserBasicApi | null
+    /** @nullable */
+    readonly updated_at?: string | null
 }
 
 export type TracingSpansAttributesRetrieveParams = {
@@ -327,6 +724,10 @@ export type TracingSpansAttributesRetrieveParams = {
      * @minLength 1
      */
     search?: string
+    /**
+     * When true, the search query also matches attribute values (not just keys), so a value such as a trace_id finds the key holding it.
+     */
+    search_values?: boolean
 }
 
 export type TracingSpansAttributesRetrieveAttributeType =
@@ -391,3 +792,14 @@ export const TracingSpansValuesRetrieveAttributeType = {
     SpanAttribute: 'span_attribute',
     SpanResourceAttribute: 'span_resource_attribute',
 } as const
+
+export type TracingViewsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number
+}

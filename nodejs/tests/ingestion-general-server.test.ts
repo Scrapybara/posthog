@@ -1,10 +1,11 @@
-import { PluginServerMode } from '../src/common/config'
 import {
     KAFKA_APP_METRICS_2,
     KAFKA_CLICKHOUSE_HEATMAP_EVENTS,
     KAFKA_EVENTS_PLUGIN_INGESTION_DLQ,
     KAFKA_INGESTION_WARNINGS,
-} from '../src/config/kafka-topics'
+} from '~/common/config/kafka-topics'
+
+import { PluginServerMode } from '../src/common/config'
 import { IngestionGeneralServer } from '../src/servers/ingestion-general-server'
 import { ensureKafkaTopics } from './helpers/kafka'
 import { resetTestDatabase } from './helpers/sql'
@@ -56,6 +57,10 @@ describe('ingestion general server', () => {
         server = new IngestionGeneralServer({
             LOG_LEVEL: 'debug',
             PLUGIN_SERVER_MODE: PluginServerMode.ingestion_v2_combined,
+            // The AI consumer requires a personhog client; the gRPC connection
+            // is lazy, so startup doesn't need a live router.
+            PERSONHOG_ENABLED: true,
+            PERSONHOG_ADDR: 'localhost:50052',
         })
         await server.start()
         expect(process.exit).not.toHaveBeenCalledWith(1)

@@ -1,4 +1,5 @@
 import temporalio.activity
+from temporalio.exceptions import ApplicationError
 
 from posthog.sync import database_sync_to_async_pool
 from posthog.temporal.common.heartbeat import Heartbeater
@@ -79,10 +80,25 @@ async def delete_batch_exports_activity(inputs: TeamDataActivityInputs) -> None:
 
 @temporalio.activity.defn
 async def delete_data_modeling_schedules_activity(inputs: TeamDataActivityInputs) -> None:
+    """Tear down data modeling's Temporal Schedules for the teams. CASCADE removes the saved query
+    and DAG rows but never talks to Temporal, so without this the Schedules keep firing forever into
+    a team that no longer exists."""
     async with Heartbeater():
-        from posthog.models.team.util import delete_data_modeling_schedules
+        from products.data_modeling.backend.facade.api import delete_team_data_modeling_schedules
 
-        await database_sync_to_async_pool(delete_data_modeling_schedules)(inputs.team_ids)
+        for team_id in inputs.team_ids:
+            await database_sync_to_async_pool(delete_team_data_modeling_schedules)(team_id)
+
+
+@temporalio.activity.defn
+async def delete_loop_trigger_schedules_activity(inputs: TeamDataActivityInputs) -> None:
+    """Tear down loops' Temporal Schedules for the teams. CASCADE removes the LoopTrigger rows but
+    never talks to Temporal, so without this the Schedules keep firing forever into deleted triggers."""
+    async with Heartbeater():
+        from products.tasks.backend.facade.loops import delete_team_loop_schedules
+
+        for team_id in inputs.team_ids:
+            await database_sync_to_async_pool(delete_team_loop_schedules)(team_id)
 
 
 @temporalio.activity.defn
@@ -90,7 +106,22 @@ async def delete_team_records_activity(inputs: TeamDataActivityInputs) -> None:
     async with Heartbeater():
         from posthog.models.team.util import delete_team_records
 
-        await database_sync_to_async_pool(delete_team_records)(inputs.team_ids)
+        try:
+            await database_sync_to_async_pool(delete_team_records)(inputs.team_ids)
+        except RecursionError:
+            # The cascade delete materializes full rows for models with delete signals, which
+            # decodes their JSON columns via json.loads. A pathologically deeply-nested JSON
+            # value (deep enough that Postgres stores it but json.loads cannot decode it under
+            # Python's fixed C-recursion limit) overflows here. Retrying is futile — the data is
+            # unchanged — and the multi-thousand-frame traceback exceeds Temporal's failure-size
+            # limit, so re-raise a small, non-retryable error that surfaces cleanly instead.
+            raise ApplicationError(
+                f"Recursion limit exceeded deleting team records for {inputs.team_ids}; a cascaded "
+                "row most likely holds a deeply-nested JSON value that json.loads cannot decode. "
+                "Repair that row before retrying.",
+                type="RecursionError",
+                non_retryable=True,
+            ) from None
 
 
 def _enqueue_clickhouse_deletion(team_ids: list[int], user_id: int) -> None:
@@ -124,6 +155,24 @@ async def delete_project_record_activity(inputs: ProjectRecordInputs) -> None:
         from posthog.models.team.util import delete_project_record
 
         await database_sync_to_async_pool(delete_project_record)(inputs.project_id)
+
+
+def _deprovision_managed_warehouse(organization_id: str) -> None:
+    from products.managed_warehouse.backend.facade.api import deprovision_for_org_deletion
+
+    deprovision_for_org_deletion(organization_id)
+
+
+@temporalio.activity.defn
+async def deprovision_managed_warehouse_activity(inputs: OrganizationRecordInputs) -> None:
+    """Deprovision the org's managed duckgres warehouse (no-op for orgs without one).
+
+    Must run before ``delete_organization_record_activity``: the org-record cascade
+    destroys the ``DuckgresServer`` row, after which the warehouse would be orphaned
+    alive (ingestion, metering, and credentials all still working) with no pointer left.
+    """
+    async with Heartbeater():
+        await database_sync_to_async_pool(_deprovision_managed_warehouse)(inputs.organization_id)
 
 
 def _delete_organization_record(organization_id: str, user_id: int) -> None:

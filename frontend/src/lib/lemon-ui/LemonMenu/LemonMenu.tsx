@@ -1,6 +1,7 @@
-import React, { FunctionComponent, ReactNode, useCallback, useMemo } from 'react'
+import { useMergeRefs } from '@floating-ui/react'
+import React, { FunctionComponent, ReactNode, cloneElement, useCallback, useMemo } from 'react'
 
-import { KeyboardShortcut, KeyboardShortcutProps } from '~/layout/navigation-3000/components/KeyboardShortcut'
+import { KeyboardShortcut, KeyboardShortcutProps } from 'lib/components/KeyboardShortcut/KeyboardShortcut'
 
 import { LemonButton, LemonButtonProps } from '../LemonButton'
 import { LemonDivider } from '../LemonDivider'
@@ -34,6 +35,8 @@ export interface LemonMenuItemBase extends Pick<
 export interface LemonMenuItemNode extends LemonMenuItemBase {
     items: (LemonMenuItem | false | null)[]
     placement?: LemonDropdownProps['placement']
+    closeOnClickInside?: boolean
+    closeParentPopoverOnClickInside?: boolean
     keyboardShortcut?: never
 }
 
@@ -41,6 +44,8 @@ export interface LemonMenuItemLeafCallback extends LemonMenuItemBase {
     onClick?: (e: React.MouseEvent) => void
     items?: never
     placement?: never
+    closeOnClickInside?: never
+    closeParentPopoverOnClickInside?: never
     keyboardShortcut?: KeyboardShortcut
 }
 export interface LemonMenuItemLeafLink extends LemonMenuItemBase {
@@ -50,6 +55,8 @@ export interface LemonMenuItemLeafLink extends LemonMenuItemBase {
     targetBlank?: boolean
     items?: never
     placement?: never
+    closeOnClickInside?: never
+    closeParentPopoverOnClickInside?: never
     keyboardShortcut?: KeyboardShortcut
 }
 
@@ -66,6 +73,8 @@ export interface LemonMenuItemCustom {
     /** True if the item is a custom element. */
     custom?: boolean
     placement?: never
+    closeOnClickInside?: never
+    closeParentPopoverOnClickInside?: never
 }
 export type LemonMenuItem = (LemonMenuItemLeaf | LemonMenuItemCustom | LemonMenuItemNode) & {
     tag?: 'alpha' | 'beta' | 'new'
@@ -112,14 +121,18 @@ export interface LemonMenuProps
     focusBasedKeyboardNavigation?: boolean
 }
 
-export function LemonMenu({
-    items,
-    activeItemIndex,
-    tooltipPlacement,
-    onVisibilityChange,
-    focusBasedKeyboardNavigation = true,
-    ...dropdownProps
-}: LemonMenuProps): JSX.Element {
+export const LemonMenu = React.forwardRef<HTMLElement, LemonMenuProps>(function LemonMenu(
+    {
+        items,
+        activeItemIndex,
+        tooltipPlacement,
+        onVisibilityChange,
+        focusBasedKeyboardNavigation = true,
+        children,
+        ...dropdownProps
+    },
+    ref
+): JSX.Element {
     const { referenceRef, itemsRef } = useKeyboardNavigation<HTMLElement, HTMLButtonElement>(
         items.flatMap((item) => (item && isLemonMenuSection(item) ? item.items : item)).length,
         activeItemIndex,
@@ -139,6 +152,11 @@ export function LemonMenu({
         [onVisibilityChange, activeItemIndex]
     )
 
+    // LemonMenu renders no DOM itself — only the trigger child does. Forward an externally-provided
+    // ref (e.g. from <Shortcut />) onto that child so it lands on a real DOM node, otherwise consumers
+    // attaching a ref to LemonMenu silently get nothing.
+    const triggerRef = useMergeRefs([ref, (children as { ref?: React.Ref<HTMLElement> }).ref])
+
     return (
         <LemonDropdown
             overlay={
@@ -153,9 +171,12 @@ export function LemonMenu({
             referenceRef={referenceRef}
             onVisibilityChange={_onVisibilityChange}
             {...dropdownProps}
-        />
+        >
+            {cloneElement(children, { ref: triggerRef })}
+        </LemonDropdown>
     )
-}
+})
+LemonMenu.displayName = 'LemonMenu'
 
 export interface LemonMenuOverlayProps {
     items: LemonMenuItems
@@ -285,7 +306,17 @@ const LemonMenuItemButton: FunctionComponent<LemonMenuItemButtonProps & React.Re
     React.forwardRef(
         (
             {
-                item: { label, items, placement, keyboardShortcut, tag, custom, ...buttonProps },
+                item: {
+                    label,
+                    items,
+                    placement,
+                    keyboardShortcut,
+                    tag,
+                    custom,
+                    closeOnClickInside,
+                    closeParentPopoverOnClickInside,
+                    ...buttonProps
+                },
                 size,
                 tooltipPlacement,
                 active,
@@ -331,8 +362,8 @@ const LemonMenuItemButton: FunctionComponent<LemonMenuItemButtonProps & React.Re
                     items={items}
                     tooltipPlacement={tooltipPlacement}
                     placement={placement || 'right-start'}
-                    closeOnClickInside={!custom}
-                    closeParentPopoverOnClickInside={!custom}
+                    closeOnClickInside={closeOnClickInside ?? !custom}
+                    closeParentPopoverOnClickInside={closeParentPopoverOnClickInside ?? !custom}
                     buttonSize={size}
                 >
                     {button}

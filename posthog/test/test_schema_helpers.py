@@ -91,8 +91,18 @@ class TestSchemaHelpers(TestCase):
 
         self.assertEqual(result_dict, {"kind": "TrendsQuery", "series": [{"name": "$pageview"}]})
 
-    def test_serializes_insight_filter_without_frontend_only_props(self):
-        query = TrendsQuery(**{**base_trends, "trendsFilter": {"showLegend": True}})
+    @parameterized.expand(
+        [
+            ({"showLegend": True},),
+            # The y-axis range only changes how the results are drawn. Leaving it in the cache key
+            # would refire the ClickHouse query on every axis tweak.
+            ({"yAxisStartAtZero": False},),
+            ({"yAxisMin": 50},),
+            ({"yAxisMax": 70},),
+        ]
+    )
+    def test_serializes_insight_filter_without_frontend_only_props(self, trends_filter):
+        query = TrendsQuery(**{**base_trends, "trendsFilter": trends_filter})
 
         result_dict = to_dict(query)
 
@@ -144,6 +154,10 @@ class TestSchemaHelpers(TestCase):
                 "trendsFilter": {"display": "ActionsBarValue"},
             },
         )
+
+        # metric (groups to ActionsLineGraph, the default, so display is removed)
+        query = TrendsQuery(**{**base_trends, "trendsFilter": {"display": "Metric"}})
+        self.assertEqual(to_dict(query), {"kind": "TrendsQuery", "series": []})
 
     def _assert_filter(self, key: str, num_keys: int, q1: BaseModel, q2: BaseModel):
         self.assertEqual(to_dict(q1), to_dict(q2))

@@ -1,7 +1,6 @@
 import re
 import hashlib
 from collections.abc import Callable
-from datetime import date, datetime
 from typing import ClassVar
 from uuid import UUID
 
@@ -20,7 +19,7 @@ from posthog.hogql.printer.postgres_functions import (
     POSTGRES_PASSTHROUGH_FUNCTIONS,
 )
 
-from posthog.models.utils import UUIDT
+from posthog.uuidt import UUIDT
 
 # Regex for validating function names — only alphanumeric and underscores allowed.
 # Prevents SQL injection via backtick-quoted identifiers in HogQL.
@@ -29,6 +28,8 @@ _SAFE_FUNCTION_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 class PostgresPrinter(BasePrinter):
     DIALECT_NAME: ClassVar[HogQLDialect] = "postgres"
+    # Human-readable dialect name used in error messages; subclasses override.
+    DIALECT_LABEL: ClassVar[str] = "Postgres"
 
     def __init__(
         self,
@@ -45,8 +46,14 @@ class PostgresPrinter(BasePrinter):
     def _min_function_name(self) -> str:
         return "least"
 
+    def _dialect_error_suffix(self) -> str:
+        return f"in {self.DIALECT_LABEL} mode"
+
     def _assert_set_operator_supported(self, set_operator: str) -> None:
-        return
+        # DuckDB permits everything the base gate rejects (INTERSECT/EXCEPT ALL, recursive CTEs) and
+        # supports UNION BY NAME natively — except INTERSECT/EXCEPT BY NAME, which it also rejects.
+        if set_operator.endswith(" BY NAME") and not set_operator.startswith("UNION "):
+            raise QueryError(f"{set_operator} is not supported in the '{self.DIALECT_NAME}' dialect")
 
     def _assert_recursive_cte_supported(self) -> None:
         return
@@ -79,6 +86,11 @@ class PostgresPrinter(BasePrinter):
 
     def _render_set_query_limit_percent(self, limit: ast.Expr, limit_str: str) -> str:
         return f"{limit_str} %"
+
+    def _visit_set_operand(self, node: ast.SelectQuery | ast.SelectSetQuery) -> str:
+        # ClickHouse accepts a bare per-branch LIMIT/ORDER BY inside a set operation; the
+        # Postgres-family grammars only allow those on a parenthesized operand.
+        return f"({super()._visit_set_operand(node)})"
 
     def _render_select_query_limit_clause(self, limit: ast.Expr, is_percent: bool) -> str:
         rendered = f"LIMIT {self.visit(limit)}"
@@ -121,18 +133,13 @@ class PostgresPrinter(BasePrinter):
 
         if node.name in {"toStartOfFiveMinutes", "toStartOfTenMinutes", "toStartOfFifteenMinutes"}:
             if len(node.args) != 1:
-                raise QueryError(f"{node.name} expects exactly 1 argument in Postgres mode.")
+                raise QueryError(f"{node.name} expects exactly 1 argument {self._dialect_error_suffix()}.")
             minute_bucket_sizes: dict[str, int] = {
                 "toStartOfFiveMinutes": 5,
                 "toStartOfTenMinutes": 10,
                 "toStartOfFifteenMinutes": 15,
             }
-            bucket_arg = self.visit(node.args[0])
-            bucket_size = minute_bucket_sizes[node.name]
-            return (
-                f"date_trunc('hour', {bucket_arg}) + "
-                f"(floor(extract(minute from {bucket_arg}) / {bucket_size})::int * {bucket_size} * interval '1 minute')"
-            )
+            return self._render_minute_bucket(self.visit(node.args[0]), minute_bucket_sizes[node.name])
 
         function_renames = self._get_function_renames()
         function_handlers = self._get_function_handlers()
@@ -146,7 +153,9 @@ class PostgresPrinter(BasePrinter):
                 and func_name not in function_handlers
                 and func_name not in function_renames
             ):
-                raise QueryError(f"Function '{node.name}' does not support ORDER BY in the Postgres dialect.")
+                raise QueryError(
+                    f"Function '{node.name}' does not support ORDER BY in the {self.DIALECT_LABEL} dialect."
+                )
 
         # Validate function name characters to prevent SQL injection via
         # backtick-quoted identifiers that can contain arbitrary characters.
@@ -161,21 +170,49 @@ class PostgresPrinter(BasePrinter):
         handler = function_handlers.get(func_name)
         if handler is not None:
             if node.order_by:
-                raise QueryError(f"Function '{node.name}' does not support ORDER BY in the Postgres dialect.")
+                raise QueryError(
+                    f"Function '{node.name}' does not support ORDER BY in the {self.DIALECT_LABEL} dialect."
+                )
+            if node.distinct:
+                if func_name in self._get_distinct_capable_handlers():
+                    # Fold DISTINCT into the rendered args so the handler emits e.g.
+                    # COUNT(DISTINCT expr) — valid SQL these aggregates support.
+                    args = [f"DISTINCT {', '.join(args)}"]
+                else:
+                    # Other handlers compose custom SQL from pre-rendered args; injecting
+                    # DISTINCT blindly risks silently changing what the aggregate counts.
+                    raise QueryError(
+                        f"Function '{node.name}' does not support DISTINCT in the {self.DIALECT_LABEL} dialect."
+                    )
             return handler(args)
+
+        args_str = ", ".join(args)
+        if func_name == "count" and not args and not node.distinct:
+            # ClickHouse's zero-arg count() is spelled count(*) everywhere else.
+            args_str = "*"
+        elif func_name == "concat":
+            # concat(any...) cannot infer psycopg's untyped string parameters without an explicit cast.
+            args_str = ", ".join(
+                f"CAST({rendered_arg} AS TEXT)"
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                else rendered_arg
+                for arg, rendered_arg in zip(node.args, args, strict=True)
+            )
+        if node.distinct:
+            args_str = f"DISTINCT {args_str}"
 
         renamed = function_renames.get(func_name)
         if renamed is not None:
-            return f"{renamed}({', '.join(args)}{order_by_part})"
+            return f"{renamed}({args_str}{order_by_part})"
 
         if func_name in passthrough_functions:
-            return f"{func_name}({', '.join(args)}{order_by_part})"
+            return f"{func_name}({args_str}{order_by_part})"
 
         if func_name in self._connection_supported_functions:
             # Use the validated name — never the raw node.name
-            return f"{func_name}({', '.join(args)})"
+            return f"{func_name}({args_str})"
 
-        raise QueryError(f"Function '{node.name}' is not supported in the Postgres dialect.")
+        raise QueryError(f"Function '{node.name}' is not supported in the {self.DIALECT_LABEL} dialect.")
 
     def _get_function_renames(self) -> dict[str, str]:
         """Lowercased HogQL-name → target-name map for simple function renames. Overridable by subclasses."""
@@ -188,6 +225,10 @@ class PostgresPrinter(BasePrinter):
     def _get_passthrough_functions(self) -> frozenset[str]:
         """Lowercased function names that are emitted verbatim without renaming."""
         return POSTGRES_PASSTHROUGH_FUNCTIONS
+
+    def _get_distinct_capable_handlers(self) -> frozenset[str]:
+        """Lowercased handler names whose SQL accepts a leading DISTINCT (e.g. COUNT(DISTINCT x))."""
+        return frozenset()
 
     def visit_array_slice(self, node: ast.ArraySlice):
         start = self.visit(node.start_expr) if node.start_expr is not None else ""
@@ -203,16 +244,21 @@ class PostgresPrinter(BasePrinter):
         # through the HogQL string escape path would produce ClickHouse-style ``\'`` escape
         # sequences that Postgres and DuckDB do not recognize (``standard_conforming_strings``
         # defaults to ``on``), allowing statement-terminator SQL injection.
-        if (
-            node.value is None
-            or isinstance(node.value, bool)
-            or isinstance(node.value, (int, float, UUID, UUIDT, datetime, date))
-        ):
+        if node.value is None or isinstance(node.value, (bool, int, float)):
             value = self._print_escaped_string(node.value)
             if "%" in value:
                 # ``%`` would be interpreted as the start of a parameter placeholder by psycopg.
                 raise QueryError(f"Invalid character '%' in constant: {value}")
             return value
+        # Temporal and UUID values have to be bound for the same reason. ``SQLValueEscaper`` only
+        # models the `hogql` and `clickhouse` dialects, so the escape path renders them as
+        # `toDate(...)`, `toDateTime(...)`, and `toUUID(...)`, which do not exist in any engine
+        # below this printer. Binding lets each driver emit its own literal, and matches how the
+        # function translations already handle an explicit `toDate(...)` call.
+        if isinstance(node.value, (UUID, UUIDT)):
+            # Every dialect here models a UUID as a string (see the `toUUID` translations), and the
+            # MySQL and Snowflake drivers will not bind a UUID object.
+            return self.context.add_value(str(node.value))
         return self.context.add_value(node.value)
 
     def visit_lambda(self, node: ast.Lambda):
@@ -245,35 +291,28 @@ class PostgresPrinter(BasePrinter):
 
     def _visit_to_start_of_call(self, node: ast.Call) -> str:
         if len(node.args) == 0:
-            raise QueryError(f"{node.name} expects at least 1 argument in Postgres mode.")
+            raise QueryError(f"{node.name} expects at least 1 argument {self._dialect_error_suffix()}.")
 
         truncated_arg = self.visit(node.args[0])
 
-        if node.name in {
-            "toStartOfSecond",
-            "toStartOfMinute",
-            "toStartOfHour",
-            "toStartOfMonth",
-            "toStartOfQuarter",
-            "toStartOfYear",
-        }:
-            if len(node.args) != 1:
-                raise QueryError(f"{node.name} expects exactly 1 argument in Postgres mode.")
+        start_of_units: dict[str, str] = {
+            "toStartOfSecond": "second",
+            "toStartOfMinute": "minute",
+            "toStartOfHour": "hour",
+            "toStartOfMonth": "month",
+            "toStartOfQuarter": "quarter",
+            "toStartOfYear": "year",
+        }
 
-            start_of_units: dict[str, str] = {
-                "toStartOfSecond": "second",
-                "toStartOfMinute": "minute",
-                "toStartOfHour": "hour",
-                "toStartOfMonth": "month",
-                "toStartOfQuarter": "quarter",
-                "toStartOfYear": "year",
-            }
-            return f"date_trunc('{start_of_units[node.name]}', {truncated_arg})"
+        if node.name in start_of_units:
+            if len(node.args) != 1:
+                raise QueryError(f"{node.name} expects exactly 1 argument {self._dialect_error_suffix()}.")
+            return self._render_start_of(start_of_units[node.name], truncated_arg)
 
         if node.name == "toStartOfDay":
             if len(node.args) == 1:
-                return f"date_trunc('day', {truncated_arg})"
-            raise QueryError("toStartOfDay with a timezone override is not supported in Postgres mode.")
+                return self._render_start_of("day", truncated_arg)
+            raise QueryError(f"toStartOfDay with a timezone override is not supported {self._dialect_error_suffix()}.")
 
         if node.name == "toStartOfWeek":
             if len(node.args) == 1:
@@ -281,24 +320,35 @@ class PostgresPrinter(BasePrinter):
             elif len(node.args) == 2 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, int):
                 week_mode = node.args[1].value
             else:
-                raise QueryError("toStartOfWeek only supports literal week modes in Postgres mode.")
-
-            if week_mode in {1, 3}:
-                return f"date_trunc('week', {truncated_arg})"
-            if week_mode == 0:
-                return f"(date_trunc('week', ({truncated_arg} + interval '1 day')) - interval '1 day')"
-            raise QueryError(f"Unsupported toStartOfWeek mode `{week_mode}` in Postgres mode.")
+                raise QueryError(f"toStartOfWeek only supports literal week modes {self._dialect_error_suffix()}.")
+            return self._render_start_of("week", truncated_arg, week_mode=week_mode)
 
         if node.name == "toStartOfISOYear":
             if len(node.args) != 1:
-                raise QueryError("toStartOfISOYear expects exactly 1 argument in Postgres mode.")
-
-            return f"date_trunc('week', make_date(extract(isoyear from {truncated_arg})::int, 1, 4)::timestamp)"
+                raise QueryError(f"toStartOfISOYear expects exactly 1 argument {self._dialect_error_suffix()}.")
+            return self._render_start_of("isoyear", truncated_arg)
 
         if len(node.args) != 1:
-            raise QueryError(f"{node.name} expects exactly 1 argument in Postgres mode.")
+            raise QueryError(f"{node.name} expects exactly 1 argument {self._dialect_error_suffix()}.")
 
-        return f"date_trunc('day', {truncated_arg})"
+        return self._render_start_of("day", truncated_arg)
+
+    def _render_start_of(self, unit: str, arg: str, week_mode: int = 3) -> str:
+        if unit == "week":
+            if week_mode in {1, 3}:
+                return f"date_trunc('week', {arg})"
+            if week_mode == 0:
+                return f"(date_trunc('week', ({arg} + interval '1 day')) - interval '1 day')"
+            raise QueryError(f"Unsupported toStartOfWeek mode `{week_mode}` {self._dialect_error_suffix()}.")
+        if unit == "isoyear":
+            return f"date_trunc('week', make_date(extract(isoyear from {arg})::int, 1, 4)::timestamp)"
+        return f"date_trunc('{unit}', {arg})"
+
+    def _render_minute_bucket(self, arg: str, bucket_size: int) -> str:
+        return (
+            f"date_trunc('hour', {arg}) + "
+            f"(floor(extract(minute from {arg}) / {bucket_size})::int * {bucket_size} * interval '1 minute')"
+        )
 
     def visit_and(self, node):
         return f"({' AND '.join([f'({self.visit(expr)})' for expr in node.exprs])})"
@@ -356,6 +406,11 @@ class PostgresPrinter(BasePrinter):
             return f"({left} IN {right})"
         elif op == ast.CompareOperationOp.NotIn:
             return f"({left} NOT IN {right})"
+        elif op == ast.CompareOperationOp.GlobalIn:
+            # Postgres has no distributed GLOBAL concept, so it maps to a plain IN
+            return f"({left} IN {right})"
+        elif op == ast.CompareOperationOp.GlobalNotIn:
+            return f"({left} NOT IN {right})"
         elif op == ast.CompareOperationOp.Regex:
             return f"({left} ~ {right})"
         elif op == ast.CompareOperationOp.NotRegex:
@@ -386,6 +441,14 @@ class PostgresPrinter(BasePrinter):
         # Team ID filtering is not required for Postgres queries
         pass
 
+    def _ensure_access_control_where_clause(
+        self,
+        table_type: ast.TableType | ast.LazyTableType,
+        node_type: ast.TableOrSelectType | None,
+    ):
+        # Access control is not implemented for Postgres dialect yet
+        return None
+
     def _print_identifier(self, name: str) -> str:
         if len(name) > 63 and "__" in name:
             name = self._truncate_identifier(name)
@@ -412,7 +475,12 @@ class PostgresPrinter(BasePrinter):
         return candidate
 
     def _json_property_args(self, chain):
-        return [self._print_escaped_string(name) for name in chain]
+        # Parameterize JSON property keys via ``context.add_value`` so psycopg binds them
+        # safely. Inlining them through ``_print_escaped_string`` would emit ClickHouse-style
+        # ``\'`` escapes, which Postgres/DuckDB do not recognize (``standard_conforming_strings``
+        # defaults to ``on``), allowing statement-terminator SQL injection. Same reasoning as
+        # ``visit_constant`` above.
+        return [self.context.add_value(name) for name in chain]
 
     def _print_table(self, table) -> str:
         if isinstance(table, DirectPostgresTable):
@@ -473,7 +541,11 @@ class PostgresPrinter(BasePrinter):
         elif node.op == ast.ArithmeticOperationOp.Div:
             return f"({self.visit(node.left)} / {self.visit(node.right)})"
         elif node.op == ast.ArithmeticOperationOp.Mod:
-            return f"({self.visit(node.left)} % {self.visit(node.right)})"
+            # A bare `%` can't appear in printed SQL — during client-side binding psycopg
+            # reads it as the start of a parameter placeholder (valid ones look like
+            # `%(hogql_val_0)s`) and errors on the incomplete placeholder. So modulo renders
+            # as MOD(a, b). Both Postgres and DuckDB (which subclasses this printer) support MOD().
+            return f"MOD({self.visit(node.left)}, {self.visit(node.right)})"
         else:
             raise ImpossibleASTError(f"Unknown ArithmeticOperationOp {node.op}")
 

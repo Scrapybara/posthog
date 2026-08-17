@@ -10,7 +10,7 @@ import {
     PostHogRateLimitError,
     PostHogValidationError,
 } from '@/lib/errors'
-import { getSearchParamsFromRecord } from '@/lib/utils.js'
+import { getSearchParamsFromRecord, sanitizeHeaders, sanitizeHeaderValue } from '@/lib/utils.js'
 import type {
     ApiEventDefinition,
     ApiOAuthIntrospection,
@@ -85,10 +85,17 @@ export interface SearchResponse {
 export type Result<T, E = Error> = { success: true; data: T } | { success: false; error: E }
 
 export interface DataWarehouseSyncWarning {
+    type: 'warehouse_sync'
     table_name: string
     schema_name: string
     source_type: string
     status: string
+    message: string
+}
+
+export interface AccessControlFilterWarning {
+    type: 'access_control'
+    resources: string[]
     message: string
 }
 
@@ -97,8 +104,9 @@ export interface QueryEndpointResponse {
     columns?: unknown
     formatted_results?: string
     // null (not just absent) when the query response carries no warnings — the backend
-    // serializes the field explicitly rather than omitting it.
-    warnings?: DataWarehouseSyncWarning[] | null
+    // serializes the field explicitly rather than omitting it. Carries both warehouse-sync
+    // warnings and object-level access control warnings.
+    warnings?: (DataWarehouseSyncWarning | AccessControlFilterWarning)[] | null
 }
 
 export interface ApiConfig {
@@ -119,6 +127,12 @@ export interface ApiConfig {
     oauthClientName?: string | undefined
     mcpSessionId?: string | undefined
     mcpConversationId?: string | undefined
+    /**
+     * Sandbox-provisioned task id (from the inbound `x-posthog-task-id` MCP header). Forwarded
+     * to the PostHog API as `X-PostHog-Task-Id` on every call so writes can be attributed to
+     * the agent's task; the API validates it against the token's team.
+     */
+    taskId?: string | undefined
 }
 
 type Endpoint = Record<string, any>
@@ -144,35 +158,43 @@ export class ApiClient {
         return `${this.publicBaseUrl}/project/${projectId}`
     }
 
-    private async fetch(url: string, options?: RequestInit): Promise<Response> {
+    // Every request, SSE stream and endpoint helper on this class funnels through here, which is what
+    // lets `ForwardingApiClient` re-route a whole client at one seam (see lib/connection-forwarding.ts).
+    protected async fetch(url: string, options?: RequestInit): Promise<Response> {
         const defaultHeaders: HeadersInit = {
             Authorization: `Bearer ${this.config.apiToken}`,
-            'User-Agent': getUserAgent({ clientUserAgent: this.config.clientUserAgent }),
-            ...(this.config.clientUserAgent
-                ? {
-                      // Forward the originating client's User-Agent as a custom header so the
-                      // PostHog API can attach it to analytics events for MCP source attribution.
-                      'x-posthog-mcp-user-agent': this.config.clientUserAgent,
-                  }
-                : {}),
-            // Forward MCP clientInfo fields from the initialize request so the
-            // PostHog API can attach them to analytics events.
-            ...(this.config.mcpClientName ? { 'x-posthog-mcp-client-name': this.config.mcpClientName } : {}),
-            ...(this.config.mcpClientVersion ? { 'x-posthog-mcp-client-version': this.config.mcpClientVersion } : {}),
-            ...(this.config.mcpProtocolVersion
-                ? { 'x-posthog-mcp-protocol-version': this.config.mcpProtocolVersion }
-                : {}),
-            ...(this.config.mcpConsumer ? { 'x-posthog-mcp-consumer': this.config.mcpConsumer } : {}),
-            ...(this.config.oauthClientName ? { 'x-posthog-mcp-oauth-client-name': this.config.oauthClientName } : {}),
-            // Forward MCP session and conversation ids so backend logs and OTLP
-            // spans for downstream API hops can correlate with the same MCP context
-            // the events carry. This is attribute-based correlation only — we do
-            // not forward `traceparent` (the Worker emits no OTLP today), so the
-            // Django-rooted span is not a child of any Worker-side span.
-            ...(this.config.mcpSessionId ? { 'x-posthog-mcp-session-id': this.config.mcpSessionId } : {}),
-            ...(this.config.mcpConversationId
-                ? { 'x-posthog-mcp-conversation-id': this.config.mcpConversationId }
-                : {}),
+            // Every value below originates from the MCP client, so it is sanitized here at
+            // assembly rather than trusted to have been sanitized on the boundary it arrived
+            // on. `oauthClientName` in particular is read straight back from the token cache,
+            // which can still hold a name written before the ingest sanitizer covered it. A
+            // character above U+00FF makes the runtime throw converting headers to a
+            // ByteString, failing the API call itself — losing attribution detail is cheaper.
+            // The composed User-Agent stays out of the batch below: sanitizing it whole would
+            // truncate at the value cap and could slice off our own trailing token, so the
+            // client-supplied input is sanitized before composition instead. The other parts
+            // are code constants and an ASCII-only regex match, already header-safe.
+            'User-Agent': getUserAgent({ clientUserAgent: sanitizeHeaderValue(this.config.clientUserAgent) }),
+            ...sanitizeHeaders({
+                // Forward the originating client's User-Agent as a custom header so the
+                // PostHog API can attach it to analytics events for MCP source attribution.
+                'x-posthog-mcp-user-agent': this.config.clientUserAgent,
+                // Forward MCP clientInfo fields from the initialize request so the
+                // PostHog API can attach them to analytics events.
+                'x-posthog-mcp-client-name': this.config.mcpClientName,
+                'x-posthog-mcp-client-version': this.config.mcpClientVersion,
+                'x-posthog-mcp-protocol-version': this.config.mcpProtocolVersion,
+                'x-posthog-mcp-consumer': this.config.mcpConsumer,
+                'x-posthog-mcp-oauth-client-name': this.config.oauthClientName,
+                // Forward MCP session and conversation ids so backend logs and OTLP
+                // spans for downstream API hops can correlate with the same MCP context
+                // the events carry. This is attribute-based correlation only — we do
+                // not forward `traceparent` (the Worker emits no OTLP today), so the
+                // Django-rooted span is not a child of any Worker-side span.
+                'x-posthog-mcp-session-id': this.config.mcpSessionId,
+                'x-posthog-mcp-conversation-id': this.config.mcpConversationId,
+                // Forward the sandbox task id so API writes are attributed to the agent's task.
+                'X-PostHog-Task-Id': this.config.taskId,
+            }),
             'X-PostHog-Client': 'mcp',
         }
         if (options?.body) {
@@ -278,9 +300,11 @@ export class ApiClient {
 
         if (!response.ok) {
             const errorText = await response.text()
-            throw new Error(
-                `SSE request failed:\nURL: ${opts.method} ${url}\nStatus Code: ${response.status} (${response.statusText})\nError Message: ${errorText}`
-            )
+            // Mirror fetchJson's typed-error mapping so a failed streaming call
+            // (e.g. a backend 4xx validation rejection) is classified as
+            // `validation`/`api_4xx` rather than collapsing into the generic
+            // `internal` bucket and minting a spurious error-tracking issue.
+            throw this.buildApiError(response, errorText, url, opts.method)
         }
 
         if (!response.body) {
@@ -336,6 +360,78 @@ export class ApiClient {
         }
     }
 
+    /**
+     * Maps a non-OK PostHog API response to the typed error that best describes
+     * it (invalid key, rate limit, permission, validation, or generic API
+     * error). Shared by fetchJson and the SSE path (requestSSE) so both surface
+     * the same recoverable-vs-genuine-failure signal to the tool-error
+     * classifier — a streaming failure should be classified by its HTTP status,
+     * not lumped into `internal`.
+     *
+     * The response body is read by the caller (SSE and JSON paths read it at
+     * different points) and passed in as `errorText`.
+     */
+    private buildApiError(response: Response, errorText: string, url: string, method: string): Error {
+        if (response.status === 401) {
+            return new Error(ErrorCode.INVALID_API_KEY)
+        }
+
+        if (response.status === 429) {
+            return new PostHogRateLimitError({
+                body: errorText,
+                url,
+                method,
+                retryAfterSeconds: parseRetryAfterSeconds(response.headers.get('Retry-After')),
+            })
+        }
+
+        let errorData: any
+        try {
+            errorData = JSON.parse(errorText)
+        } catch {
+            errorData = { detail: errorText }
+        }
+
+        if (response.status === 403 && errorData?.code === 'permission_denied') {
+            const scopeMatch = /required scope ['"]([^'"]+)['"]/.exec(errorData.detail || '')
+            const missingScope = scopeMatch?.[1]
+            // Warn, not error: PostHogPermissionError is thrown and handled by callers,
+            // and a missing scope is a user-config issue rather than a service bug.
+            console.warn(
+                `[API] Permission denied on ${method} ${url}: ${errorData.detail || 'unknown'}${missingScope ? ` (missing scope: ${missingScope})` : ''}`
+            )
+            return new PostHogPermissionError({
+                detail: errorData.detail || 'permission denied',
+                missingScope,
+                url,
+                method,
+            })
+        }
+
+        if (errorData?.type === 'validation_error') {
+            const detail = errorData.detail || errorData.code || 'unknown'
+            const attrLog = errorData.attr ? ` (field: ${errorData.attr})` : ''
+            console.error(`[API] Validation error on ${method} ${url}: ${detail}${attrLog}`)
+            return new PostHogValidationError({
+                detail,
+                attr: errorData.attr ?? undefined,
+                code: errorData.code ?? undefined,
+                extra: (errorData.extra ?? undefined) as Record<string, unknown> | undefined,
+                url,
+                method,
+            })
+        }
+
+        console.error(`[API] Request failed on ${method} ${url}: ${response.status} ${response.statusText}`)
+        return new PostHogApiError({
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+            url,
+            method,
+        })
+    }
+
     private async fetchJson<T>(url: string, options?: RequestInit): Promise<Result<T>> {
         const method = options?.method ?? 'GET'
         let waitBudgetMs = RATE_LIMIT_TOTAL_WAIT_BUDGET_MS
@@ -386,48 +482,7 @@ export class ApiClient {
                 }
 
                 if (!response.ok) {
-                    if (response.status === 401) {
-                        throw new Error(ErrorCode.INVALID_API_KEY)
-                    }
-
                     const errorText = await response.text()
-
-                    let errorData: any
-                    try {
-                        errorData = JSON.parse(errorText)
-                    } catch {
-                        errorData = { detail: errorText }
-                    }
-
-                    if (response.status === 403 && errorData?.code === 'permission_denied') {
-                        const scopeMatch = /required scope ['"]([^'"]+)['"]/.exec(errorData.detail || '')
-                        const missingScope = scopeMatch?.[1]
-                        // Warn, not error: PostHogPermissionError is thrown and handled by callers,
-                        // and a missing scope is a user-config issue rather than a service bug.
-                        console.warn(
-                            `[API] Permission denied on ${method} ${url}: ${errorData.detail || 'unknown'}${missingScope ? ` (missing scope: ${missingScope})` : ''}`
-                        )
-                        throw new PostHogPermissionError({
-                            detail: errorData.detail || 'permission denied',
-                            missingScope,
-                            url,
-                            method,
-                        })
-                    }
-
-                    if (errorData.type === 'validation_error') {
-                        const detail = errorData.detail || errorData.code || 'unknown'
-                        const attrLog = errorData.attr ? ` (field: ${errorData.attr})` : ''
-                        console.error(`[API] Validation error on ${method} ${url}: ${detail}${attrLog}`)
-                        throw new PostHogValidationError({
-                            detail,
-                            attr: errorData.attr ?? undefined,
-                            code: errorData.code ?? undefined,
-                            extra: (errorData.extra ?? undefined) as Record<string, unknown> | undefined,
-                            url,
-                            method,
-                        })
-                    }
 
                     if (response.status === 404) {
                         const experimentMatch = /\/experiments\/(\d+)/.exec(url)
@@ -442,14 +497,7 @@ export class ApiClient {
                         }
                     }
 
-                    console.error(`[API] Request failed on ${method} ${url}: ${response.status} ${response.statusText}`)
-                    throw new PostHogApiError({
-                        status: response.status,
-                        statusText: response.statusText,
-                        body: errorText,
-                        url,
-                        method,
-                    })
+                    throw this.buildApiError(response, errorText, url, method)
                 }
 
                 const rawText = await response.text()
@@ -673,6 +721,88 @@ export class ApiClient {
                 } catch (error) {
                     return { success: false, error: error as Error }
                 }
+            },
+
+            updatePropertyDefinition: async ({
+                projectId,
+                propertyName,
+                type,
+                groupTypeIndex,
+                data,
+            }: {
+                projectId: string
+                propertyName: string
+                type?: 'event' | 'person' | 'group' | 'session'
+                groupTypeIndex?: number
+                data: {
+                    description?: string
+                    tags?: string[]
+                    property_type?: 'DateTime' | 'String' | 'Numeric' | 'Boolean' | 'Duration'
+                    verified?: boolean
+                    hidden?: boolean
+                }
+            }): Promise<Result<ApiPropertyDefinition>> => {
+                try {
+                    // Property definitions have no by-name lookup endpoint, so resolve the id via the
+                    // list endpoint: `properties` does an exact-name match, and `type` disambiguates a
+                    // name that exists across taxonomies (e.g. an event property and a person property).
+                    const findParams = getSearchParamsFromRecord({
+                        properties: propertyName,
+                        type: type ?? 'event',
+                        group_type_index: groupTypeIndex,
+                    })
+                    const findUrl = `${this.baseUrl}/api/projects/${projectId}/property_definitions/?${findParams}`
+
+                    const findResponse = await this.fetch(findUrl)
+
+                    if (!findResponse.ok) {
+                        throw new Error(`Failed to find property definition: ${findResponse.statusText}`)
+                    }
+
+                    const findData = (await findResponse.json()) as { results: ApiPropertyDefinition[] }
+                    const propertyDef = findData.results.find((def) => def.name === propertyName)
+
+                    if (!propertyDef) {
+                        return {
+                            success: false,
+                            error: new Error(
+                                `Property definition not found: ${propertyName} (type: ${type ?? 'event'})`
+                            ),
+                        }
+                    }
+
+                    const updateUrl = `${this.baseUrl}/api/projects/${projectId}/property_definitions/${propertyDef.id}/`
+
+                    const updateResponse = await this.fetch(updateUrl, {
+                        method: 'PATCH',
+                        body: JSON.stringify(data),
+                    })
+
+                    if (!updateResponse.ok) {
+                        throw new Error(`Failed to update property definition: ${updateResponse.statusText}`)
+                    }
+
+                    const responseData = (await updateResponse.json()) as ApiPropertyDefinition
+
+                    return { success: true, data: responseData }
+                } catch (error) {
+                    return { success: false, error: error as Error }
+                }
+            },
+
+            updatePathCleaningFilters: async ({
+                projectId,
+                filters,
+            }: {
+                projectId: string
+                filters: Array<{ alias: string; regex: string; order: number }>
+            }): Promise<Result<Schemas.ProjectBackwardCompat>> => {
+                // path_cleaning_filters is a whole-list field on the project — the caller is
+                // responsible for having merged the desired rules into `filters` first.
+                return this.fetchJson<Schemas.ProjectBackwardCompat>(`${this.baseUrl}/api/projects/${projectId}/`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ path_cleaning_filters: filters }),
+                })
             },
         }
     }
@@ -1158,10 +1288,11 @@ export class ApiClient {
 
             const baseUrl = this.getProjectBaseUrl(projectId)
 
-            // `actor` → 3 columns, `matched_recordings` → recordings, everything else passes through.
+            // `actor`/`person` → 3 columns, `matched_recordings` → recordings, everything else passes through.
+            // Retention projects `person`, which carries the same actor shape as `actor`.
             const columns: string[] = []
             for (const field of finalSelect) {
-                if (field === 'actor') {
+                if (field === 'actor' || field === 'person') {
                     columns.push('distinct_id', 'email', 'name')
                 } else if (field === 'matched_recordings') {
                     columns.push('recordings')
@@ -1175,7 +1306,7 @@ export class ApiClient {
                 for (let i = 0; i < finalSelect.length; i++) {
                     const field = finalSelect[i]
                     const cell = row[i]
-                    if (field === 'actor') {
+                    if (field === 'actor' || field === 'person') {
                         const props = cell?.properties ?? {}
                         cells.push(cell?.distinct_ids?.[0] ?? null, props.email, props.name)
                     } else if (field === 'matched_recordings') {
@@ -1211,8 +1342,16 @@ export class ApiClient {
                 query,
             }: {
                 query: Record<string, unknown>
-            }): Promise<{ results: unknown; formatted_results?: string }> => {
-                return this.request<{ results: unknown; formatted_results?: string }>({
+            }): Promise<{
+                results: unknown
+                formatted_results?: string
+                warnings?: (DataWarehouseSyncWarning | AccessControlFilterWarning)[] | null
+            }> => {
+                return this.request<{
+                    results: unknown
+                    formatted_results?: string
+                    warnings?: (DataWarehouseSyncWarning | AccessControlFilterWarning)[] | null
+                }>({
                     method: 'POST',
                     path: `/api/environments/${projectId}/query/`,
                     body: { query: normalizeQuery(query) },
@@ -1226,6 +1365,41 @@ export class ApiClient {
 
             pathsActors: async ({ query }: { query: Record<string, unknown> }) =>
                 runActorsQuery(query, ['actor', 'event_count'], ['event_count DESC', 'actor_id DESC']),
+
+            retentionActors: async ({ query }: { query: Record<string, unknown> }) => {
+                // Columns are `person` + one per return interval: prefix = period (day/week/…), count =
+                // custom-bracket count + 1, else totalIntervals. Mirrors the frontend retentionToActorsQuery.
+                const filter = ((query.source as Record<string, unknown>)?.retentionFilter ?? {}) as Record<
+                    string,
+                    unknown
+                >
+                const period = typeof filter.period === 'string' ? filter.period.toLowerCase() : 'day'
+                const brackets = filter.retentionCustomBrackets as number[] | undefined
+                const count = brackets?.length ? brackets.length + 1 : (filter.totalIntervals as number) || 7
+                // The schema codegen doesn't propagate `@minimum`/`@maximum` on integer fields (only array
+                // `@maxItems`, which already bounds `retentionCustomBrackets`), so `totalIntervals` can't be
+                // capped in the generated zod — enforce it here instead. The limit matches the app's
+                // retention UI (period count capped at 31; totalIntervals adds the acquisition interval → 32).
+                // TODO: drop this guard once the schema generator supports integer min/max.
+                const MAX_RETENTION_INTERVALS = 32
+                if (count > MAX_RETENTION_INTERVALS) {
+                    throw new Error(
+                        `Retention query requests ${count} intervals; the maximum is ${MAX_RETENTION_INTERVALS}.`
+                    )
+                }
+
+                const select = ['person', ...Array.from({ length: count }, (_, i) => `${period}_${i}`)]
+                return runActorsQuery(query, select, ['length(appearances) DESC', 'actor_id'])
+            },
+
+            // Stickiness drills into one bar (`day` = active-interval count). The runner projects only
+            // `actor_id` with no `matching_events`, so there is no recordings column — same as lifecycle.
+            stickinessActors: async ({ query }: { query: Record<string, unknown> }) => runActorsQuery(query, ['actor']),
+
+            // Funnel actors project `actor` (+ `matched_recordings` when `includeRecordings`, handled
+            // by runActorsQuery). The query carries the step/trends-dropoff selectors on the inner
+            // FunnelsActorsQuery; ordering is backend-determined, so orderBy stays empty.
+            funnelActors: async ({ query }: { query: Record<string, unknown> }) => runActorsQuery(query, ['actor']),
         }
     }
 
@@ -1284,6 +1458,17 @@ export class ApiClient {
 
     async getGroupTypes(projectId: string): Promise<GroupType[]> {
         const result = await this.fetchJson<GroupType[]>(`${this.baseUrl}/api/projects/${projectId}/groups_types/`)
+        if (!result.success) {
+            throw new Error(result.error.message)
+        }
+        return result.data
+    }
+
+    /** Every third-party MCP tool the caller can reach, across all their gateway connections. */
+    async getGatewayTools(projectId: string): Promise<Schemas.AvailableToolsResponse> {
+        const result = await this.fetchJson<Schemas.AvailableToolsResponse>(
+            `${this.baseUrl}/api/projects/${projectId}/mcp_server_installations/available_tools/`
+        )
         if (!result.success) {
             throw new Error(result.error.message)
         }

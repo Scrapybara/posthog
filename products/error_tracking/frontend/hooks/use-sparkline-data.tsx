@@ -2,7 +2,7 @@ import { useValues } from 'kea'
 import { useMemo } from 'react'
 
 import { ErrorTrackingSpikeEvent } from 'lib/components/Errors/types'
-import { dateStringToDayJs } from 'lib/utils'
+import { dateStringToDayJs } from 'lib/utils/dateFilters'
 
 import { DateRange, ErrorTrackingIssueAggregations } from '~/queries/schema/schema-general'
 
@@ -84,6 +84,6 @@ export function applyVolumeSpikeHighlights(
     return data.map((datum) => {
         const datumTime = datum.date.getTime()
         const hasSpikeInBin = spikeTimestamps.some((st) => st >= datumTime && st < datumTime + binSizeMs)
-        return hasSpikeInBin ? { ...datum, color: spikeStripeColor, animated: true } : datum
+        return hasSpikeInBin ? { ...datum, color: spikeStripeColor, isSpike: true } : datum
     })
 }

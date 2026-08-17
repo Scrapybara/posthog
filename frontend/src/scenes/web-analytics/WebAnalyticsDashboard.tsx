@@ -5,11 +5,11 @@ import React, { useEffect, useState } from 'react'
 import { IconExpand45, IconInfo, IconLineGraph, IconOpenSidebar, IconX } from '@posthog/icons'
 import { LemonSegmentedButton, LemonSegmentedDropdown, LemonSkeleton } from '@posthog/lemon-ui'
 
-import { keyBinds } from 'lib/components/AppShortcuts/shortcuts'
-import { useAppShortcut } from 'lib/components/AppShortcuts/useAppShortcut'
 import { IntervalFilterStandalone } from 'lib/components/IntervalFilter/IntervalFilter'
 import { ProductIntroduction } from 'lib/components/ProductIntroduction/ProductIntroduction'
 import { SetupTaskId, globalSetupLogic } from 'lib/components/ProductSetup'
+import { keyBinds } from 'lib/components/Shortcuts/shortcuts'
+import { useShortcut } from 'lib/components/Shortcuts/useShortcut'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { useOnMountEffect } from 'lib/hooks/useOnMountEffect'
 import { IconOpenInNew, IconTableChart } from 'lib/lemon-ui/icons'
@@ -21,13 +21,14 @@ import { LemonTag } from 'lib/lemon-ui/LemonTag'
 import { Link, PostHogComDocsURL } from 'lib/lemon-ui/Link/Link'
 import { Popover } from 'lib/lemon-ui/Popover'
 import { FeatureFlagsSet, featureFlagLogic } from 'lib/logic/featureFlagLogic'
-import { isNotNil } from 'lib/utils'
+import { isNotNil } from 'lib/utils/guards'
 import { addProductIntentForCrossSell } from 'lib/utils/product-intents'
 import { Scene } from 'scenes/sceneTypes'
 import { QuickSurveyType } from 'scenes/surveys/quick-create/types'
 import { QuickSurveyModal } from 'scenes/surveys/QuickSurveyModal'
 import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
+import { WebAnalyticsAchievementsModal } from 'scenes/web-analytics/achievements/WebAnalyticsAchievementsModal'
 import {
     ProductTab,
     QueryTile,
@@ -62,6 +63,8 @@ import { botAnalyticsLogic } from './botAnalyticsLogic'
 import { HealthStatusTab, webAnalyticsHealthLogic } from './health'
 import { LiveBotTiles } from './LiveMetricsDashboard/LiveBotTiles'
 import { LiveWebAnalyticsMetrics } from './LiveMetricsDashboard/LiveWebAnalyticsMetrics'
+import { PagePerformance } from './PagePerformance'
+import { PagePerformanceFilters } from './PagePerformanceFilters'
 import { WebAnalyticsExport } from './WebAnalyticsExport'
 import { WebAnalyticsFilters } from './WebAnalyticsFilters'
 import { webAnalyticsModalLogic } from './webAnalyticsModalLogic'
@@ -642,6 +645,8 @@ const Filters = ({ tabs }: { tabs: JSX.Element }): JSX.Element | null => {
             return null
         case ProductTab.BOT_ANALYTICS:
             return <BotAnalyticsFilters tabs={tabs} />
+        case ProductTab.PAGE_PERFORMANCE:
+            return <PagePerformanceFilters tabs={tabs} />
         default:
             return <WebAnalyticsFilters tabs={tabs} />
     }
@@ -664,6 +669,10 @@ const MainContent = (): JSX.Element => {
 
     if (productTab === ProductTab.BOT_ANALYTICS) {
         return <BotAnalyticsTiles />
+    }
+
+    if (productTab === ProductTab.PAGE_PERFORMANCE) {
+        return <PagePerformance />
     }
 
     return <Tiles />
@@ -717,7 +726,7 @@ const liveTab = (): { key: ProductTab; label: string | JSX.Element; link: string
         {
             key: ProductTab.LIVE,
             label: 'Live',
-            link: '/web/live',
+            link: urls.webAnalyticsLive(),
         },
     ]
 }
@@ -741,6 +750,29 @@ const botAnalyticsTab = (
                 </div>
             ),
             link: urls.webAnalyticsBotAnalytics(),
+        },
+    ]
+}
+
+const pagePerformanceTab = (
+    featureFlags: FeatureFlagsSet
+): { key: ProductTab; label: string | JSX.Element; link: string }[] => {
+    if (!featureFlags[FEATURE_FLAGS.WEB_ANALYTICS_PAGE_PERFORMANCE]) {
+        return []
+    }
+
+    return [
+        {
+            key: ProductTab.PAGE_PERFORMANCE,
+            label: (
+                <div className="flex items-center gap-1">
+                    Page performance
+                    <LemonTag type="completion" className="uppercase">
+                        Alpha
+                    </LemonTag>
+                </div>
+            ),
+            link: urls.webAnalyticsPagePerformance(),
         },
     ]
 }
@@ -775,6 +807,7 @@ export const WebAnalyticsDashboard = (): JSX.Element => {
             <BindLogic logic={dataNodeCollectionLogic} props={{ key: WEB_ANALYTICS_DATA_COLLECTION_NODE_ID }}>
                 <WebAnalyticsLoadTimeTracker />
                 <WebAnalyticsModal />
+                <WebAnalyticsAchievementsModal />
                 <WebAnalyticsSurveyModal />
                 <SceneContent className="WebAnalyticsDashboard gap-y-2">
                     <>
@@ -805,7 +838,7 @@ const WebAnalyticsTabs = (): JSX.Element => {
     const { setProductTab } = useActions(webAnalyticsLogic)
 
     // Tab switching shortcuts
-    useAppShortcut({
+    useShortcut({
         name: 'WebAnalyticsTab1',
         keybind: [keyBinds.tab1],
         intent: 'Web analytics tab',
@@ -813,7 +846,7 @@ const WebAnalyticsTabs = (): JSX.Element => {
         callback: () => setProductTab(ProductTab.ANALYTICS),
         scope: Scene.WebAnalytics,
     })
-    useAppShortcut({
+    useShortcut({
         name: 'WebAnalyticsTab2',
         keybind: [keyBinds.tab2],
         intent: 'Web vitals tab',
@@ -821,7 +854,7 @@ const WebAnalyticsTabs = (): JSX.Element => {
         callback: () => setProductTab(ProductTab.WEB_VITALS),
         scope: Scene.WebAnalytics,
     })
-    useAppShortcut({
+    useShortcut({
         name: 'WebAnalyticsTab3',
         keybind: [keyBinds.tab3],
         intent: 'Page reports tab',
@@ -829,7 +862,7 @@ const WebAnalyticsTabs = (): JSX.Element => {
         callback: () => setProductTab(ProductTab.PAGE_REPORTS),
         scope: Scene.WebAnalytics,
     })
-    useAppShortcut({
+    useShortcut({
         name: 'WebAnalyticsTab4',
         keybind: [keyBinds.tab4],
         intent: 'Health tab',
@@ -857,6 +890,7 @@ const WebAnalyticsTabs = (): JSX.Element => {
                 { key: ProductTab.PAGE_REPORTS, label: 'Page reports', link: '/web/page-reports' },
                 ...liveTab(),
                 ...botAnalyticsTab(featureFlags),
+                ...pagePerformanceTab(featureFlags),
                 ...healthTab(),
             ]}
             sceneInset

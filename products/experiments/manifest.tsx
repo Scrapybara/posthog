@@ -1,4 +1,4 @@
-import { toParams } from 'lib/utils'
+import { toParams } from 'lib/utils/url'
 import { urls } from 'scenes/urls'
 
 import { ExperimentMetric, ProductItemCategory, ProductKey } from '~/queries/schema/schema-general'
@@ -14,10 +14,12 @@ export const manifest: ProductManifest = {
             options?: {
                 metric?: ExperimentMetric
                 name?: string
+                tab?: string
             }
         ): string => {
             const baseUrl = formMode ? `/experiments/${id}/${formMode}` : `/experiments/${id}`
-            return `${baseUrl}${options ? `?${toParams(options)}` : ''}`
+            const params = options ? toParams(options) : ''
+            return params ? `${baseUrl}?${params}` : baseUrl
         },
         experiments: (): string => '/experiments',
         experimentsSharedMetrics: (): string => '/experiments/shared-metrics',

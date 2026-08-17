@@ -1,13 +1,15 @@
+import pytest
 from posthog.test.base import BaseTest
 from unittest.mock import patch
 
+from langgraph.errors import GraphInterrupt
 from pydantic import BaseModel
 
 from posthog.rbac.user_access_control import UserAccessControl
 
 from ee.hogai.core.context import set_node_path
 from ee.hogai.registry import CONTEXTUAL_TOOL_NAME_TO_TOOL, _import_max_tools
-from ee.hogai.tool import MaxTool
+from ee.hogai.tool import ApprovalResumePayload, ClientToolCallRequest, MaxTool
 from ee.hogai.tool_errors import (
     MaxToolAccessDeniedError,
     MaxToolError,
@@ -121,6 +123,76 @@ class TestMaxToolNodePath(BaseTest):
         self.assertEqual(result[0].name, "explicit_parent")
         self.assertEqual(result[1].name, "explicit_child")
         self.assertEqual(result[2].name, "max_tool.read_taxonomy")
+
+
+class TestMaxToolClientExecution(BaseTest):
+    def _create_tool(self) -> DummyTool:
+        return DummyTool(
+            team=self.team,
+            user=self.user,
+            node_path=(NodePath(name="root", tool_call_id="call_123", message_id="msg_1"),),
+        )
+
+    def test_interrupts_with_client_tool_call_request(self):
+        tool = self._create_tool()
+
+        with patch("ee.hogai.tool.interrupt") as mock_interrupt:
+            mock_interrupt.side_effect = GraphInterrupt()
+
+            with self.assertRaises(GraphInterrupt):
+                tool.request_client_execution()
+
+            request = mock_interrupt.call_args.args[0]
+            self.assertIsInstance(request, ClientToolCallRequest)
+            self.assertEqual(request.tool_name, "read_taxonomy")
+            self.assertEqual(request.original_tool_call_id, "call_123")
+
+    def test_returns_client_result_verbatim(self):
+        tool = self._create_tool()
+
+        with patch("ee.hogai.tool.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = {
+                "action": "client_tool_result",
+                "result": {"valid": False, "error": "no rule matched"},
+            }
+
+            result = tool.request_client_execution()
+
+            self.assertEqual(result, {"valid": False, "error": "no rule matched"})
+
+    def test_raises_retryable_error_on_invalid_resume_payload(self):
+        tool = self._create_tool()
+
+        with patch("ee.hogai.tool.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = {"action": "approve", "proposal_id": "prop_1"}
+
+            with self.assertRaises(MaxToolRetryableError):
+                tool.request_client_execution()
+
+    def test_accepts_result_addressed_to_this_tool_call(self):
+        tool = self._create_tool()
+
+        with patch("ee.hogai.tool.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = {
+                "action": "client_tool_result",
+                "tool_call_id": "call_123",
+                "result": {"ok": True},
+            }
+
+            self.assertEqual(tool.request_client_execution(), {"ok": True})
+
+    def test_raises_retryable_error_on_result_for_a_different_tool_call(self):
+        tool = self._create_tool()
+
+        with patch("ee.hogai.tool.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = {
+                "action": "client_tool_result",
+                "tool_call_id": "call_999",
+                "result": {"ok": True},
+            }
+
+            with self.assertRaises(MaxToolRetryableError):
+                tool.request_client_execution()
 
 
 class TestMaxToolErrorHierarchy(BaseTest):
@@ -419,3 +491,41 @@ class TestToolAccessControlDeclarations(BaseTest):
                 f"Tools without access control declaration: {missing_access_control}. "
                 f"Either add get_required_resource_access() or add to TOOLS_WITHOUT_ACCESS_CONTROL with a reason."
             )
+
+
+class _ApprovalArgs(BaseModel):
+    count: int
+
+
+class TestDangerousOperationBindsApprovedArguments(BaseTest):
+    """An approving user may edit the arguments; the tool must run what they approved, not what was asked."""
+
+    class _SpendingTool(MaxTool):
+        name: str = "create_feature_flag"
+        description: str = "test"
+        thinking_message: str = "test"
+        args_schema: type[BaseModel] = _ApprovalArgs
+
+        def get_required_resource_access(self):
+            # Every registered tool must declare this, and subclassing registers under the shared name.
+            return [("feature_flag", "editor")]
+
+        async def is_dangerous_operation(self, **kwargs) -> bool:
+            return True
+
+        async def _arun_impl(self, count: int) -> tuple[str, dict]:
+            return f"ran with {count}", {"count": count}
+
+    @pytest.mark.asyncio
+    async def test_edited_arguments_reach_the_implementation(self):
+        # The approval payload used to be merged into a local copy of kwargs, so an edit at the prompt
+        # was discarded and the original operation ran. On a tool that spends money, that charges for
+        # something the user did not approve.
+        tool = self._SpendingTool(team=self.team, user=self.user)
+        approved = ApprovalResumePayload(action="approve", payload={"count": 5}, proposal_id="p1")
+
+        with patch("ee.hogai.tool.interrupt", return_value=approved.model_dump()):
+            content, artifact = await tool._arun_with_context(count=200)
+
+        assert artifact["count"] == 5
+        assert "5" in content

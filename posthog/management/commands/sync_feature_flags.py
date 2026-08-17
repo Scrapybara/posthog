@@ -28,7 +28,6 @@ INACTIVE_FLAGS = [
     "insight-horizontal-controls",
     "flagged-feature-indicator",
     "read-only-mode",
-    "mcp-hints",
 ]
 
 

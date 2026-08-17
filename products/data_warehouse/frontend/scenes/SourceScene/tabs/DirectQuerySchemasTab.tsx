@@ -13,12 +13,16 @@ import {
     Tooltip,
 } from '@posthog/lemon-ui'
 
-import { groupBy, pluralize } from 'lib/utils'
+import { groupBy } from 'lib/utils/arrays'
 import { newInternalTab } from 'lib/utils/newInternalTab'
+import { pluralize } from 'lib/utils/strings'
 
 import { ExternalDataSource, ExternalDataSourceSchema } from '~/types'
 
-import { SourceEditorAction } from 'products/data_warehouse/frontend/shared/components/SourceEditorAction'
+import {
+    SchemaEditorAction,
+    SourceEditorAction,
+} from 'products/data_warehouse/frontend/shared/components/SourceEditorAction'
 import { buildTableQueryUrl } from 'products/data_warehouse/frontend/utils'
 
 import { ColumnSelectionModal } from './ColumnSelectionModal'
@@ -80,7 +84,8 @@ export function DirectQuerySchemasTab({ id }: DirectQuerySchemasTabProps): JSX.E
     const logic = sourceSettingsLogic({ id })
     const { source, sourceLoading, filteredSchemas, showEnabledSchemasOnly, schemaNameFilter, refreshingSchemas } =
         useValues(logic)
-    const { setShowEnabledSchemasOnly, setSchemaNameFilter, refreshSchemas, updateSchema } = useActions(logic)
+    const { setShowEnabledSchemasOnly, setSchemaNameFilter, refreshSchemas, updateSchema, updateSchemas } =
+        useActions(logic)
 
     const [columnModalSchema, setColumnModalSchema] = useState<ExternalDataSourceSchema | null>(null)
 
@@ -123,6 +128,7 @@ export function DirectQuerySchemasTab({ id }: DirectQuerySchemasTabProps): JSX.E
                 groupedSchemas={groupedSchemas}
                 isLoading={sourceLoading}
                 updateSchema={updateSchema}
+                updateSchemas={updateSchemas}
                 onConfigureColumns={setColumnModalSchema}
             />
             <ColumnSelectionModal
@@ -145,12 +151,14 @@ function DirectQuerySchemaGroups({
     groupedSchemas,
     isLoading,
     updateSchema,
+    updateSchemas,
     onConfigureColumns,
 }: {
     source: ExternalDataSource | null
     groupedSchemas: { schemaName: string; schemas: ExternalDataSourceSchema[] }[]
     isLoading: boolean
     updateSchema: (schema: ExternalDataSourceSchema) => void
+    updateSchemas: (schemas: ExternalDataSourceSchema[]) => void
     onConfigureColumns?: (schema: ExternalDataSourceSchema) => void
 }): JSX.Element {
     const [initialLoad, setInitialLoad] = useState(true)
@@ -197,16 +205,17 @@ function DirectQuerySchemaGroups({
     const toggleDirectQuerySchemaGroup = useCallback(
         (schemaName: string, shouldSync: boolean) => {
             const schemaGroup = groupedSchemas.find((group) => group.schemaName === schemaName)
-            for (const schema of schemaGroup?.schemas ?? []) {
-                setDirectQuerySchemaEnabled(schema, shouldSync)
-            }
+            const updatedSchemas = (schemaGroup?.schemas ?? [])
+                .filter((schema) => schema.should_sync !== shouldSync)
+                .map((schema) => ({ ...schema, should_sync: shouldSync }))
+            updateSchemas(updatedSchemas)
             setExpandedSchemaKeys((currentKeys) =>
                 shouldSync
                     ? Array.from(new Set([...currentKeys, schemaName]))
                     : currentKeys.filter((key) => key !== schemaName)
             )
         },
-        [groupedSchemas, setDirectQuerySchemaEnabled]
+        [groupedSchemas, updateSchemas]
     )
 
     if (initialLoad) {
@@ -260,12 +269,12 @@ function DirectQuerySchemaGroups({
                                             key={schema.id}
                                             className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2 px-6 py-1 items-center"
                                         >
-                                            <SourceEditorAction source={source}>
+                                            <SchemaEditorAction schema={schema}>
                                                 <LemonCheckbox
                                                     checked={schema.should_sync}
                                                     onChange={(active) => setDirectQuerySchemaEnabled(schema, active)}
                                                 />
-                                            </SourceEditorAction>
+                                            </SchemaEditorAction>
                                             <div className="flex items-center gap-1 min-w-0">
                                                 {schema.should_sync ? (
                                                     <Link
@@ -288,7 +297,7 @@ function DirectQuerySchemaGroups({
                                                 )}
                                             </div>
                                             {onConfigureColumns && (
-                                                <SourceEditorAction source={source}>
+                                                <SchemaEditorAction schema={schema}>
                                                     <LemonButton
                                                         type="tertiary"
                                                         size="xsmall"
@@ -296,7 +305,7 @@ function DirectQuerySchemaGroups({
                                                     >
                                                         Columns
                                                     </LemonButton>
-                                                </SourceEditorAction>
+                                                </SchemaEditorAction>
                                             )}
                                         </div>
                                     )

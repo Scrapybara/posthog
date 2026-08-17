@@ -8,13 +8,20 @@ import aiohttp
 import structlog
 from slack_sdk.errors import SlackApiError
 
+from posthog.helpers.slack_subscription_explore import build_explore_hint
 from posthog.models.integration import Integration, SlackIntegration
+from posthog.sync import database_sync_to_async
 from posthog.utils import absolute_uri
 
 from products.exports.backend.models.exported_asset import ExportedAsset
 from products.exports.backend.models.subscription import Subscription
 
-from ee.tasks.subscriptions.subscription_utils import ASSET_GENERATION_FAILED_MESSAGE, UTM_TAGS_BASE, _has_asset_failed
+from ee.tasks.subscriptions.subscription_utils import (
+    ASSET_GENERATION_FAILED_MESSAGE,
+    UTM_TAGS_BASE,
+    _has_asset_failed,
+    subscription_asset_error_message,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -49,7 +56,7 @@ def _next_delivery_date_display(subscription: Subscription) -> str:
 
 
 @dataclass
-class SlackMessageData:
+class SlackMessage:
     channel: str
     blocks: list[dict[str, Any]]
     title: str
@@ -83,7 +90,7 @@ def _block_for_asset(asset: ExportedAsset, resource_url: str) -> dict:
         max_error_length = 2000
 
         if asset.exception:
-            exception_text = str(asset.exception)
+            exception_text = subscription_asset_error_message(asset)
             if len(exception_text) > max_error_length:
                 exception_text = exception_text[:max_error_length] + "... (truncated)"
         else:
@@ -139,7 +146,8 @@ def _prepare_slack_message(
     is_new_subscription: bool = False,
     change_summary: str | None = None,
     summary_skipped_over_budget: bool = False,
-) -> SlackMessageData:
+    integration: Integration | None = None,
+) -> SlackMessage:
     """Prepare Slack message content. Pure function with no side effects."""
     utm_tags = f"{UTM_TAGS_BASE}&utm_medium=slack"
 
@@ -192,26 +200,28 @@ def _prepare_slack_message(
             }
         )
 
+    action_elements: list[dict] = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "View in PostHog"},
+            "url": f"{resource_info.url}?{utm_tags}",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Manage Subscription"},
+            "url": f"{subscription.url}?{utm_tags}",
+        },
+    ]
+
     blocks.extend(
         [
             {"type": "divider"},
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "View in PostHog"},
-                        "url": f"{resource_info.url}?{utm_tags}",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Manage Subscription"},
-                        "url": f"{subscription.url}?{utm_tags}",
-                    },
-                ],
-            },
+            {"type": "actions", "elements": action_elements},
         ]
     )
+    ai_enabled = bool(integration and integration.team.organization.is_ai_data_processing_approved)
+    if explore_hint := build_explore_hint(integration, utm_tags=utm_tags, ai_enabled=ai_enabled):
+        blocks.append(explore_hint)
 
     # Prepare additional messages for thread
     thread_messages = []
@@ -233,7 +243,7 @@ def _prepare_slack_message(
             }
         )
 
-    return SlackMessageData(
+    return SlackMessage(
         channel=channel,
         blocks=blocks,
         title=title,
@@ -249,7 +259,13 @@ def send_slack_message_with_integration(
     is_new_subscription: bool = False,
 ) -> None:
     """Send Slack message using provided integration (sync version)."""
-    message_data = _prepare_slack_message(subscription, assets, total_asset_count, is_new_subscription)
+    message_data = _prepare_slack_message(
+        subscription,
+        assets,
+        total_asset_count,
+        is_new_subscription,
+        integration=integration,
+    )
     slack_integration = SlackIntegration(integration)
 
     # Send main message
@@ -309,9 +325,9 @@ async def _send_slack_message_with_retry(client, max_retries: int = 3, **kwargs)
 async def deliver_slack_message_data(
     integration: Integration,
     subscription: Subscription,
-    message_data: SlackMessageData,
+    message_data: SlackMessage,
 ) -> SlackDeliveryResult:
-    # shared send path: callers build the SlackMessageData; retry + partial-failure handling are shared
+    # shared send path: callers build the SlackMessage; retry + partial-failure handling are shared
     slack_integration = SlackIntegration(integration)
 
     async with aiohttp.ClientSession(trust_env=True) as slack_session:
@@ -371,12 +387,15 @@ async def send_slack_message_with_integration_async(
     change_summary: str | None = None,
     summary_skipped_over_budget: bool = False,
 ) -> SlackDeliveryResult:
-    message_data = _prepare_slack_message(
+    # `_prepare_slack_message` reads lazily-loaded ORM relations (e.g. `integration.team.organization`),
+    # which Django forbids on the event loop. Build it in a thread before the async Slack send.
+    message_data = await database_sync_to_async(_prepare_slack_message, thread_sensitive=False)(
         subscription,
         assets,
         total_asset_count,
         is_new_subscription,
         change_summary=change_summary,
         summary_skipped_over_budget=summary_skipped_over_budget,
+        integration=integration,
     )
     return await deliver_slack_message_data(integration, subscription, message_data)

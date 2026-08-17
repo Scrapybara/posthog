@@ -16,13 +16,21 @@ import type {
     ApprovalPolicyApi,
     AvailableFiltersResponseApi,
     ChangeRequestApi,
+    ChangeRequestApproveApi,
+    ChangeRequestDecisionResponseApi,
+    ChangeRequestRejectApi,
     ChangeRequestsListParams,
     CommentApi,
+    CommentSlackThreadApi,
     CommentsListParams,
     ListParams,
     MembersListParams,
+    OrganizationAIAccessRequestResponseApi,
     OrganizationApi,
+    OrganizationDataFreshnessApi,
     OrganizationMemberApi,
+    OrganizationMemberGithubLoginApi,
+    OrganizationRemoveBlockedMembersResponseApi,
     PaginatedActivityLogListApi,
     PaginatedApprovalPolicyListApi,
     PaginatedChangeRequestListApi,
@@ -40,11 +48,11 @@ import type {
     PatchedRoleApi,
     PersonalApiKeysListParams,
     PinnedSceneTabsApi,
-    PromotedProductIntentApi,
     RoleApi,
     RoleMembershipApi,
     RolesListParams,
     RolesRoleMembershipsListParams,
+    SendCommentToSlackApi,
     WelcomeResponseApi,
 } from './api.schemas'
 
@@ -158,6 +166,65 @@ export const destroy = async (id: string, options?: RequestInit): Promise<void> 
     })
 }
 
+export const getRemoveBlockedMembersAndEnforceVerifiedDomainsCreateUrl = (id: string) => {
+    return `/api/organizations/${id}/remove_blocked_members_and_enforce_verified_domains/`
+}
+
+/**
+ * Remove the members whose email domain is outside the organization's verified domains and turn
+ * `enforce_verified_domains` on, in one transaction. Owners are never removed; they keep gated
+ * access and can disable the setting themselves. Admin only.
+ *
+ * Use this only when the caller has confirmed the removals. To turn the setting on without
+ * touching memberships, PATCH `enforce_verified_domains` on the organization instead.
+ */
+export const removeBlockedMembersAndEnforceVerifiedDomainsCreate = async (
+    id: string,
+    options?: RequestInit
+): Promise<OrganizationRemoveBlockedMembersResponseApi> => {
+    return apiMutator<OrganizationRemoveBlockedMembersResponseApi>(
+        getRemoveBlockedMembersAndEnforceVerifiedDomainsCreateUrl(id),
+        {
+            ...options,
+            method: 'POST',
+        }
+    )
+}
+
+export const getRequestAiAccessCreateUrl = (id: string) => {
+    return `/api/organizations/${id}/request_ai_access/`
+}
+
+/**
+ * Notify organization admins that a member is requesting PostHog AI be enabled.
+ */
+export const requestAiAccessCreate = async (
+    id: string,
+    options?: RequestInit
+): Promise<OrganizationAIAccessRequestResponseApi> => {
+    return apiMutator<OrganizationAIAccessRequestResponseApi>(getRequestAiAccessCreateUrl(id), {
+        ...options,
+        method: 'POST',
+    })
+}
+
+export const getTeamsDataFreshnessRetrieveUrl = (id: string) => {
+    return `/api/organizations/${id}/teams/data_freshness/`
+}
+
+/**
+ * When each project in the organization last received data, broken down by kind of data.
+ */
+export const teamsDataFreshnessRetrieve = async (
+    id: string,
+    options?: RequestInit
+): Promise<OrganizationDataFreshnessApi> => {
+    return apiMutator<OrganizationDataFreshnessApi>(getTeamsDataFreshnessRetrieveUrl(id), {
+        ...options,
+        method: 'GET',
+    })
+}
+
 export const getMembersListUrl = (organizationId: string, params?: MembersListParams) => {
     const normalizedParams = new URLSearchParams()
 
@@ -236,6 +303,21 @@ export const membersDestroy = async (
     })
 }
 
+export const getMembersGithubLoginRetrieveUrl = (organizationId: string, userUuid: string) => {
+    return `/api/organizations/${organizationId}/members/${userUuid}/github_login/`
+}
+
+export const membersGithubLoginRetrieve = async (
+    organizationId: string,
+    userUuid: string,
+    options?: RequestInit
+): Promise<OrganizationMemberGithubLoginApi> => {
+    return apiMutator<OrganizationMemberGithubLoginApi>(getMembersGithubLoginRetrieveUrl(organizationId, userUuid), {
+        ...options,
+        method: 'GET',
+    })
+}
+
 export const getMembersScopedApiKeysRetrieveUrl = (organizationId: string, userUuid: string) => {
     return `/api/organizations/${organizationId}/members/${userUuid}/scoped_api_keys/`
 }
@@ -294,6 +376,10 @@ export const getRolesListUrl = (organizationId: string, params?: RolesListParams
         : `/api/organizations/${organizationId}/roles/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesList = async (
     organizationId: string,
     params?: RolesListParams,
@@ -309,6 +395,10 @@ export const getRolesCreateUrl = (organizationId: string) => {
     return `/api/organizations/${organizationId}/roles/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesCreate = async (
     organizationId: string,
     roleApi: NonReadonly<RoleApi>,
@@ -326,6 +416,10 @@ export const getRolesRetrieveUrl = (organizationId: string, id: string) => {
     return `/api/organizations/${organizationId}/roles/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesRetrieve = async (organizationId: string, id: string, options?: RequestInit): Promise<RoleApi> => {
     return apiMutator<RoleApi>(getRolesRetrieveUrl(organizationId, id), {
         ...options,
@@ -337,6 +431,10 @@ export const getRolesUpdateUrl = (organizationId: string, id: string) => {
     return `/api/organizations/${organizationId}/roles/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesUpdate = async (
     organizationId: string,
     id: string,
@@ -355,6 +453,10 @@ export const getRolesPartialUpdateUrl = (organizationId: string, id: string) => 
     return `/api/organizations/${organizationId}/roles/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesPartialUpdate = async (
     organizationId: string,
     id: string,
@@ -373,6 +475,10 @@ export const getRolesDestroyUrl = (organizationId: string, id: string) => {
     return `/api/organizations/${organizationId}/roles/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesDestroy = async (organizationId: string, id: string, options?: RequestInit): Promise<void> => {
     return apiMutator<void>(getRolesDestroyUrl(organizationId, id), {
         ...options,
@@ -400,6 +506,10 @@ export const getRolesRoleMembershipsListUrl = (
         : `/api/organizations/${organizationId}/roles/${roleId}/role_memberships/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesRoleMembershipsList = async (
     organizationId: string,
     roleId: string,
@@ -416,6 +526,10 @@ export const getRolesRoleMembershipsCreateUrl = (organizationId: string, roleId:
     return `/api/organizations/${organizationId}/roles/${roleId}/role_memberships/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesRoleMembershipsCreate = async (
     organizationId: string,
     roleId: string,
@@ -434,6 +548,10 @@ export const getRolesRoleMembershipsRetrieveUrl = (organizationId: string, roleI
     return `/api/organizations/${organizationId}/roles/${roleId}/role_memberships/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesRoleMembershipsRetrieve = async (
     organizationId: string,
     roleId: string,
@@ -450,6 +568,10 @@ export const getRolesRoleMembershipsDestroyUrl = (organizationId: string, roleId
     return `/api/organizations/${organizationId}/roles/${roleId}/role_memberships/${id}/`
 }
 
+/**
+ * Role endpoints disclose member records, so they scope them the same way the members list
+ * does when the org restricts member list visibility.
+ */
 export const rolesRoleMembershipsDestroy = async (
     organizationId: string,
     roleId: string,
@@ -723,14 +845,14 @@ export const getChangeRequestsApproveCreateUrl = (projectId: string, id: string)
 export const changeRequestsApproveCreate = async (
     projectId: string,
     id: string,
-    changeRequestApi?: NonReadonly<ChangeRequestApi>,
+    changeRequestApproveApi?: ChangeRequestApproveApi,
     options?: RequestInit
-): Promise<ChangeRequestApi> => {
-    return apiMutator<ChangeRequestApi>(getChangeRequestsApproveCreateUrl(projectId, id), {
+): Promise<ChangeRequestDecisionResponseApi> => {
+    return apiMutator<ChangeRequestDecisionResponseApi>(getChangeRequestsApproveCreateUrl(projectId, id), {
         ...options,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(changeRequestApi),
+        body: JSON.stringify(changeRequestApproveApi),
     })
 }
 
@@ -766,14 +888,14 @@ export const getChangeRequestsRejectCreateUrl = (projectId: string, id: string) 
 export const changeRequestsRejectCreate = async (
     projectId: string,
     id: string,
-    changeRequestApi?: NonReadonly<ChangeRequestApi>,
+    changeRequestRejectApi: ChangeRequestRejectApi,
     options?: RequestInit
-): Promise<ChangeRequestApi> => {
-    return apiMutator<ChangeRequestApi>(getChangeRequestsRejectCreateUrl(projectId, id), {
+): Promise<ChangeRequestDecisionResponseApi> => {
+    return apiMutator<ChangeRequestDecisionResponseApi>(getChangeRequestsRejectCreateUrl(projectId, id), {
         ...options,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(changeRequestApi),
+        body: JSON.stringify(changeRequestRejectApi),
     })
 }
 
@@ -808,9 +930,16 @@ export const getCommentsCreateUrl = (projectId: string) => {
     return `/api/projects/${projectId}/comments/`
 }
 
+/**
+ * Create a comment.
+ *
+ * Support messages are deduplicated: an identical message from the same author on the same
+ * ticket within a short window returns the original comment with a 200 instead of creating a
+ * second one, and a 409 while a concurrent request is still creating it.
+ */
 export const commentsCreate = async (
     projectId: string,
-    commentApi: NonReadonly<CommentApi>,
+    commentApi?: NonReadonly<CommentApi>,
     options?: RequestInit
 ): Promise<CommentApi> => {
     return apiMutator<CommentApi>(getCommentsCreateUrl(projectId), {
@@ -839,7 +968,7 @@ export const getCommentsUpdateUrl = (projectId: string, id: string) => {
 export const commentsUpdate = async (
     projectId: string,
     id: string,
-    commentApi: NonReadonly<CommentApi>,
+    commentApi?: NonReadonly<CommentApi>,
     options?: RequestInit
 ): Promise<CommentApi> => {
     return apiMutator<CommentApi>(getCommentsUpdateUrl(projectId, id), {
@@ -918,6 +1047,27 @@ export const commentsReopenCreate = async (
     })
 }
 
+export const getCommentsSendToSlackCreateUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/comments/${id}/send_to_slack/`
+}
+
+/**
+ * Mirror this discussion thread to a Slack channel. Posts the comment (and its existing replies) as a new Slack thread; later replies on either side sync across. A discussion mirrors to exactly one Slack thread: re-calling with the same channel returns the existing mirror; a different channel is a 400 naming the existing one. 409 while a concurrent send is in flight. 404 when the feature is not enabled for the team.
+ */
+export const commentsSendToSlackCreate = async (
+    projectId: string,
+    id: string,
+    sendCommentToSlackApi: SendCommentToSlackApi,
+    options?: RequestInit
+): Promise<CommentSlackThreadApi> => {
+    return apiMutator<CommentSlackThreadApi>(getCommentsSendToSlackCreateUrl(projectId, id), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(sendCommentToSlackApi),
+    })
+}
+
 export const getCommentsThreadRetrieveUrl = (projectId: string, id: string) => {
     return `/api/projects/${projectId}/comments/${id}/thread/`
 }
@@ -935,24 +1085,6 @@ export const getCommentsCountRetrieveUrl = (projectId: string) => {
 
 export const commentsCountRetrieve = async (projectId: string, options?: RequestInit): Promise<void> => {
     return apiMutator<void>(getCommentsCountRetrieveUrl(projectId), {
-        ...options,
-        method: 'GET',
-    })
-}
-
-export const getEnvironmentsPromotedProductIntentRetrieveUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/environments/${id}/promoted_product_intent/`
-}
-
-/**
- * Return the product key (e.g. `session_replay`, `web_analytics`) this team selected as their primary product during onboarding. Resolved from the team's most recent primary-onboarding `ProductIntent` record (the one carrying the `onboarding product selected - primary` context) — not from the `user showed product intent` event, which also fires for non-onboarding contexts. Returns `null` when no primary onboarding product intent has been captured (e.g. teams created before this signal existed, or where onboarding was skipped).
- */
-export const environmentsPromotedProductIntentRetrieve = async (
-    projectId: string,
-    id: number,
-    options?: RequestInit
-): Promise<PromotedProductIntentApi> => {
-    return apiMutator<PromotedProductIntentApi>(getEnvironmentsPromotedProductIntentRetrieveUrl(projectId, id), {
         ...options,
         method: 'GET',
     })

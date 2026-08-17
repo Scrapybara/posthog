@@ -1,6 +1,14 @@
 import { useEffect, useRef } from 'react'
 
-import type { ChartDimensions, ChartDrawArgs, ChartScales, ChartTheme, DrawHoverResult, ResolvedSeries } from '../types'
+import type {
+    ChartDimensions,
+    ChartDrawArgs,
+    ChartScales,
+    ChartTheme,
+    DragRect,
+    DrawHoverResult,
+    ResolvedSeries,
+} from '../types'
 import { clearAndPrepare } from './clearCanvas'
 import { useHoverAnimation } from './useHoverAnimation'
 
@@ -16,6 +24,7 @@ interface UseChartDrawOptions {
     hoverIndex: number
     hoverPosition: { x: number; y: number } | null
     theme: ChartTheme
+    dragRect?: DragRect | null
     drawStatic: (args: ChartDrawArgs) => void
     drawHover: (args: ChartDrawArgs) => DrawHoverResult
     /** Duration (ms) of the hover-overlay fade-in/out. `0` disables. */
@@ -32,6 +41,7 @@ export function useChartDraw({
     hoverIndex,
     hoverPosition,
     theme,
+    dragRect = null,
     drawStatic,
     drawHover,
     hoverAnimationMs = 0,
@@ -46,25 +56,28 @@ export function useChartDraw({
             cancelAnimationFrame(staticRafRef.current)
             staticRafRef.current = null
         }
-        if (!ctx || !dimensions || !scales) {
+        if (!ctx || !dimensions || !scales || theme.skipDraw) {
             return
         }
         staticRafRef.current = requestAnimationFrame(() => {
             staticRafRef.current = null
             clearAndPrepare(ctx, dimensions)
-            drawStatic({
-                ctx,
-                dimensions,
-                scales,
-                series,
-                labels,
-                hoverIndex: -1,
-                hoverPosition: null,
-                theme,
-                hoverProgress: 1,
-                resetHoverFade: () => 1,
-            })
-            ctx.restore()
+            try {
+                drawStatic({
+                    ctx,
+                    dimensions,
+                    scales,
+                    series,
+                    labels,
+                    hoverIndex: -1,
+                    hoverPosition: null,
+                    theme,
+                    hoverProgress: 1,
+                    resetHoverFade: () => 1,
+                })
+            } finally {
+                ctx.restore()
+            }
         })
         return () => {
             if (staticRafRef.current != null) {
@@ -84,6 +97,7 @@ export function useChartDraw({
         hoverIndex,
         hoverPosition,
         theme,
+        dragRect,
         drawHover,
         hoverAnimationMs,
     })

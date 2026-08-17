@@ -1,6 +1,6 @@
 import { useActions, useValues } from 'kea'
 
-import { IconGraph, IconLifecycle, IconPieChart, IconTrends } from '@posthog/icons'
+import { IconGraph, IconLifecycle, IconPieChart, IconScatter, IconTrends } from '@posthog/icons'
 import { LemonSelect, LemonSelectOptions, LemonSelectProps } from '@posthog/lemon-ui'
 
 import { Icon123, IconAreaChart, IconHeatmap, IconTableChart } from 'lib/lemon-ui/icons'
@@ -16,6 +16,8 @@ export const TableDisplay = ({ disabledReason }: TableDisplayProps): JSX.Element
     const { autoVisualizationType, columns, numericalColumns, visualizationType } = useValues(dataVisualizationLogic)
 
     const canDisplayContinuousChart = columns.length > 1 && numericalColumns.length > 0
+    // Both scatter axes are numeric measures, so one numeric column can't fill both.
+    const canDisplayScatterPlot = numericalColumns.length > 1
 
     const displayTypeLabels: Record<ChartDisplayType, string> = {
         [ChartDisplayType.Auto]: 'Auto',
@@ -26,6 +28,7 @@ export const TableDisplay = ({ disabledReason }: TableDisplayProps): JSX.Element
         [ChartDisplayType.ActionsAreaGraph]: 'Area chart',
         [ChartDisplayType.ActionsLineGraphCumulative]: 'Cumulative line chart',
         [ChartDisplayType.BoldNumber]: 'Big number',
+        [ChartDisplayType.Metric]: 'Metric',
         [ChartDisplayType.ActionsPie]: 'Pie chart',
         [ChartDisplayType.ActionsBarValue]: 'Value chart',
         [ChartDisplayType.ActionsTable]: 'Table',
@@ -34,6 +37,7 @@ export const TableDisplay = ({ disabledReason }: TableDisplayProps): JSX.Element
         [ChartDisplayType.TwoDimensionalHeatmap]: '2d heatmap',
         [ChartDisplayType.BoxPlot]: 'Box plot',
         [ChartDisplayType.SlopeGraph]: 'Slope graph',
+        [ChartDisplayType.ScatterPlot]: 'Scatter plot',
     }
 
     const renderDisplayTypeLabel = (displayType: ChartDisplayType): string => {
@@ -106,6 +110,14 @@ export const TableDisplay = ({ disabledReason }: TableDisplayProps): JSX.Element
                     value: ChartDisplayType.ActionsPie,
                     icon: <IconPieChart />,
                     label: 'Pie chart',
+                },
+                {
+                    value: ChartDisplayType.ScatterPlot,
+                    icon: <IconScatter />,
+                    label: 'Scatter plot',
+                    disabledReason: !canDisplayScatterPlot
+                        ? 'Requires at least two numeric columns, one for each axis'
+                        : undefined,
                 },
                 {
                     value: ChartDisplayType.TwoDimensionalHeatmap,

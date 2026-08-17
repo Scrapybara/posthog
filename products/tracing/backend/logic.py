@@ -18,7 +18,6 @@ from posthog.schema import (
     CachedTraceSpansTreeQueryResponse,
     CompareFilter,
     DateRange,
-    HogQLFilters,
     HogQLQueryModifiers,
     IntervalType,
     PropertyGroupFilter,
@@ -58,6 +57,29 @@ TIME_BUCKET_DATE_RANGE_WHERE = (
     "toStartOfDay(time_bucket, 'UTC') >= toStartOfDay({date_from}, 'UTC') "
     "and toStartOfDay(time_bucket, 'UTC') <= toStartOfDay({date_to}, 'UTC')"
 )
+
+# Hard cap on number of rows returned per period by the span aggregation runners. Keeps
+# payloads bounded when name cardinality blows up (e.g. untemplated URL paths). The flame
+# graph collapses long tails anyway so the lower-ranked rows aren't visible.
+_ROW_LIMIT = 5000
+
+# Default row cap for the flat aggregation when a caller does not pass an explicit `limit`.
+# Kept small because this endpoint feeds agent/MCP callers, where the full 5000-row tail can
+# push a single response past a million tokens once name cardinality blows up. Rows are
+# ordered by total_duration_nano DESC, so the default still surfaces the heaviest operations;
+# callers that need the long tail opt into a higher `limit` (up to _ROW_LIMIT) or paginate.
+DEFAULT_AGGREGATION_ROW_LIMIT = 100
+
+# Value-search probes attribute_value with ILIKE %search%, which scans far more rows than
+# the key-only path. Require a meaningfully specific term so short prefixes (e.g. "id")
+# don't trigger an expensive scan.
+MIN_VALUE_SEARCH_LENGTH = 4
+
+
+def _ilike_pattern(search: str) -> str:
+    # Escape ILIKE wildcards so a search for "%" matches a literal percent sign, not every row.
+    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _normalise_to_base64(value: str) -> str:
@@ -156,10 +178,10 @@ def translate_span_filter(span_filter: SpanPropertyFilter) -> None:
         span_filter.key = "duration_nano"
         if isinstance(span_filter.value, list):
             span_filter.value = [
-                str(decimal.Decimal(str(v)) * 1000000) for v in span_filter.value if _is_number(str(v))
+                str(int(decimal.Decimal(str(v)) * 1000000)) for v in span_filter.value if _is_number(str(v))
             ]
         elif _is_number(str(span_filter.value)):
-            span_filter.value = str(decimal.Decimal(str(span_filter.value)) * 1000000)
+            span_filter.value = str(int(decimal.Decimal(str(span_filter.value)) * 1000000))
 
     if span_filter.key == "kind" and span_filter.value is not None:
         values: list = span_filter.value if isinstance(span_filter.value, list) else [span_filter.value]
@@ -402,7 +424,7 @@ class TraceSpansQueryRunner(TraceSpansQueryRunnerMixin, AnalyticsQueryRunner[Tra
             team=self.team,
             workload=Workload.LOGS,
             timings=self.timings,
-            filters=HogQLFilters(dateRange=self.query.dateRange),
+            filters=self.query_date_range.to_hogql_filters(),
             settings=self.settings,
         )
         results = []
@@ -611,6 +633,11 @@ class TraceSpansQueryRunner(TraceSpansQueryRunnerMixin, AnalyticsQueryRunner[Tra
         # Root rows drive the displayed list order. Time sorts order them by timestamp; duration sorts
         # by the per-trace duration window (constant within a trace, so spans of a trace stay grouped).
         base_order = [parse_order_expr("is_root_span DESC"), parse_order_expr("matched_filter DESC")]
+        # The single-trace waterfall paginates *within* one trace: order its spans purely by start
+        # time so the per-trace `LIMIT BY` window is the first `prefetchSpans` spans by start time,
+        # and an `offset` pages through the rest (infinite scroll). The multi-trace list keeps its
+        # root/matched-first grouping so a trace's root and matching spans stay visible.
+        single_trace = self.query.traceId is not None
         if by_duration:
             query.order_by = [
                 *base_order,
@@ -618,12 +645,20 @@ class TraceSpansQueryRunner(TraceSpansQueryRunnerMixin, AnalyticsQueryRunner[Tra
                 parse_order_expr(f"trace_id {order_dir}"),
                 parse_order_expr("timestamp ASC"),
             ]
+        elif single_trace:
+            query.order_by = [
+                parse_order_expr(f"timestamp {order_dir}"),
+                parse_order_expr(f"span_id {order_dir}"),
+            ]
         else:
             query.order_by = [*base_order, parse_order_expr(f"timestamp {order_dir}")]
 
         query.limit_by = ast.LimitByExpr(
             n=ast.Constant(value=limit_by_n),
             exprs=[ast.Field(chain=["trace_id"])],
+            # Within-trace offset paging — only meaningful for the single-trace waterfall (timestamp
+            # order). The paginator's own offset stays 0 in grouped mode, so these don't compound.
+            offset_value=ast.Constant(value=self.query.offset) if single_trace and self.query.offset else None,
         )
 
         return query
@@ -736,7 +771,7 @@ def run_service_names_query(
         exprs.append(
             parse_expr(
                 "service_name ILIKE {search}",
-                placeholders={"search": ast.Constant(value=f"%{search}%")},
+                placeholders={"search": ast.Constant(value=_ilike_pattern(search))},
             )
         )
 
@@ -757,7 +792,7 @@ def run_service_names_query(
         query=query,
         team=team,
         workload=Workload.LOGS,
-        filters=HogQLFilters(dateRange=date_range),
+        filters=query_date_range.to_hogql_filters(),
         modifiers=HogQLQueryModifiers(convertToProjectTimezone=False),
         settings=HogQLGlobalSettings(
             allow_experimental_object_type=False,
@@ -776,10 +811,25 @@ def run_attribute_names_query(
     date_range: DateRange,
     attribute_type: str = "span_attribute",
     search: str = "",
+    search_values: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """Return attribute names from trace_attributes table."""
+    """Return attribute names from trace_attributes table.
+
+    When search_values is set and the search term is specific enough, also match
+    on attribute values so a user can find the key holding e.g. a trace_id.
+    """
+    if search_values and search and len(search) >= MIN_VALUE_SEARCH_LENGTH:
+        return _run_attribute_names_value_search(
+            team=team,
+            date_range=date_range,
+            attribute_type=attribute_type,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+
     query_date_range = QueryDateRange(
         date_range=date_range,
         team=team,
@@ -806,14 +856,14 @@ def run_attribute_names_query(
             WHERE time_bucket >= {date_from_start_of_interval}
             AND time_bucket <= {date_to_start_of_interval} + {one_interval_period}
             AND attribute_type = {attributeType}
-            AND attribute_key LIKE {search}
+            AND attribute_key ILIKE {search}
             GROUP BY team_id, attribute_key
             ORDER BY sum(attribute_count) desc, attribute_key asc
             OFFSET {offset}
         )
         """,
         placeholders={
-            "search": ast.Constant(value=f"%{search}%"),
+            "search": ast.Constant(value=_ilike_pattern(search)),
             "attributeType": ast.Constant(value=attribute_type),
             "limit": ast.Constant(value=limit),
             "offset": ast.Constant(value=offset),
@@ -826,7 +876,7 @@ def run_attribute_names_query(
         query=query,
         team=team,
         workload=Workload.LOGS,
-        filters=HogQLFilters(dateRange=date_range),
+        filters=query_date_range.to_hogql_filters(),
         modifiers=HogQLQueryModifiers(convertToProjectTimezone=False),
         settings=HogQLGlobalSettings(
             read_overflow_mode="break",
@@ -838,10 +888,119 @@ def run_attribute_names_query(
     count = 0
     if isinstance(response.results, list) and len(response.results) > 0 and len(response.results[0]) > 0:
         for name in response.results[0][0]:
-            results.append({"name": name, "propertyFilterType": property_filter_type})
+            results.append({"name": name, "propertyFilterType": property_filter_type, "matchedOn": "key"})
         count = response.results[0][1] + offset
 
     return results, count
+
+
+def _run_attribute_names_value_search(
+    team: "Team",
+    date_range: DateRange,
+    attribute_type: str,
+    search: str,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict], int]:
+    # UNION ALL of two branches:
+    #   (1) keys whose name matches the search
+    #   (2) keys whose values match the search but whose name does NOT match
+    # The NOT-ILIKE on the value branch dedupes — a key never appears twice.
+    # match_type lets the outer ORDER BY put key matches above value matches.
+    query_date_range = QueryDateRange(
+        date_range=date_range,
+        team=team,
+        interval=IntervalType.MINUTE,
+        interval_count=10,
+        now=dt.datetime.now(),
+        timezone_info=ZoneInfo("UTC"),
+    )
+
+    property_filter_type = (
+        attribute_type if attribute_type in ("span_attribute", "span_resource_attribute") else "span_attribute"
+    )
+
+    query = parse_select(
+        """
+        SELECT
+            attribute_key,
+            match_type,
+            sample_value,
+            total_count
+        FROM (
+            SELECT
+                attribute_key,
+                'key' AS match_type,
+                '' AS sample_value,
+                sum(attribute_count) AS total_count
+            FROM posthog.trace_attributes
+            WHERE time_bucket >= {date_from_start_of_interval}
+            AND time_bucket <= {date_to_start_of_interval} + {one_interval_period}
+            AND attribute_type = {attributeType}
+            AND attribute_key ILIKE {search}
+            GROUP BY team_id, attribute_key
+
+            UNION ALL
+
+            SELECT
+                attribute_key,
+                'value' AS match_type,
+                argMax(attribute_value, attribute_count) AS sample_value,
+                sum(attribute_count) AS total_count
+            FROM posthog.trace_attributes
+            WHERE time_bucket >= {date_from_start_of_interval}
+            AND time_bucket <= {date_to_start_of_interval} + {one_interval_period}
+            AND attribute_type = {attributeType}
+            AND attribute_value ILIKE {search}
+            AND attribute_key NOT ILIKE {search}
+            GROUP BY team_id, attribute_key
+        )
+        ORDER BY
+            match_type = 'key' DESC,
+            total_count DESC,
+            attribute_key ASC
+        LIMIT {limit}
+        OFFSET {offset}
+        """,
+        placeholders={
+            "search": ast.Constant(value=_ilike_pattern(search)),
+            "attributeType": ast.Constant(value=attribute_type),
+            "limit": ast.Constant(value=limit),
+            "offset": ast.Constant(value=offset),
+            **query_date_range.to_placeholders(),
+        },
+    )
+
+    response = execute_hogql_query(
+        query_type="TracingAttributeNamesQuery",
+        query=query,
+        team=team,
+        workload=Workload.LOGS,
+        filters=query_date_range.to_hogql_filters(),
+        modifiers=HogQLQueryModifiers(convertToProjectTimezone=False),
+        settings=HogQLGlobalSettings(
+            read_overflow_mode="break",
+            max_bytes_to_read=5_000_000_000,
+        ),
+    )
+
+    results = []
+    if isinstance(response.results, list):
+        for row in response.results:
+            attribute_key, match_type, sample_value, _total_count = row
+            matched_on_key = match_type == "key"
+            results.append(
+                {
+                    "name": attribute_key,
+                    "propertyFilterType": property_filter_type,
+                    "matchedOn": "key" if matched_on_key else "value",
+                    "matchedValue": None if matched_on_key else (sample_value or None),
+                }
+            )
+
+    # Total count for value-search isn't separately computed; use the returned page
+    # size plus offset as a lower bound — enough for the "load more" affordance.
+    return results, len(results) + offset
 
 
 def run_attribute_values_query(
@@ -884,7 +1043,7 @@ def run_attribute_values_query(
         )
         """,
         placeholders={
-            "search": ast.Constant(value=f"%{search}%"),
+            "search": ast.Constant(value=_ilike_pattern(search)),
             "attributeType": ast.Constant(value=attribute_type),
             "attributeKey": ast.Constant(value=attribute_key),
             "limit": ast.Constant(value=limit),
@@ -898,7 +1057,7 @@ def run_attribute_values_query(
         query=query,
         team=team,
         workload=Workload.LOGS,
-        filters=HogQLFilters(dateRange=date_range),
+        filters=query_date_range.to_hogql_filters(),
         modifiers=HogQLQueryModifiers(convertToProjectTimezone=False),
         settings=HogQLGlobalSettings(
             read_overflow_mode="break",
@@ -921,10 +1080,11 @@ def run_aggregation_query(
     compare_filter: CompareFilter | None = None,
     filter_group: PropertyGroupFilter | None = None,
     service_names: list[str] | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> TraceSpansAggregationQueryResponse | CachedTraceSpansAggregationQueryResponse:
     """Facade-friendly entry point for running a flat span aggregation query."""
-    # noqa-justified: the runners import `translate_span_filter` from this module, so a
-    # module-level import here is circular and only resolves when this module loads first.
+    # The runners import `translate_span_filter` from this module, so a module-level import here is circular.
     from .aggregation_query_runner import TraceSpansAggregationQueryRunner  # noqa: PLC0415
 
     query = TraceSpansAggregationQuery(
@@ -933,7 +1093,7 @@ def run_aggregation_query(
         filterGroup=filter_group,
         serviceNames=service_names,
     )
-    runner = TraceSpansAggregationQueryRunner(query, team)
+    runner = TraceSpansAggregationQueryRunner(query, team, limit=limit, offset=offset)
     response = runner.run(ExecutionMode.CALCULATE_BLOCKING_ALWAYS)
     assert isinstance(response, TraceSpansAggregationQueryResponse | CachedTraceSpansAggregationQueryResponse)
     return response
@@ -950,7 +1110,7 @@ def run_tree_query(
     service_names: list[str] | None = None,
 ) -> TraceSpansTreeQueryResponse | CachedTraceSpansTreeQueryResponse:
     """Facade-friendly entry point for running a span call-tree aggregation query."""
-    # noqa-justified: same circular import as run_aggregation_query above.
+    # Same circular import as run_aggregation_query above.
     from .aggregation_query_runner import TraceSpansTreeQueryRunner  # noqa: PLC0415
 
     query = TraceSpansTreeQuery(

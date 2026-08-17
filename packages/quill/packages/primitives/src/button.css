@@ -31,7 +31,30 @@
         box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 30%, transparent);
     }
 
-    .quill-button:disabled {
+    /*
+     * Press feedback — the button dips 1px under the cursor. Excluded are the
+     * variants/components that own their own press motion: `primary` rests
+     * raised and settles to 0, `toggle` dips 2px, and tabs stay put (a tab
+     * that jumps would drag the whole strip's baseline with it).
+     */
+    .quill-button:not(
+        :disabled,
+        [aria-disabled='true'],
+        .quill-button--variant-primary,
+        .quill-tabs__trigger,
+        .quill-toggle
+    ):active {
+        translate: 0 1px;
+    }
+
+    /* Disabled covers both paths: native :disabled (focusableWhenDisabled=false)
+       and the focusable aria-disabled="true" path (the default). Loading is
+       excluded — it's busy, not unavailable, so it keeps full-strength visuals
+       under the spinner. cursor: not-allowed signals the button is unavailable;
+       native :disabled set it for free, but aria-disabled does not. */
+    .quill-button:disabled,
+    .quill-button[aria-disabled='true']:not([data-loading]) {
+        cursor: not-allowed;
         opacity: 0.5;
     }
 
@@ -55,10 +78,6 @@
         height: 1rem;
     }
 
-    .quill-button:not(:disabled):active {
-        translate: 0 1px;
-    }
-
     .quill-button kbd {
         margin-right: -0.25rem;
     }
@@ -75,7 +94,7 @@
         transition: border-radius 0.1s;
     }
 
-    .quill-button--variant-default:not(:disabled):hover {
+    .quill-button--variant-default:not(:disabled, [aria-disabled='true']):hover {
         color: var(--foreground);
         background-color: var(--fill-hover);
     }
@@ -105,8 +124,8 @@
 
     /* Consecutive selected items collapse corners for a seamless stack */
     .quill-button--variant-default:is([aria-selected='true'], [aria-checked='true']):has(
-            + :is([aria-selected='true'], [aria-checked='true'])
-        ) {
+        + :is([aria-selected='true'], [aria-checked='true'])
+    ) {
         border-bottom-right-radius: 0;
         border-bottom-left-radius: 0;
     }
@@ -138,12 +157,19 @@
         content: '';
     }
 
-    .quill-button--variant-primary:not(:disabled):hover {
+    .quill-button--variant-primary:not(:disabled, [aria-disabled='true']):hover {
         background-color: color-mix(in oklab, var(--primary) 98%, black 5%);
     }
 
-    .quill-button--variant-primary:not(:disabled):active {
+    .quill-button--variant-primary:not(:disabled, [aria-disabled='true']):active {
         box-shadow: 0 1px 0 -1px color-mix(in oklab, var(--primary) 50%, transparent);
+        translate: 0 0;
+    }
+
+    /* Disabled sits flat — no raised lift/shadow that reads as pressable. */
+    .quill-button--variant-primary:disabled,
+    .quill-button--variant-primary[aria-disabled='true']:not([data-loading]) {
+        box-shadow: none;
         translate: 0 0;
     }
 
@@ -159,13 +185,9 @@
         border-color: color-mix(in oklab, var(--foreground) 15%, transparent);
     }
 
-    .quill-button--variant-outline:not(:disabled):hover {
+    .quill-button--variant-outline:not(:disabled, [aria-disabled='true']):hover {
         color: var(--foreground);
-        background-color: color-mix(in oklab, var(--muted) 50%, transparent);
-    }
-
-    :is(.dark, [theme='dark']) .quill-button--variant-outline:not(:disabled):hover {
-        color: var(--foreground);
+        background-color: var(--fill-hover);
     }
 
     .quill-button--variant-outline[aria-expanded='true'] {
@@ -185,7 +207,11 @@
         background-color: color-mix(in oklab, var(--destructive) 50%, transparent);
     }
 
-    .quill-button--variant-destructive:not(:disabled):hover {
+    /* `data-highlighted` is the keyboard equivalent of hover inside a menu —
+       both land on the same brighter fill so navigating by arrow keys reads
+       the same as pointing at the row. */
+    .quill-button--variant-destructive:not(:disabled, [aria-disabled='true']):hover,
+    .quill-button--variant-destructive:not(:disabled, [aria-disabled='true'])[data-highlighted] {
         background-color: var(--destructive);
     }
 
@@ -206,7 +232,7 @@
         text-underline-offset: 4px;
     }
 
-    .quill-button--variant-link:hover,
+    .quill-button--variant-link:not(:disabled, [aria-disabled='true']):hover,
     .quill-button--variant-link[data-popup-open] {
         text-decoration: underline;
     }
@@ -216,7 +242,7 @@
         text-underline-offset: 4px;
     }
 
-    .quill-button--variant-link-muted:hover,
+    .quill-button--variant-link-muted:not(:disabled, [aria-disabled='true']):hover,
     .quill-button--variant-link-muted[data-popup-open] {
         text-decoration: underline;
     }
@@ -361,12 +387,8 @@
         cursor: default;
     }
 
-    .quill-button--inert:not(:disabled):hover {
+    .quill-button--inert:not(:disabled, [aria-disabled='true']):hover {
         background-color: transparent;
-    }
-
-    .quill-button--inert:not(:disabled):active {
-        translate: 0 0;
     }
 
     /* =========================================================================
@@ -379,10 +401,6 @@
     .quill-button[data-loading] {
         position: relative;
         color: transparent;
-
-        /* No hover/active reactions while busy — variant hover rules would
-           otherwise repaint the label color over the spinner. */
-        pointer-events: none;
         transition: color 150ms ease;
     }
 

@@ -4,6 +4,7 @@ from django.db import IntegrityError
 from django.db.models import QuerySet
 from django.utils import timezone
 
+import posthoganalytics
 from rest_framework import response, serializers, status, viewsets
 from rest_framework.exceptions import ValidationError
 
@@ -22,6 +23,7 @@ from posthog.scopes import (
     INTERNAL_API_SCOPE_OBJECTS,
     PROJECT_SECRET_API_KEY_ALLOWED_API_SCOPE_ACTION,
 )
+from posthog.tasks.email import send_project_secret_api_key_exposed
 
 MAX_PROJECT_SECRET_API_KEYS_PER_TEAM = 50
 
@@ -65,6 +67,12 @@ class ProjectSecretAPIKeySerializer(serializers.ModelSerializer):
         return getattr(obj, "_value", None)  # type: ignore
 
     def validate_scopes(self, scopes):
+        allowed = set(PROJECT_SECRET_API_KEY_ALLOWED_API_SCOPE_ACTION)
+        # Allow llm_gateway:read only when the flag is on or the key already has it, so a flag
+        # rollback can't make an existing key unsaveable. Flag is evaluated only when requested.
+        if any(s.startswith("llm_gateway:") for s in scopes) and self._llm_gateway_grantable():
+            allowed.add(("llm_gateway", "read"))
+
         for scope in scopes:
             if scope == "*":
                 raise serializers.ValidationError(
@@ -79,17 +87,36 @@ class ProjectSecretAPIKeySerializer(serializers.ModelSerializer):
             ):
                 raise serializers.ValidationError(f"Invalid scope: {scope}")
 
-            if (scope_parts[0], scope_parts[1]) not in PROJECT_SECRET_API_KEY_ALLOWED_API_SCOPE_ACTION:
-                allowed_scopes = ", ".join(
-                    [
-                        f"{scope_object_action[0]}:{scope_object_action[1]}"
-                        for scope_object_action in PROJECT_SECRET_API_KEY_ALLOWED_API_SCOPE_ACTION
-                    ]
-                )
+            if (scope_parts[0], scope_parts[1]) not in allowed:
+                if (scope_parts[0], scope_parts[1]) == ("llm_gateway", "read"):
+                    raise serializers.ValidationError(
+                        "LLM gateway scope is not available for this project. Contact support to enable this feature."
+                    )
+                allowed_scopes = ", ".join(f"{obj}:{action}" for obj, action in sorted(allowed))
                 raise serializers.ValidationError(
                     f"Scope '{scope}' can not be assigned to a project secret API key. Allowed scopes: {allowed_scopes}"
                 )
         return scopes
+
+    def _llm_gateway_grantable(self) -> bool:
+        existing_has_llm_gateway = self.instance is not None and any(
+            s.startswith("llm_gateway:") for s in (self.instance.scopes or [])
+        )
+        return existing_has_llm_gateway or self._ai_gateway_enabled()
+
+    def _ai_gateway_enabled(self) -> bool:
+        team = self.context["view"].team
+        user = self.context["request"].user
+        return bool(
+            posthoganalytics.feature_enabled(
+                "ai-gateway",
+                str(user.distinct_id),
+                groups={"organization": str(team.organization_id), "project": str(team.id)},
+                group_properties={"organization": {"id": str(team.organization_id)}},
+                only_evaluate_locally=False,
+                send_feature_flag_events=False,
+            )
+        )
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -136,6 +163,20 @@ class ProjectSecretAPIKeySerializer(serializers.ModelSerializer):
         project_secret_api_key._value = key_value  # type: ignore
 
         return project_secret_api_key
+
+
+def roll_project_secret_api_key_and_notify(project_secret_api_key: ProjectSecretAPIKey, more_info: str) -> None:
+    """Single entry point for exposure-driven rolls (GitHub secret scanning, Django admin).
+
+    The key is rolled even when no admin can be emailed: invalidating the leaked value
+    takes priority over notification delivery.
+    """
+    old_mask_value = project_secret_api_key.mask_value
+    serializer = ProjectSecretAPIKeySerializer(instance=project_secret_api_key)
+    serializer.roll(project_secret_api_key)
+    send_project_secret_api_key_exposed(
+        project_secret_api_key.team_id, project_secret_api_key.id, old_mask_value, more_info
+    )
 
 
 @extend_schema(extensions={"x-product": "core"})

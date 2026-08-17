@@ -4,16 +4,17 @@
  * Re-exports shared encryption types from session-replay/types.ts and adds
  * Recording API-specific types.
  */
-import { CommonConfig } from '../../common/config'
+import { CommonConfig } from '~/common/config'
 import {
     KAFKA_CLICKHOUSE_SESSION_REPLAY_EVENTS,
     KAFKA_CLICKHOUSE_SESSION_REPLAY_FEATURES,
-} from '../../config/kafka-topics'
-import { SessionRecordingApiConfig, SessionRecordingConfig } from '../../session-recording/config'
+} from '~/common/config/kafka-topics'
+import { isProdEnv } from '~/common/utils/env-utils'
+import { SessionRecordingApiConfig, SessionRecordingConfig } from '~/ingestion/pipelines/sessionreplay/config'
 import {
     INGESTION_SESSIONREPLAY_PRODUCER,
     type IngestionSessionreplayProducer,
-} from '../shared/outputs/producer-config'
+} from '~/ingestion/pipelines/sessionreplay/shared/outputs/producer-config'
 
 /**
  * Recording API's outputs are ClickHouse-bound deletion tombstones on the warpstream-replay
@@ -33,7 +34,28 @@ export {
     type SerializedSessionKey,
     type SessionKey,
     type SessionState,
-} from '../shared/types'
+} from '~/ingestion/pipelines/sessionreplay/shared/types'
+
+/**
+ * Recording-api authorization config.
+ *
+ * `RECORDING_API_JWT_SECRET` is a dedicated signing secret (comma-separated `new_key,old_key` for
+ * rotation), kept off the fleet-wide `JWT_SIGNING_KEY` so only the designated minters can produce
+ * valid tokens. `RECORDING_API_ALLOW_LEGACY_SECRET` keeps the old `X-Internal-Api-Secret` accepted
+ * during migration; flip it off at cutover.
+ */
+export type RecordingApiAuthConfig = {
+    RECORDING_API_JWT_SECRET: string
+    RECORDING_API_ALLOW_LEGACY_SECRET: boolean
+}
+
+export function getDefaultRecordingApiAuthConfig(): RecordingApiAuthConfig {
+    return {
+        // Dev/test default matches the Django/Temporal minters so local end-to-end calls validate.
+        RECORDING_API_JWT_SECRET: isProdEnv() ? '' : 'dev-recording-api-jwt-secret',
+        RECORDING_API_ALLOW_LEGACY_SECRET: true,
+    }
+}
 
 /**
  * Configuration for the Recording API.
@@ -41,7 +63,7 @@ export {
  */
 export type RecordingApiConfig = Pick<
     CommonConfig,
-    'KAFKA_CLIENT_RACK' | 'REDIS_POOL_MIN_SIZE' | 'REDIS_POOL_MAX_SIZE'
+    'KAFKA_CLIENT_RACK' | 'REDIS_POOL_MIN_SIZE' | 'REDIS_POOL_MAX_SIZE' | 'INTERNAL_API_SECRET'
 > &
     Pick<
         SessionRecordingApiConfig,
@@ -63,7 +85,8 @@ export type RecordingApiConfig = Pick<
         | 'SESSION_RECORDING_V2_S3_SECRET_ACCESS_KEY'
         | 'SESSION_RECORDING_V2_S3_BUCKET'
         | 'SESSION_RECORDING_V2_S3_PREFIX'
-    >
+    > &
+    RecordingApiAuthConfig
 
 /**
  * Recording API outputs — topic and producer routing per output. All keys

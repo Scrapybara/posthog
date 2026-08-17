@@ -132,7 +132,7 @@ class DailyTraceClusteringWorkflow(PostHogWorkflow):
     This workflow orchestrates 4 activities:
     1. Compute: Fetch embeddings, perform k-means clustering, compute distances
     2. Label: Generate LLM-based cluster labels (long timeout for API call)
-    3. Aggregates: Compute per-cluster metrics and sentiment (best-effort, non-blocking)
+    3. Aggregates: Compute per-cluster metrics (best-effort, non-blocking)
     4. Emit: Write clustering results to ClickHouse
 
     The workflow calculates window_start/window_end from lookback_days and
@@ -218,6 +218,7 @@ class DailyTraceClusteringWorkflow(PostHogWorkflow):
 
         # Compute per-item metadata for labeling (O(n) instead of O(n × k))
         item_metadata = _compute_item_labeling_metadata(compute_result)
+        trace_id = str(workflow.uuid4())
 
         # Activity 2: Generate LLM labels (longer timeout for agent run)
         labels_result = await workflow.execute_activity(
@@ -233,6 +234,10 @@ class DailyTraceClusteringWorkflow(PostHogWorkflow):
                     window_end=window_end,
                     analysis_level=compute_result.analysis_level,
                     batch_run_ids=compute_result.batch_run_ids,
+                    trace_id=trace_id,
+                    session_id=f"{trace_id}:session",
+                    clustering_run_id=compute_result.clustering_run_id,
+                    clustering_job_id=inputs.job_id,
                 )
             ],
             start_to_close_timeout=LLM_ACTIVITY_TIMEOUT,
@@ -241,7 +246,7 @@ class DailyTraceClusteringWorkflow(PostHogWorkflow):
             retry_policy=LLM_ACTIVITY_RETRY_POLICY,
         )
 
-        # Activity 3: Compute aggregate metrics + sentiment (best-effort, non-blocking on failure)
+        # Activity 3: Compute aggregate metrics (best-effort, non-blocking on failure)
         cluster_metrics: dict[int, ClusterAggregateMetrics] = {}
         try:
             cluster_metrics = await workflow.execute_activity(

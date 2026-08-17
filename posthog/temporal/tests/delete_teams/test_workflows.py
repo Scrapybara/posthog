@@ -1,13 +1,17 @@
 import uuid
+import datetime as dt
 
 import pytest
+from unittest.mock import patch
 
 import temporalio.worker
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
-from temporalio.testing import WorkflowEnvironment
+from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Worker
 
+from posthog.temporal.delete_teams.activities import delete_team_records_activity
 from posthog.temporal.delete_teams.types import (
     DeleteOrganizationWorkflowInputs,
     DeleteProjectDataWorkflowInputs,
@@ -42,7 +46,7 @@ CORE_ACTIVITY_ORDER = [
 ]
 
 
-def _recording_activities(calls: list[str]) -> list:
+def _recording_activities(calls: list[str], exclude: frozenset[str] = frozenset()) -> list:
     """Mock every delete_teams activity by name; each records its invocation order."""
 
     def _team_activity(name: str):
@@ -51,6 +55,10 @@ def _recording_activities(calls: list[str]) -> list:
             calls.append(name)
 
         return _fn
+
+    @activity.defn(name="deprovision_managed_warehouse_activity")
+    async def deprovision_managed_warehouse_activity(inputs: OrganizationRecordInputs) -> None:
+        calls.append("deprovision_managed_warehouse_activity")
 
     @activity.defn(name="delete_project_record_activity")
     async def delete_project_record_activity(inputs: ProjectRecordInputs) -> None:
@@ -68,13 +76,15 @@ def _recording_activities(calls: list[str]) -> list:
     async def send_organization_deleted_email_activity(inputs: OrganizationEmailInputs) -> None:
         calls.append("send_organization_deleted_email_activity")
 
-    return [
+    mocks = [
         *[_team_activity(name) for name in CORE_ACTIVITY_ORDER],
+        deprovision_managed_warehouse_activity,
         delete_project_record_activity,
         delete_organization_record_activity,
         send_project_deleted_email_activity,
         send_organization_deleted_email_activity,
     ]
+    return [fn for fn in mocks if fn.__name__ not in exclude]
 
 
 async def _run(workflow, inputs, calls: list[str]) -> None:
@@ -142,6 +152,7 @@ async def test_organization_workflow_deletes_record_then_emails():
         calls,
     )
     assert calls == [
+        "deprovision_managed_warehouse_activity",
         *CORE_ACTIVITY_ORDER,
         "delete_organization_record_activity",
         "send_organization_deleted_email_activity",
@@ -209,3 +220,96 @@ async def test_transient_error_is_retried():
     await _run_core_with(activities)  # completes despite the first failure
 
     assert len(attempts) == 2  # retried once, then succeeded
+
+
+async def test_warehouse_deprovision_failure_blocks_org_record_deletion():
+    # The rest of the org deletion is conditional on duckgres accepting the deprovision: the
+    # org-record cascade destroys the DuckgresServer pointer, so a persistent control-plane
+    # outage must stall the workflow (the activity keeps retrying) rather than orphan a live
+    # warehouse with no pointer left. The execution timeout is test-only, to bound the
+    # otherwise-indefinite retries.
+    attempts: list[str] = []
+    calls: list[str] = []
+
+    @activity.defn(name="deprovision_managed_warehouse_activity")
+    async def failing_deprovision(inputs: OrganizationRecordInputs) -> None:
+        attempts.append("attempt")
+        raise RuntimeError("duckgres control plane unavailable")
+
+    activities = [
+        *_recording_activities(calls, exclude=frozenset({"deprovision_managed_warehouse_activity"})),
+        failing_deprovision,
+    ]
+    task_queue = str(uuid.uuid4())
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=WORKFLOWS,
+            activities=activities,
+            workflow_runner=temporalio.worker.UnsandboxedWorkflowRunner(),
+        ):
+            with pytest.raises(WorkflowFailureError):
+                await env.client.execute_workflow(
+                    DeleteOrganizationWorkflow.run,
+                    DeleteOrganizationWorkflowInputs(
+                        team_ids=[1],
+                        organization_id="11111111-1111-1111-1111-111111111111",
+                        user_id=7,
+                        organization_name="org",
+                        project_names=["a"],
+                    ),
+                    id=str(uuid.uuid4()),
+                    task_queue=task_queue,
+                    execution_timeout=dt.timedelta(hours=1),
+                )
+
+    assert len(attempts) > 1  # durably retried until the test-only execution timeout
+    assert calls == []  # nothing else ran — the pointer-destroying cascade never started
+
+
+async def test_recording_deletion_failure_does_not_block_workflow():
+    # Queuing recording deletion is best-effort: if it exhausts its retries, the rest of the
+    # team deletion must still run to completion.
+    attempts: list[str] = []
+
+    async def always_fails(inputs: TeamDataActivityInputs) -> None:
+        attempts.append("attempt")
+        raise RuntimeError("recording deletion service unavailable")
+
+    activities = _core_activities_with("queue_recording_deletions_activity", always_fails)
+    await _run_core_with(activities)  # completes despite recording deletion failing
+
+    assert len(attempts) == 5  # exhausted SIDE_EFFECT_RETRY_POLICY, then swallowed
+
+
+async def test_recursion_error_fails_fast_without_retry():
+    # A RecursionError is deterministic (e.g. json.loads can't decode a deeply-nested JSON column
+    # on a cascaded row), so the retry policy must not loop on it.
+    attempts: list[str] = []
+
+    async def raises_recursion(inputs: TeamDataActivityInputs) -> None:
+        attempts.append("attempt")
+        raise ApplicationError("recursion limit exceeded", type="RecursionError")
+
+    activities = _core_activities_with("delete_team_records_activity", raises_recursion)
+    with pytest.raises(WorkflowFailureError):
+        await _run_core_with(activities)
+
+    assert len(attempts) == 1
+
+
+async def test_delete_team_records_activity_converts_recursion_error():
+    # The real activity turns a RecursionError from the cascade into a small, non-retryable
+    # ApplicationError so it surfaces instead of looping and overflowing Temporal's failure-size limit.
+    def raise_recursion(team_ids: list[int]) -> None:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    with patch("posthog.models.team.util.delete_team_records", raise_recursion):
+        with pytest.raises(ApplicationError) as exc_info:
+            await ActivityEnvironment().run(
+                delete_team_records_activity, TeamDataActivityInputs(team_ids=[1], user_id=7)
+            )
+
+    assert exc_info.value.type == "RecursionError"
+    assert exc_info.value.non_retryable

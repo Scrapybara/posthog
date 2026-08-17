@@ -14,18 +14,30 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.db import IntegrityError, transaction
-from django.db.models import CharField, Count, DateTimeField, F, FilteredRelation, Prefetch, Q, QuerySet, Value
+from django.db.models import (
+    CharField,
+    Count,
+    DateTimeField,
+    Exists,
+    F,
+    FilteredRelation,
+    OuterRef,
+    Prefetch,
+    Q,
+    QuerySet,
+    Subquery,
+    UUIDField,
+    Value,
+)
 from django.db.models.functions import Cast
-from django.http import StreamingHttpResponse
+from django.http.response import HttpResponseBase
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 
 import structlog
-import pydantic_core
 import posthoganalytics
-from asgiref.sync import sync_to_async
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_field, extend_schema_view
 from opentelemetry import trace
 from rest_framework import exceptions, serializers, status, viewsets
 from rest_framework.permissions import SAFE_METHODS, BasePermission
@@ -41,32 +53,56 @@ from posthog.api.monitoring import Feature, monitor
 from posthog.api.openapi_parameters import make_filters_override_param, make_variables_override_param
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import SearchMatchTypeSerializerMixin, UserBasicSerializer
+from posthog.api.sharing_publish_gate import check_can_add_insight_to_shared_dashboard
+from posthog.api.streaming import sse_streaming_response
 from posthog.api.tagged_item import TaggedItemSerializerMixin, TaggedItemViewSetMixin
 from posthog.api.utils import action
 from posthog.clickhouse.client.async_task_chain import task_chain_context
 from posthog.constants import GENERATED_DASHBOARD_PREFIX
-from posthog.event_usage import report_user_action
+from posthog.dataclasses import frozen
+from posthog.event_usage import EventSource, get_event_source, report_user_action
 from posthog.exceptions_capture import capture_exception
 from posthog.helpers import create_dashboard_from_template
 from posthog.helpers.dashboard_templates import create_from_template, dashboard_template_from_creation_payload
-from posthog.helpers.trigram_search import DESCRIPTION_FIELD, MAX_SEARCH_LENGTH, NAME_FIELD, apply_trigram_search
-from posthog.models.file_system.file_system import create_or_update_file, delete_file
+from posthog.helpers.trigram_search import (
+    DESCRIPTION_FIELD,
+    MAX_SEARCH_LENGTH,
+    NAME_FIELD,
+    apply_trigram_search,
+    drop_similar_when_exact_exists,
+)
+from posthog.hogql_queries.apply_dashboard_filters import normalize_dashboard_filters_properties
+from posthog.hogql_queries.refresh_policy import ComputeSurface
+from posthog.models.file_system.constants import DEFAULT_SURFACE, surface_q
+from posthog.models.file_system.file_system import FileSystem, create_or_update_file, delete_file, join_path, split_path
 from posthog.models.quick_filter import QuickFilter
 from posthog.models.tagged_item import TaggedItem
 from posthog.models.team import Team
 from posthog.models.user import User
 from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControl, UserAccessControlSerializerMixin
+from posthog.rbac.user_access_control import (
+    UserAccessControl,
+    UserAccessControlSerializerMixin,
+    access_level_satisfied_for_resource,
+)
 from posthog.renderers import SafeJSONRenderer, ServerSentEventRenderer
 from posthog.resource_limits import LimitKey, check_count_limit
 from posthog.session_recordings.session_recording_api import get_replay_listing_throttle_error
 from posthog.slo.context import SloSpec, slo_operation
 from posthog.slo.types import SloArea, SloOperation
+from posthog.sync import database_sync_to_async
 from posthog.user_permissions import UserPermissionsSerializerMixin
-from posthog.utils import filters_override_requested_by_client, str_to_bool, variables_override_requested_by_client
+from posthog.utils import (
+    filters_override_requested_by_client,
+    safe_cache_add,
+    safe_cache_delete,
+    str_to_bool,
+    variables_override_requested_by_client,
+)
 
 from products.ai_observability.backend.dashboard_templates import get_ai_observability_default_template
 from products.alerts.backend.models.alert import AlertConfiguration
+from products.dashboards.backend.access import dashboard_access_method, record_dashboard_access, record_dashboard_view
 from products.dashboards.backend.api.dashboard_template_json_schema_parser import (
     DashboardTemplateCreationJSONSchemaParser,
 )
@@ -75,6 +111,7 @@ from products.dashboards.backend.api.widget_openapi_serializers import (
     AddDashboardWidgetRequestOpenApi,
     DashboardWidgetConfigField,
     PatchedDashboardOpenApiSerializer,
+    UpdateDashboardWidgetRequestOpenApi,
     WidgetCatalogResponseSerializer,
 )
 from products.dashboards.backend.constants import DASHBOARD_GRID_COLUMN_COUNT, MAX_WIDGETS_BATCH_SIZE
@@ -98,12 +135,25 @@ from products.dashboards.backend.widget_query_throttle import get_dashboard_widg
 from products.dashboards.backend.widget_registry import (
     EXPECTED_WIDGET_TYPES,
     SESSION_REPLAY_LIST_WIDGET_TYPE,
+    count_active_widget_filters,
+    extract_widget_filters,
     get_widget_registry_entry,
     validate_widget_config,
 )
+from products.dashboards.backend.widget_specs.configs import CONVERSATIONS_RECENT_TICKETS_WIDGET_TYPE
 from products.mcp_analytics.backend.dashboard_templates import get_mcp_analytics_default_template
+from products.notifications.backend.facade.api import (
+    NotificationData,
+    NotificationType,
+    Priority,
+    TargetType,
+    create_notification,
+    has_been_dispatched,
+)
 from products.product_analytics.backend.api.insight import (
+    INCLUDE_DASHBOARDS_PARAMETER,
     DashboardTileBasicSerializer,
+    InsightBasicSerializer,
     InsightSerializer,
     InsightViewSet,
     _get_insight_type,
@@ -115,6 +165,47 @@ from ee.hogai.utils.aio import async_to_sync
 
 logger = structlog.get_logger(__name__)
 
+DASHBOARD_TILE_ERROR_TYPE = "DashboardTileError"
+DASHBOARD_TILE_ERROR_MESSAGE = "There is a problem loading this dashboard tile."
+DASHBOARD_STREAM_ERROR_MESSAGE = "Dashboard tiles couldn't be loaded. Refresh the dashboard to try again."
+
+
+def dashboard_file_system_entries(team_id: Any, ref: Any) -> QuerySet[FileSystem]:
+    """
+    The project-tree entries a dashboard is filed under, oldest first. Taking `OuterRef`s as well as concrete
+    values lets the list annotation and the direct read share one definition, which they have to: a dashboard
+    can hold several non-shortcut entries, and if the two picked different ones a move would target one and
+    report the other. The arguments are `Any` because Django's lookup stubs do not admit an `OuterRef`.
+    """
+    return (
+        FileSystem.objects.filter(surface_q(DEFAULT_SURFACE), team_id=team_id, type="dashboard", ref=ref)
+        .exclude(shortcut=True)
+        .order_by("id")
+    )
+
+
+@frozen
+class FiledEntry:
+    id: str
+    path: str
+
+
+def filed_entry(dashboard: Dashboard) -> FiledEntry | None:
+    """
+    Where a dashboard sits in the project tree, or None when it was never filed. Prefers the annotation
+    `dangerously_get_queryset` adds, and queries only for a dashboard that never went through it, which the
+    endpoints serializing an instance directly (`create_from_template_json`, `create_unlisted_dashboard`, the
+    tile move and copy responses) all hand over. Those return a single dashboard, so the query cannot fan out
+    over a list.
+    """
+    if hasattr(dashboard, "_folder_path"):
+        path = dashboard._folder_path
+        entry_id = dashboard._folder_id  # type: ignore[attr-defined]
+        return FiledEntry(id=str(entry_id), path=path) if path and entry_id else None
+    row = dashboard_file_system_entries(dashboard.team_id, str(dashboard.id)).values("id", "path").first()
+    return FiledEntry(id=str(row["id"]), path=row["path"]) if row else None
+
+
 DASHBOARD_SHARED_FIELDS = [
     "id",
     "name",
@@ -124,6 +215,9 @@ DASHBOARD_SHARED_FIELDS = [
     "created_by",
     "last_accessed_at",
     "last_viewed_at",
+    "folder",
+    "file_system_id",
+    "file_system_path",
     "is_shared",
     "deleted",
     "creation_mode",
@@ -152,6 +246,9 @@ FILTERS_OVERRIDE_PARAM = make_filters_override_param(subject_label="dashboard")
 tracer = trace.get_tracer(__name__)
 
 RUN_WIDGETS_QUERY_CONCURRENCY = 4
+
+# One subscribe-nudge notification per (user, dashboard) within this window.
+SUBSCRIBE_NUDGE_DEDUPE_TTL_SECONDS = 30 * 24 * 60 * 60
 
 WIDGET_TYPE_API_HELP = (
     "Widget type identifier. Supported values: "
@@ -266,6 +363,29 @@ def _compact_tile_layouts(tiles: list[DashboardTile]) -> set[int]:
     return changed
 
 
+def tile_insight_prefetches() -> list[Prefetch]:
+    """Prefetches every tile-serializing path needs on its tiles queryset. InsightSerializer reads
+    `prefetched_tags` and `_prefetched_alerts` off each insight — a path that skips the alerts
+    prefetch silently serializes `alerts: []` for every tile, hiding alert threshold lines on
+    dashboards."""
+    return [
+        Prefetch(
+            "insight__tagged_items",
+            queryset=TaggedItem.objects.select_related("tag"),
+            to_attr="prefetched_tags",
+        ),
+        Prefetch(
+            "insight__alertconfiguration_set",
+            # AlertSerializer emits threshold and subscribed_users per alert; without these,
+            # every alert on the dashboard costs two extra queries
+            queryset=AlertConfiguration.objects.select_related("created_by", "threshold").prefetch_related(
+                "subscribed_users"
+            ),
+            to_attr="_prefetched_alerts",
+        ),
+    ]
+
+
 def serialize_tile_with_context(tile, order: int, context: dict) -> tuple[int, dict]:
     """
     Serialize a single tile with error handling. Returns (order, tile_data) tuple.
@@ -284,16 +404,18 @@ def serialize_tile_with_context(tile, order: int, context: dict) -> tuple[int, d
         tile.layouts = json.loads(tile.layouts)
 
     try:
-        tile_data = DashboardTileSerializer(tile, many=False, context=tile_context).data
+        tile_data: dict = DashboardTileSerializer(tile, many=False, context=tile_context).data
         return order, tile_data
-    except pydantic_core.ValidationError as e:
+    except Exception:
         if not tile.insight:
             raise
-        query = tile.insight.query
-        tile.insight.query = None
-        tile_data = DashboardTileSerializer(tile, context=tile_context).data
-        tile_data["insight"]["query"] = query
-        tile_data["error"] = {"type": type(e).__name__, "message": str(e)}
+        logger.exception("Error serializing dashboard tile", tile_id=tile.id)
+        try:
+            tile_data = DashboardTileErrorSerializer(tile, context=tile_context).data
+        except Exception:
+            logger.exception("Error serializing dashboard tile error fallback", tile_id=tile.id)
+            tile_data = {"id": tile.id}
+        tile_data["error"] = {"type": DASHBOARD_TILE_ERROR_TYPE, "message": DASHBOARD_TILE_ERROR_MESSAGE}
         return order, tile_data
 
 
@@ -307,14 +429,23 @@ DEFAULT_REORDER_TILE_WIDTH = 6
 DEFAULT_REORDER_TILE_HEIGHT = 5
 
 
-def _existing_sm_size(tile: DashboardTile, default_w: int, default_h: int) -> tuple[int, int]:
+@frozen
+class TileSize:
+    width: int
+    height: int
+
+
+DEFAULT_REORDER_TILE_SIZE = TileSize(width=DEFAULT_REORDER_TILE_WIDTH, height=DEFAULT_REORDER_TILE_HEIGHT)
+
+
+def _existing_sm_size(tile: DashboardTile, defaults: TileSize) -> TileSize:
     sm = (tile.layouts or {}).get("sm") if isinstance(tile.layouts, dict) else None
     if not isinstance(sm, dict):
-        return default_w, default_h
+        return defaults
     w, h = sm.get("w"), sm.get("h")
-    return (
-        w if isinstance(w, int) and w > 0 else default_w,
-        h if isinstance(h, int) and h > 0 else default_h,
+    return TileSize(
+        width=w if isinstance(w, int) and w > 0 else defaults.width,
+        height=h if isinstance(h, int) and h > 0 else defaults.height,
     )
 
 
@@ -352,9 +483,9 @@ def _apply_reorder_layout(
     xs_y = 0
     for tile_id in tile_order:
         tile = tile_map[tile_id]
-        existing_w, existing_h = _existing_sm_size(tile, DEFAULT_REORDER_TILE_WIDTH, DEFAULT_REORDER_TILE_HEIGHT)
-        w = max(1, min(existing_w, DASHBOARD_GRID_COLUMN_COUNT))
-        h = max(1, existing_h)
+        size = _existing_sm_size(tile, DEFAULT_REORDER_TILE_SIZE)
+        w = max(1, min(size.width, DASHBOARD_GRID_COLUMN_COUNT))
+        h = max(1, size.height)
 
         # x=0 is the baseline candidate; scan the remaining start positions for a lower segment top,
         # keeping the leftmost on ties (the loop only updates on a strictly lower top).
@@ -576,6 +707,63 @@ class AddDashboardWidgetsBatchRequestOpenApiSerializer(serializers.Serializer):
     )
 
 
+class UpdateWidgetRequestSerializer(serializers.Serializer):
+    tile_id = serializers.IntegerField(
+        required=True,
+        help_text="ID of the widget tile to update. Use dashboard-get to look up widget tile IDs.",
+    )
+    widget_type = serializers.ChoiceField(
+        choices=sorted(EXPECTED_WIDGET_TYPES),
+        required=False,
+        help_text=f"{WIDGET_TYPE_API_HELP} Immutable; provide only to pick the config shape.",
+    )
+    config = DashboardWidgetConfigField(
+        required=False,
+        help_text=(
+            "New widget configuration. Shape depends on the tile's widget_type; see "
+            "dashboard-widget-catalog-list for per-type config_schema. Omit to leave unchanged."
+        ),
+    )
+    name = serializers.CharField(
+        max_length=400,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="New display name for the widget tile. Empty string or null clears it; omit to leave unchanged.",
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="New markdown description for the widget. Omit to leave unchanged.",
+    )
+
+
+class UpdateDashboardWidgetsBatchRequestSerializer(serializers.Serializer):
+    widgets = serializers.ListField(
+        child=UpdateWidgetRequestSerializer(),
+        min_length=1,
+        max_length=MAX_WIDGETS_BATCH_SIZE,
+        help_text=(
+            f"Widget tiles to update atomically (1–{MAX_WIDGETS_BATCH_SIZE}), each identified by its tile_id. "
+            "Use a single-element list to update one widget."
+        ),
+    )
+
+
+class UpdateDashboardWidgetsBatchRequestOpenApiSerializer(serializers.Serializer):
+    """OpenAPI-only batch-update schema with widget_type-discriminated config shapes for agents."""
+
+    widgets = serializers.ListField(
+        child=UpdateDashboardWidgetRequestOpenApi,
+        min_length=1,
+        max_length=MAX_WIDGETS_BATCH_SIZE,
+        help_text=(
+            "Widget tiles to update atomically, each identified by its tile_id. config shape is per widget_type; "
+            f"see dashboard-widget-catalog-list for per-type config_schema (1–{MAX_WIDGETS_BATCH_SIZE} per request)."
+        ),
+    )
+
+
 class CanEditDashboard(BasePermission):
     message = "You don't have edit permissions for this dashboard."
 
@@ -583,6 +771,15 @@ class CanEditDashboard(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return view.user_permissions.dashboard(dashboard).can_edit
+
+
+def _hide_extra_details(context: dict[str, Any], representation: dict[str, Any]) -> None:
+    """Drop authorship details, which carry the name and email of a teammate, when the caller
+    can't see them anyway — a shared dashboard, or `hideExtraDetails` on the sharing config."""
+    if not context.get("hide_extra_details", False):
+        return
+    for field in ("created_by", "last_modified_by", "created_at", "last_modified_at"):
+        representation.pop(field, None)
 
 
 class TextSerializer(serializers.ModelSerializer):
@@ -601,6 +798,11 @@ class TextSerializer(serializers.ModelSerializer):
         model = Text
         fields = "__all__"
         read_only_fields = ["id", "created_by", "last_modified_by", "last_modified_at"]
+
+    def to_representation(self, instance: Text) -> dict[str, Any]:
+        representation = super().to_representation(instance)
+        _hide_extra_details(self.context, representation)
+        return representation
 
 
 class ButtonTileSerializer(serializers.ModelSerializer):
@@ -621,6 +823,11 @@ class ButtonTileSerializer(serializers.ModelSerializer):
         model = ButtonTile
         fields = "__all__"
         read_only_fields = ["id", "created_by", "last_modified_by", "last_modified_at"]
+
+    def to_representation(self, instance: ButtonTile) -> dict[str, Any]:
+        representation = super().to_representation(instance)
+        _hide_extra_details(self.context, representation)
+        return representation
 
     def validate_url(self, value: str) -> str:
         if value.startswith("/"):
@@ -685,20 +892,24 @@ class SharedDashboardWidgetMetadataSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Optional markdown description shown on the dashboard tile when enabled.",
     )
-    config = DashboardWidgetConfigField(
-        required=False,
-        help_text="Widget-specific configuration JSON for this widget type.",
-    )
+    config = serializers.SerializerMethodField(help_text="Public-safe configuration for this widget type.")
 
     class Meta:
         model = DashboardWidget
         fields = ["id", "widget_type", "name", "description", "config"]
         read_only_fields = ["id", "widget_type", "name", "description", "config"]
 
+    @extend_schema_field(DashboardWidgetConfigField(required=False))
+    def get_config(self, widget: DashboardWidget) -> dict[str, Any]:
+        config = dict(widget.config)
+        if widget.widget_type == CONVERSATIONS_RECENT_TICKETS_WIDGET_TYPE:
+            config.pop("search", None)
+        return config
+
 
 class DashboardTileSerializer(serializers.ModelSerializer):
     id: serializers.IntegerField = serializers.IntegerField(required=False)
-    insight = InsightSerializer()
+    insight: InsightBasicSerializer = InsightSerializer()
     text = TextSerializer()
     button_tile = ButtonTileSerializer()
     widget = DashboardWidgetSerializer(required=False, allow_null=True)
@@ -733,6 +944,31 @@ class DashboardTileSerializer(serializers.ModelSerializer):
         insight_representation = representation["insight"] or {}  # May be missing for text tiles
         representation["last_refresh"] = insight_representation.get("last_refresh", None)
         representation["is_cached"] = insight_representation.get("is_cached", False)
+
+        return representation
+
+
+class DashboardTileErrorSerializer(DashboardTileSerializer):
+    insight = InsightBasicSerializer()
+
+    def to_representation(self, instance: DashboardTile):
+        representation = super().to_representation(instance)
+
+        insight = instance.insight
+        if insight is not None and self.context.get("dashboard"):
+            insight_representation = representation.get("insight") or {}
+            user_access_level = insight_representation.get("user_access_level")
+            if user_access_level and not access_level_satisfied_for_resource("insight", user_access_level, "viewer"):
+                representation["insight"] = {
+                    "id": insight.id,
+                    "short_id": insight.short_id,
+                    "user_access_level": user_access_level,
+                }
+
+        # InsightBasicSerializer ignores `hide_extra_details`, so strip authorship here too, otherwise
+        # a tile that errors on a shared dashboard leaks its insight's creator name and email.
+        if isinstance(representation.get("insight"), dict):
+            _hide_extra_details(self.context, representation["insight"])
 
         return representation
 
@@ -810,6 +1046,13 @@ class AddDashboardWidgetsBatchResponseSerializer(serializers.Serializer):
     )
 
 
+class UpdateDashboardWidgetsBatchResponseSerializer(serializers.Serializer):
+    tiles = DashboardTileSerializer(
+        many=True,
+        help_text="Updated dashboard widget tiles in request order.",
+    )
+
+
 class DashboardBasicSerializer(
     SearchMatchTypeSerializerMixin,
     TaggedItemSerializerMixin,
@@ -823,6 +1066,27 @@ class DashboardBasicSerializer(
     access_control_version = serializers.SerializerMethodField()
     is_shared = serializers.BooleanField(source="is_sharing_enabled", read_only=True, required=False)
     last_viewed_at = serializers.DateTimeField(read_only=True, required=False, allow_null=True)
+    folder = serializers.SerializerMethodField(
+        help_text=(
+            "Path of the project-tree folder this dashboard is filed under in the file system, "
+            "e.g. 'Unfiled/Dashboards'. An empty string means the project root; null means the "
+            "dashboard has no file system entry. The dashboard's own name is not part of the path."
+        ),
+    )
+    file_system_id = serializers.SerializerMethodField(
+        help_text=(
+            "Id of this dashboard's file system entry, or null when it has none. Together with "
+            "`file_system_path` this is everything a caller needs to move the dashboard between "
+            "folders, so a list page does not have to look the entry up separately."
+        ),
+    )
+    file_system_path = serializers.SerializerMethodField(
+        help_text=(
+            "Full path of this dashboard's file system entry, e.g. 'Unfiled/Dashboards/Revenue'. "
+            "Unlike `folder` this keeps the dashboard's own name as the last segment, which is what "
+            "a move needs in order to compute the destination path. Null when it has no entry."
+        ),
+    )
 
     class Meta:
         model = Dashboard
@@ -835,6 +1099,9 @@ class DashboardBasicSerializer(
             "created_by",
             "last_accessed_at",
             "last_viewed_at",
+            "folder",
+            "file_system_id",
+            "file_system_path",
             "is_shared",
             "deleted",
             "creation_mode",
@@ -872,6 +1139,33 @@ class DashboardBasicSerializer(
             return "v1"
         return "v2"
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_folder(self, dashboard: Dashboard) -> str | None:
+        # Don't expose the project-tree location to anonymous viewers of a publicly shared dashboard,
+        # because the folder name can encode internal organisational structure.
+        if self.context.get("is_shared"):
+            return None
+        # `_folder_path` is annotated on DashboardsViewSet.dangerously_get_queryset (all actions).
+        # The file system path's last segment is the dashboard's own name; the folder is everything above it.
+        entry = filed_entry(dashboard)
+        return join_path(split_path(entry.path)[:-1]) if entry else None
+
+    @extend_schema_field(serializers.UUIDField(allow_null=True))
+    def get_file_system_id(self, dashboard: Dashboard) -> str | None:
+        if self.context.get("is_shared"):
+            return None
+        entry = filed_entry(dashboard)
+        return entry.id if entry else None
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_file_system_path(self, dashboard: Dashboard) -> str | None:
+        # The path carries every folder above the dashboard, so it withholds for the same reason `folder`
+        # does: an anonymous viewer of a public dashboard must not learn the internal folder structure.
+        if self.context.get("is_shared"):
+            return None
+        entry = filed_entry(dashboard)
+        return entry.path if entry else None
+
 
 class DashboardMetadataSerializer(DashboardBasicSerializer):
     filters = serializers.SerializerMethodField()
@@ -901,11 +1195,15 @@ class DashboardMetadataSerializer(DashboardBasicSerializer):
 
     def get_filters(self, dashboard: Dashboard) -> dict:
         request = self.context.get("request")
-        return filters_override_requested_by_client(request, dashboard)
+        is_shared = self.context.get("is_shared", False)
+        return filters_override_requested_by_client(request, dashboard, is_shared=is_shared)
 
     def get_variables(self, dashboard: Dashboard) -> dict | None:
         request = self.context.get("request")
-        return variables_override_requested_by_client(request, dashboard, list(self.context["insight_variables"]))
+        is_shared = self.context.get("is_shared", False)
+        return variables_override_requested_by_client(
+            request, dashboard, list(self.context["insight_variables"]), is_shared=is_shared
+        )
 
     def get_persisted_filters(self, dashboard: Dashboard) -> dict | None:
         return dashboard.filters if dashboard.filters else None
@@ -917,6 +1215,7 @@ class DashboardMetadataSerializer(DashboardBasicSerializer):
         ret = super().to_representation(instance)
         if ret.get("quick_filter_ids") is None:
             ret["quick_filter_ids"] = []
+        _hide_extra_details(self.context, ret)
         return ret
 
     def _filter_out_non_existing_quick_filter_ids(self, quick_filter_ids: list[str], team_id: int) -> list[str]:
@@ -1067,6 +1366,36 @@ def _report_dashboard_tile_removed(
     )
 
 
+def _report_dashboard_widget_updated(
+    *,
+    user: User,
+    dashboard: Dashboard,
+    tile: DashboardTile,
+    fields_changed: builtins.list[str],
+    request: Request | None = None,
+) -> None:
+    # Fired only by the dedicated widgets/batch_update endpoint, so it doubles as the signal for
+    # whether agents reach for this path rather than the generic dashboard PATCH.
+    if tile.widget is None:
+        return
+    properties: dict[str, Any] = {
+        "widget_type": tile.widget.widget_type,
+        "dashboard_id": dashboard.id,
+        "tile_id": tile.id,
+        "fields_changed": fields_changed,
+    }
+    if tile.widget_id is not None:
+        properties["widget_id"] = str(tile.widget_id)
+
+    report_user_action(
+        user,
+        "dashboard widget updated",
+        properties,
+        team=dashboard.team,
+        request=request,
+    )
+
+
 class DashboardSerializer(DashboardMetadataSerializer):
     tiles = serializers.SerializerMethodField()
     use_template = serializers.CharField(
@@ -1101,17 +1430,34 @@ class DashboardSerializer(DashboardMetadataSerializer):
         ]
         read_only_fields = ["creation_mode", "effective_restriction_level", "is_shared", "user_access_level"]
 
-    def validate_filters(self, value) -> dict:
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Filters must be a dictionary")
-
-        return value
-
     def validate_variables(self, value) -> dict:
         if not isinstance(value, dict):
             raise serializers.ValidationError("Variables must be a dictionary")
 
         return value
+
+    @staticmethod
+    def _validated_filters(request_filters: Any) -> dict:
+        """Validate and normalize a raw request `filters` payload before it's persisted.
+
+        `filters` is a read-only SerializerMethodField, so DRF's `validate_filters` never runs —
+        the write paths read `request.data`/`initial_data` directly. `Dashboard.filters` is opaque
+        JSON; this enforces the dict shape and normalizes a `PropertyGroupFilter` dict
+        (`{"type": ..., "values": [...]}`) on `properties` to the flat-list contract
+        (`DashboardFilter.properties`), so the dict form can't be persisted for readers to trip on."""
+        if not isinstance(request_filters, dict):
+            raise serializers.ValidationError("Filters must be a dictionary")
+        properties = request_filters.get("properties")
+        if isinstance(properties, dict) and properties.get("type") not in (None, "AND"):
+            raise serializers.ValidationError(
+                {"properties": "Property groups must be AND-combined; OR groups are not supported"}
+            )
+        if properties is not None and not isinstance(properties, (list, dict)):
+            raise serializers.ValidationError({"properties": "Must be a list of filters or a property group"})
+        try:
+            return normalize_dashboard_filters_properties(request_filters)
+        except ValueError as error:
+            raise serializers.ValidationError({"properties": str(error)}) from error
 
     @monitor(feature=Feature.DASHBOARD, endpoint="dashboard", method="POST")
     def create(self, validated_data: dict, *args: Any, **kwargs: Any) -> Dashboard:
@@ -1132,6 +1478,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
         validated_data = self._update_creation_mode(validated_data, use_template, use_dashboard)
         tags = validated_data.pop("tags", None)  # tags are created separately below as global tag relationships
         existing_dashboard: Dashboard | None = None
+        user_access_control = UserAccessControl(user=cast(User, request.user), team=team)
         if use_dashboard:
             try:
                 existing_dashboard = Dashboard.objects.get(
@@ -1140,11 +1487,14 @@ class DashboardSerializer(DashboardMetadataSerializer):
             except Dashboard.DoesNotExist:
                 raise serializers.ValidationError({"use_dashboard": "Invalid value provided"})
 
+            # Duplicating a dashboard reads and copies all of its content (filters, variables, tiles, insights),
+            # so the caller must have at least viewer access to the source — mirrors the copy_tile/move_tile checks.
+            if not user_access_control.check_access_level_for_object(existing_dashboard, "viewer"):
+                raise exceptions.PermissionDenied("You don't have permission to view the source dashboard.")
+
         request_filters = request.data.get("filters")
         if request_filters:
-            if not isinstance(request_filters, dict):
-                raise serializers.ValidationError("Filters must be a dictionary")
-            filters = request_filters
+            filters = self._validated_filters(request_filters)
         elif existing_dashboard:
             filters = existing_dashboard.filters
         else:
@@ -1172,7 +1522,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
                     use_template,
                     dashboard,
                     cast(User, request.user),
-                    user_access_control=UserAccessControl(user=cast(User, request.user), team=team),
+                    user_access_control=user_access_control,
                 )
             except AttributeError as error:
                 logger.error(
@@ -1194,7 +1544,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
             for existing_tile in existing_tiles:
                 # Widget tiles move with their widget row; other tiles re-link shared insight/text/button rows.
                 if duplicate_tiles or existing_tile.widget_id is not None:
-                    self._deep_duplicate_tiles(dashboard, existing_tile)
+                    self._deep_duplicate_tiles(dashboard, existing_tile, user_access_control)
                 else:
                     existing_tile.copy_to_dashboard(dashboard)
 
@@ -1217,8 +1567,17 @@ class DashboardSerializer(DashboardMetadataSerializer):
 
         return dashboard
 
-    def _deep_duplicate_tiles(self, dashboard: Dashboard, existing_tile: DashboardTile) -> None:
+    def _deep_duplicate_tiles(
+        self, dashboard: Dashboard, existing_tile: DashboardTile, user_access_control: UserAccessControl
+    ) -> None:
         if existing_tile.insight:
+            # Deep duplication serializes and recreates the source insight, so the caller must have viewer
+            # access to that specific insight — an insight can be restricted independently of its dashboard.
+            if not user_access_control.check_access_level_for_object(existing_tile.insight, "viewer"):
+                raise exceptions.PermissionDenied(
+                    "You don't have permission to view one of the source dashboard's insights."
+                )
+
             new_data = {
                 **InsightSerializer(existing_tile.insight, context=self.context).data,
                 "id": None,  # to create a new Insight
@@ -1379,9 +1738,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
 
         request_filters = initial_data.get("filters")
         if request_filters:
-            if not isinstance(request_filters, dict):
-                raise serializers.ValidationError("Filters must be a dictionary")
-            instance.filters = request_filters
+            instance.filters = self._validated_filters(request_filters)
 
         request_variables = initial_data.get("variables")
         if request_variables:
@@ -1411,11 +1768,13 @@ class DashboardSerializer(DashboardMetadataSerializer):
                 )
 
         duplicate_tiles = initial_data.pop("duplicate_tiles", [])
-        for tile_data in duplicate_tiles:
-            # nosemgrep: idor-lookup-without-team (scoped via parent viewset get_queryset)
-            existing_tile = DashboardTile.objects.get(dashboard=instance, id=tile_data["id"])
-            existing_tile.layouts = tile_data.get("layouts", {})
-            self._deep_duplicate_tiles(instance, existing_tile)
+        if duplicate_tiles:
+            user_access_control = UserAccessControl(user=user, team=instance.team)
+            for tile_data in duplicate_tiles:
+                # nosemgrep: idor-lookup-without-team (scoped via parent viewset get_queryset)
+                existing_tile = DashboardTile.objects.get(dashboard=instance, id=tile_data["id"])
+                existing_tile.layouts = tile_data.get("layouts", {})
+                self._deep_duplicate_tiles(instance, existing_tile, user_access_control)
 
         if "request" in self.context:
             if being_deleted:
@@ -1440,6 +1799,10 @@ class DashboardSerializer(DashboardMetadataSerializer):
                 )
 
         self.user_permissions.reset_insights_dashboard_cached_results()
+        # A rename re-paths the entry in a post-save signal, so the annotation bound before the save now
+        # points at the old path. Dropping it sends `filed_entry` back to the file system for the new one.
+        instance.__dict__.pop("_folder_id", None)
+        instance.__dict__.pop("_folder_path", None)
         return instance
 
     # Display-only tile fields that may appear in PATCH payloads. Safe to pass to
@@ -1456,7 +1819,15 @@ class DashboardSerializer(DashboardMetadataSerializer):
 
     @staticmethod
     def _extract_display_defaults(tile_data: dict) -> dict:
-        return {k: tile_data[k] for k in DashboardSerializer.TILE_DISPLAY_FIELDS if k in tile_data}
+        defaults = {k: tile_data[k] for k in DashboardSerializer.TILE_DISPLAY_FIELDS if k in tile_data}
+        # `filters_overrides` is opaque JSON with the same `properties` shape ambiguity as dashboard
+        # `filters` — normalize a PropertyGroupFilter dict on `properties` to the flat-list contract so
+        # a malformed tile override can't be persisted for the merge/contradiction code to trip on.
+        if "filters_overrides" in defaults:
+            tile_filters = defaults["filters_overrides"]
+            if tile_filters is not None:
+                defaults["filters_overrides"] = DashboardSerializer._validated_filters(tile_filters)
+        return defaults
 
     @staticmethod
     def _widget_tile_validation_error(exc: serializers.ValidationError) -> serializers.ValidationError:
@@ -1494,11 +1865,12 @@ class DashboardSerializer(DashboardMetadataSerializer):
         if patch_widget_type is not None and str(patch_widget_type) != widget.widget_type:
             raise serializers.ValidationError({"widget": "widget_type cannot be changed."})
 
-        previous_widget_filters = (widget.config or {}).get("widgetFilters")
+        previous_widget_filters = extract_widget_filters(widget.widget_type, widget.config)
         if "config" in widget_data:
+            config_patch = widget_data["config"]
             widget.config = validate_widget_config(
                 widget.widget_type,
-                widget_data["config"],
+                {**widget.config, **config_patch},
             )
         if "name" in widget_data:
             widget.name = widget_data["name"] or None
@@ -1508,7 +1880,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
         widget.last_modified_at = now()
         widget.save()
 
-        new_widget_filters = (widget.config or {}).get("widgetFilters")
+        new_widget_filters = extract_widget_filters(widget.widget_type, widget.config)
         if "config" in widget_data and new_widget_filters != previous_widget_filters:
             report_user_action(
                 user,
@@ -1517,7 +1889,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
                     "widget_type": widget.widget_type,
                     "dashboard_id": dashboard.id,
                     "widget_id": str(widget.id),
-                    "filters_count": len(new_widget_filters) if new_widget_filters else 0,
+                    "filters_count": count_active_widget_filters(widget.widget_type, widget.config),
                 },
                 team=dashboard.team,
                 request=request,
@@ -1534,7 +1906,9 @@ class DashboardSerializer(DashboardMetadataSerializer):
         )
 
     @staticmethod
-    def _update_existing_tile_display_fields(instance: Dashboard, tile_data: dict) -> tuple[DashboardTile | None, bool]:
+    def _update_existing_tile_display_fields(
+        instance: Dashboard, tile_data: dict, user: User
+    ) -> tuple[DashboardTile | None, bool]:
         """Update display fields on an existing tile, or skip silently if the id is unknown.
 
         A display-only payload carries no insight/text/button_tile FK, so it cannot satisfy
@@ -1566,11 +1940,23 @@ class DashboardSerializer(DashboardMetadataSerializer):
             return None, False
 
         became_deleted = bool(tile_defaults.get("deleted")) and not existing.deleted
+        # `deleted` is raw request input; coerce it exactly as the ORM will on save, so a value
+        # Django stores as False but Python reads as truthy ("0", "False") can't skip the gate.
+        deleted_field = DashboardTile._meta.get_field("deleted")
+        became_live = (
+            existing.deleted and "deleted" in tile_defaults and not deleted_field.to_python(tile_defaults["deleted"])
+        )
+
+        # Un-deleting a tile re-exposes its insight on the dashboard's public link.
+        insight = existing.insight
+        if became_live and insight is not None:
+            check_can_add_insight_to_shared_dashboard(user, instance, insight.query)
+
         for attr, val in tile_defaults.items():
             setattr(existing, attr, val)
         # update_fields scopes the UPDATE to only the columns we changed, so concurrent writes
         # to other columns aren't clobbered by our stale read. save() (vs queryset.update())
-        # keeps the post_save signal that sync_dashboard_tile listens to for cache invalidation.
+        # keeps DashboardTile.save() side effects like filters_hash upkeep.
         existing.save(update_fields=list(tile_defaults.keys()))
         return existing, became_deleted
 
@@ -1727,7 +2113,9 @@ class DashboardSerializer(DashboardMetadataSerializer):
             or "transparent_background" in tile_data
         ):
             tile_data.pop("insight", None)  # don't ever update insight tiles here
-            updated_tile, became_deleted = DashboardSerializer._update_existing_tile_display_fields(instance, tile_data)
+            updated_tile, became_deleted = DashboardSerializer._update_existing_tile_display_fields(
+                instance, tile_data, user
+            )
             # The dashboard UI soft-deletes tiles through this PATCH path rather than the
             # delete_tile endpoint, so removal analytics must fire here too.
             if became_deleted and updated_tile is not None:
@@ -1827,21 +2215,7 @@ class DashboardSerializer(DashboardMetadataSerializer):
 
         serialized_tiles: list[ReturnDict] = []
 
-        tiles = DashboardTile.dashboard_queryset(dashboard.tiles.all()).prefetch_related(
-            # Used by the shared-insight force_blocking gate in `posthog/api/insight.py` to avoid an
-            # N+1 lookup of last_refresh per tile on shared dashboard renders.
-            "caching_states",
-            Prefetch(
-                "insight__tagged_items",
-                queryset=TaggedItem.objects.select_related("tag"),
-                to_attr="prefetched_tags",
-            ),
-            Prefetch(
-                "insight__alertconfiguration_set",
-                queryset=AlertConfiguration.objects.select_related("created_by"),
-                to_attr="_prefetched_alerts",
-            ),
-        )
+        tiles = DashboardTile.dashboard_queryset(dashboard.tiles.all()).prefetch_related(*tile_insight_prefetches())
         self.user_permissions.set_preloaded_dashboard_tiles(list(tiles))
 
         team = self.context["get_team"]()
@@ -1863,8 +2237,23 @@ class DashboardSerializer(DashboardMetadataSerializer):
             if not sorted_tiles:
                 return []
 
+            # One serializer reused across tiles: constructing DashboardTileSerializer per tile
+            # deep-copies every declared field of the tile + nested insight serializers, which
+            # dominates CPU on large dashboards. Per-tile state is passed via the shared context.
+            # (dashboard, insight) is unique per dashboard, so the per-instance insight_result
+            # lru_cache never leaks a result from one tile to another.
+            tile_context = self.context.copy()
+            reused_serializer = DashboardTileSerializer(context=tile_context)
             for order, tile in enumerate(sorted_tiles):
-                order, tile_data = serialize_tile_with_context(tile, order, self.context)
+                tile_context.update({"dashboard_tile": tile, "order": order})
+
+                if isinstance(tile.layouts, str):
+                    tile.layouts = json.loads(tile.layouts)
+
+                try:
+                    tile_data = reused_serializer.to_representation(tile)
+                except Exception:
+                    order, tile_data = serialize_tile_with_context(tile, order, self.context)
                 serialized_tiles.append(cast(ReturnDict, tile_data))
 
         return serialized_tiles
@@ -1883,6 +2272,13 @@ class DashboardSerializer(DashboardMetadataSerializer):
         return {**validated_data, "creation_mode": "default"}
 
 
+class DashboardSubscribeNudgeResponseSerializer(serializers.Serializer):
+    created = serializers.BooleanField(
+        help_text="Whether a nudge notification was created. False when one was already sent recently "
+        "for this user and dashboard, or when in-app notifications are unavailable."
+    )
+
+
 @extend_schema_view(
     list=extend_schema(
         parameters=[
@@ -1891,17 +2287,32 @@ class DashboardSerializer(DashboardMetadataSerializer):
                 OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description=(
-                    "Optional. Match against dashboard `name`, `description`, and tag names. Returns "
-                    "case-insensitive substring matches and fuzzy trigram matches (typos, transpositions, "
-                    "prefix-as-you-type) together, ordered exact-first, then pinned status, then name; each "
-                    "result's `search_match_type` is `exact` or `similar`. When omitted, dashboards are ordered "
-                    "by pinned status then alphabetical name. Capped at 200 characters; longer queries return a "
-                    "400 error."
+                    "Optional. Match against dashboard `name`, `description`, and tag names. Returns exact "
+                    "(case-insensitive substring) matches only; if no exact match exists, returns similar "
+                    "(fuzzy trigram — typos, transpositions, prefix-as-you-type) matches instead. Results "
+                    "are then ordered by relevance, then pinned status, then name; each result's `search_match_type` is "
+                    "`exact` or `similar`. When omitted, dashboards are ordered by pinned status then "
+                    "alphabetical name. Capped at 200 characters; longer queries return a 400 error."
+                ),
+            ),
+            OpenApiParameter(
+                "folder",
+                OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description=(
+                    "Optional. Return only dashboards filed directly in this project-tree folder, e.g. "
+                    "'Unfiled/Dashboards'. An empty string matches dashboards at the project root. Nested "
+                    "sub-folders are not included."
                 ),
             ),
         ],
     ),
-    partial_update=extend_schema(request=PatchedDashboardOpenApiSerializer),
+    # Dashboards nest insight payloads via `tiles[].insight`, so the deprecated-`dashboards`-field
+    # opt-in applies here too — on every action whose response uses DashboardSerializer.
+    create=extend_schema(parameters=[INCLUDE_DASHBOARDS_PARAMETER]),
+    retrieve=extend_schema(parameters=[INCLUDE_DASHBOARDS_PARAMETER]),
+    update=extend_schema(parameters=[INCLUDE_DASHBOARDS_PARAMETER]),
+    partial_update=extend_schema(request=PatchedDashboardOpenApiSerializer, parameters=[INCLUDE_DASHBOARDS_PARAMETER]),
 )
 class DashboardsViewSet(
     TeamAndOrgViewSetMixin,
@@ -1911,6 +2322,8 @@ class DashboardsViewSet(
     viewsets.ModelViewSet,
 ):
     scope_object = "dashboard"
+    # Record a tags change per dashboard when bulk_update_tags mutates it, matching the single-object path.
+    bulk_tag_activity_scope = "Dashboard"
     queryset = Dashboard.objects_including_soft_deleted.order_by("-pinned", "name")
     permission_classes = [CanEditDashboard]
     renderer_classes = [SafeJSONRenderer, ServerSentEventRenderer]
@@ -1924,6 +2337,11 @@ class DashboardsViewSet(
     def get_serializer_context(self) -> dict[str, Any]:
         context = super().get_serializer_context()
         context["insight_variables"] = InsightVariable.objects.filter(team=self.team).all()
+        context["compute_surface"] = (
+            ComputeSurface.DASHBOARD_MUTATE
+            if self.action in {"create", "update", "partial_update"}
+            else ComputeSurface.DASHBOARD_DETAIL
+        )
 
         return context
 
@@ -1945,7 +2363,28 @@ class DashboardsViewSet(
         if tags:
             queryset = queryset.filter(tagged_items__tag__name__in=tags).distinct()
 
-        return queryset
+        folder = self.request.query_params.get("folder")
+        if folder is not None:
+            queryset = self._apply_folder_filter(queryset, folder)
+
+        return drop_similar_when_exact_exists(queryset)
+
+    @staticmethod
+    def _apply_folder_filter(queryset: QuerySet, folder: str) -> QuerySet:
+        # Keep dashboards whose default-surface, non-shortcut file system entry sits *directly* in `folder`
+        # (an empty string means the project root). `depth` pins it to direct children so dashboards nested in
+        # sub-folders don't leak in, and lets the filter ride the posthog_fs_team_s_typeref index via the
+        # correlated ref lookup. Stored paths are already escaped, so the prefix comparison stays segment-safe.
+        entries = FileSystem.objects.filter(
+            surface_q(DEFAULT_SURFACE),
+            team_id=OuterRef("team_id"),
+            type="dashboard",
+            ref=Cast(OuterRef("id"), output_field=CharField()),
+            depth=len(split_path(folder)) + 1 if folder else 1,
+        ).exclude(shortcut=True)
+        if folder:
+            entries = entries.filter(path__startswith=f"{folder}/")
+        return queryset.filter(Exists(entries))
 
     @tracer.start_as_current_span("DashboardViewSet.list")
     def list(self, request: Request, *args: Any, **kwargs: Any) -> Response:
@@ -1979,6 +2418,13 @@ class DashboardsViewSet(
         assert self.team.project_id is not None
         queryset = self.queryset.filter(team__project_id=self.team.project_id)
 
+        # subscribe_nudge only reads the dashboard's pk and name, so skip the detail prefetch
+        # cascade (tiles → insights → their dashboards) and the folder/last-viewed annotations.
+        # Team scoping is preserved by the filter above; the CanEditDashboard object permission
+        # still gates the write.
+        if self.action == "subscribe_nudge":
+            return queryset.exclude(deleted=True)
+
         if self.request.user.is_authenticated:
             queryset = queryset.alias(
                 recent_dashboard_views=FilteredRelation(
@@ -1992,6 +2438,25 @@ class DashboardsViewSet(
             ).annotate(last_viewed_at=F("recent_dashboard_views__viewed_at"))
         else:
             queryset = queryset.annotate(last_viewed_at=Value(None, output_field=DateTimeField()))
+
+        # Annotate the project-tree folder each dashboard is filed under, so responses can expose it
+        # without an extra round-trip. A single-valued correlated subquery against the file system —
+        # backed by the posthog_fs_team_s_typeref index on (team_id, surface, type, ref) — keeps this cheap
+        # and avoids the row multiplication a join could cause when shortcuts/multiple surfaces exist.
+        # The default surface matches both NULL and "web" rows, so order by id to keep the picked path
+        # stable when more than one non-shortcut entry exists for the same dashboard.
+        entry_for_dashboard = dashboard_file_system_entries(OuterRef("team_id"), OuterRef("_ref_id"))
+        queryset = queryset.annotate(_ref_id=Cast(F("id"), output_field=CharField())).annotate(
+            _folder_path=Subquery(
+                entry_for_dashboard.values("path")[:1],
+                output_field=CharField(),
+            ),
+            # Same row as `_folder_path`, so a caller can move the dashboard without fetching the entry.
+            _folder_id=Subquery(
+                entry_for_dashboard.values("id")[:1],
+                output_field=UUIDField(),
+            ),
+        )
 
         include_deleted = False
         if self.action in ("partial_update", "update") and hasattr(self, "request"):
@@ -2008,7 +2473,6 @@ class DashboardsViewSet(
         if self.action != "list":
             tiles_prefetch_queryset = DashboardTile.dashboard_queryset(
                 DashboardTile.objects.prefetch_related(
-                    "caching_states",
                     Prefetch(
                         "insight__dashboards",
                         # nosemgrep: idor-lookup-without-team (scoped via prefetch on team-scoped queryset)
@@ -2057,12 +2521,26 @@ class DashboardsViewSet(
     def retrieve(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         dashboard = self.get_object()
 
-        dashboard.last_accessed_at = now()
-        dashboard.save(update_fields=["last_accessed_at"])
-        serializer = DashboardSerializer(dashboard, context=self.get_serializer_context())
+        access_method = dashboard_access_method(request)
+        record_dashboard_view(dashboard, access_method)
+        serializer_context = self.get_serializer_context()
+        serializer_context["dashboard_access_method"] = access_method
+        serializer = DashboardSerializer(dashboard, context=serializer_context)
         data = serializer.data
 
         response = Response(data)
+
+        # Track non-web reads (API/MCP/wizard/…) as a distinct event so programmatic
+        # reads are measurable without inflating the web-only `dashboard viewed` metric.
+        if get_event_source(request) != EventSource.WEB:
+            report_user_action(
+                request.user,
+                "dashboard read",
+                {"dashboard_id": dashboard.id, "creation_mode": dashboard.creation_mode},
+                team=self.team,
+                request=request,
+            )
+
         return response
 
     # ******************************************
@@ -2084,30 +2562,34 @@ class DashboardsViewSet(
         ],
     )
     @action(methods=["GET"], detail=True, url_path="stream_tiles")
-    def stream_tiles(self, request: Request, *args: Any, **kwargs: Any) -> StreamingHttpResponse:
+    def stream_tiles(self, request: Request, *args: Any, **kwargs: Any) -> HttpResponseBase:
         """Stream dashboard metadata and tiles via Server-Sent Events. Sends metadata first, then tiles as they are rendered."""
         dashboard = self.get_object()  # This will raise 404 if not found - let it bubble up normally
 
         # Do all database operations and data loading synchronously first
-        dashboard.last_accessed_at = now()
-        dashboard.save(update_fields=["last_accessed_at"])
+        access_method = dashboard_access_method(request)
+        record_dashboard_view(dashboard, access_method)
+
+        context = self.get_serializer_context()
 
         # Prepare metadata with initial tiles
-        metadata_serializer = DashboardMetadataSerializer(dashboard, context=self.get_serializer_context())
+        metadata_serializer = DashboardMetadataSerializer(dashboard, context=context)
         metadata_data = metadata_serializer.data
 
-        # Create serializer context for tiles
-        context = self.get_serializer_context()
-        context.update({"dashboard": dashboard})
+        # Create serializer context for tiles. Tiles are rendered with SafeJSONRenderer below,
+        # so raw cached results (orjson.Fragment) are safe even though the negotiated renderer
+        # is the SSE one.
+        context.update(
+            {
+                "dashboard": dashboard,
+                "dashboard_access_method": access_method,
+                "raw_results_supported": True,
+                "compute_surface": ComputeSurface.DASHBOARD_STREAM,
+            }
+        )
 
         # Get tiles with proper prefetch
-        tiles = DashboardTile.dashboard_queryset(dashboard.tiles.all()).prefetch_related(
-            Prefetch(
-                "insight__tagged_items",
-                queryset=TaggedItem.objects.select_related("tag"),
-                to_attr="prefetched_tags",
-            )
-        )
+        tiles = DashboardTile.dashboard_queryset(dashboard.tiles.all()).prefetch_related(*tile_insight_prefetches())
 
         layout_size = self._get_layout_size_from_request(request)
 
@@ -2131,17 +2613,17 @@ class DashboardsViewSet(
                 for order in range(initial_tile_count):
                     tile = sorted_tiles[order]
                     try:
-                        order_result, tile_data = await sync_to_async(
+                        order_result, tile_data = await database_sync_to_async(
                             serialize_tile_with_context, thread_sensitive=True
                         )(tile, order, context)
                         initial_tiles.append(tile_data)
-                    except Exception as e:
-                        logger.exception(f"Error serializing initial tile {tile.id}: {e}")
+                    except Exception:
+                        logger.exception("Error serializing initial dashboard tile", tile_id=tile.id)
                         # Add error tile to initial tiles
                         initial_tiles.append(
                             {
                                 "id": tile.id,
-                                "error": {"type": type(e).__name__, "message": str(e)},
+                                "error": {"type": DASHBOARD_TILE_ERROR_TYPE, "message": DASHBOARD_TILE_ERROR_MESSAGE},
                             }
                         )
 
@@ -2154,34 +2636,45 @@ class DashboardsViewSet(
                 for order in range(initial_tile_count, len(sorted_tiles)):
                     tile = sorted_tiles[order]
                     try:
-                        order_result, tile_data = await sync_to_async(
+                        order_result, tile_data = await database_sync_to_async(
                             serialize_tile_with_context, thread_sensitive=True
                         )(tile, order, context)
                         tile_json = renderer.render({"type": "tile", "order": order, "tile": tile_data}).decode()
                         yield f"data: {tile_json}\n\n".encode()
-                    except Exception as e:
-                        logger.exception(f"Error serializing tile {tile.id}: {e}")
-                        error_json = renderer.render({"type": "error", "tile_id": tile.id, "error": str(e)}).decode()
-                        yield f"data: {error_json}\n\n".encode()
+                    except Exception:
+                        # Tile-shaped, not {type:"error"}: the frontend's streamTiles routes
+                        # {type:"error"} to onError (a transient toast) and drops the tile.
+                        logger.exception("Error serializing dashboard tile", tile_id=tile.id)
+                        error_tile_json = renderer.render(
+                            {
+                                "type": "tile",
+                                "order": order,
+                                "tile": {
+                                    "id": tile.id,
+                                    "error": {
+                                        "type": DASHBOARD_TILE_ERROR_TYPE,
+                                        "message": DASHBOARD_TILE_ERROR_MESSAGE,
+                                    },
+                                },
+                            }
+                        ).decode()
+                        yield f"data: {error_tile_json}\n\n".encode()
 
                 # Send completion signal
                 complete_json = renderer.render({"type": "complete"}).decode()
                 yield f"data: {complete_json}\n\n".encode()
 
-            except Exception as e:
-                logger.exception(f"Error in tile streaming: {e}")
-                error_json = renderer.render({"type": "error", "error": str(e)}).decode()
+            except Exception:
+                logger.exception("Error streaming dashboard tiles")
+                error_json = renderer.render({"type": "error", "error": DASHBOARD_STREAM_ERROR_MESSAGE}).decode()
                 yield f"data: {error_json}\n\n".encode()
 
-        response = StreamingHttpResponse(
-            streaming_content=(
-                async_tile_stream_generator()
-                if settings.SERVER_GATEWAY_INTERFACE == "ASGI"
-                else async_to_sync(lambda: async_tile_stream_generator())
-            ),
-            content_type=ServerSentEventRenderer.media_type,
+        return sse_streaming_response(
+            async_tile_stream_generator()
+            if settings.SERVER_GATEWAY_INTERFACE == "ASGI"
+            else async_to_sync(lambda: async_tile_stream_generator()),
+            endpoint="dashboard_tile_stream",
         )
-        return response
 
     def _get_layout_size_from_request(self, request: Request) -> str:
         """Extract layout size parameter from request."""
@@ -2223,6 +2716,11 @@ class DashboardsViewSet(
             if tile.widget is None:
                 raise exceptions.ValidationError("Widget tile is missing its widget.")
             DashboardSerializer._check_widget_tile_product_access(tile.widget, user_access_control)
+        if tile.insight is not None:
+            # The destination's public link must not expose a query the editor can't run.
+            check_can_add_insight_to_shared_dashboard(
+                cast(User, request.user), to_dashboard_obj, tile.insight.query, self.user_access_control
+            )
         try:
             with transaction.atomic():
                 tile.prepare_move_to_dashboard(to_dashboard)
@@ -2296,6 +2794,11 @@ class DashboardsViewSet(
 
             if DashboardTile.objects.filter(dashboard=destination, insight=tile.insight).exists():
                 raise exceptions.ValidationError("This insight is already on the destination dashboard.")
+
+            # The destination's public link must not expose a query the editor can't run.
+            check_can_add_insight_to_shared_dashboard(
+                cast(User, request.user), destination, tile.insight.query, user_access_control
+            )
         elif tile.text is not None:
             if DashboardTile.objects.filter(dashboard=destination, text=tile.text).exists():
                 raise exceptions.ValidationError("This text card is already on the destination dashboard.")
@@ -2526,8 +3029,16 @@ class DashboardsViewSet(
         dashboard = self.get_object()
         output_format = request.query_params.get("output_format", "optimized")
 
+        access_method = dashboard_access_method(request)
+        record_dashboard_access(access_method)
+
         context = self.get_serializer_context()
         context["dashboard"] = dashboard
+        context["dashboard_access_method"] = access_method
+        context["compute_surface"] = ComputeSurface.DASHBOARD_RUN_INSIGHTS
+        # _format_insight_for_llm consumes results as Python data, so raw cached
+        # result bytes (orjson.Fragment) must not be used here.
+        context["require_parsed_results"] = True
 
         tiles = DashboardTile.dashboard_queryset(dashboard.tiles.all()).prefetch_related(
             Prefetch(
@@ -2809,6 +3320,98 @@ class DashboardsViewSet(
             **tile_defaults,
         )
 
+    @extend_schema(
+        operation_id="dashboards_update_widgets_batch",
+        request=UpdateDashboardWidgetsBatchRequestOpenApiSerializer,
+        responses={200: UpdateDashboardWidgetsBatchResponseSerializer},
+    )
+    @action(methods=["PATCH"], detail=True, url_path="widgets/batch_update", required_scopes=["dashboard:write"])
+    def update_widgets_batch(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Update the settings of existing widgets in place, atomically — config, name, and description.
+
+        Each entry targets a widget by its tile_id and reuses the same write path as the dashboard PATCH endpoint.
+        The widget_type is immutable. This edits widget settings only (config, name, description); tile placement
+        (layouts, show_description) is a dashboard concern — use the dashboard PATCH endpoint or reorder_tiles for
+        that. All updates succeed or fail together. To add new widgets, use the widgets/batch POST endpoint; to
+        remove one, use delete_tile.
+        """
+        if not dashboard_widgets_enabled(team=self.team, user=cast(User, request.user)):
+            raise exceptions.ValidationError("Dashboard widgets are not enabled for this project.")
+
+        dashboard = self.get_object()
+        if dashboard.deleted:
+            raise exceptions.NotFound()
+        if not self.user_permissions.dashboard(dashboard).can_edit:
+            raise exceptions.PermissionDenied("You don't have edit permissions for this dashboard.")
+
+        serializer = UpdateDashboardWidgetsBatchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        widget_payloads = cast(builtins.list[dict[str, Any]], serializer.validated_data["widgets"])
+
+        user = cast(User, request.user)
+        user_access_control = UserAccessControl(user=user, team=self.team)
+
+        with transaction.atomic():
+            tiles = [
+                self._apply_widget_tile_update(
+                    dashboard=dashboard,
+                    user=user,
+                    user_access_control=user_access_control,
+                    payload=payload,
+                    request=request,
+                )
+                for payload in widget_payloads
+            ]
+
+        for tile in tiles:
+            tile.refresh_from_db()
+
+        # Report after the transaction commits so a rolled-back batch never emits events.
+        for tile, payload in zip(tiles, widget_payloads):
+            _report_dashboard_widget_updated(
+                user=user,
+                dashboard=dashboard,
+                tile=tile,
+                fields_changed=[field for field in ("config", "name", "description") if field in payload],
+                request=request,
+            )
+
+        tile_context = {**self.get_serializer_context(), "dashboard": dashboard}
+        return Response({"tiles": DashboardTileSerializer(tiles, context=tile_context, many=True).data})
+
+    def _apply_widget_tile_update(
+        self,
+        *,
+        dashboard: Dashboard,
+        user: User,
+        user_access_control: UserAccessControl,
+        payload: dict[str, Any],
+        request: Request,
+    ) -> DashboardTile:
+        tile = get_object_or_404(
+            DashboardTile,
+            id=payload["tile_id"],
+            dashboard=dashboard,
+            dashboard__team__project_id=self.team.project_id,
+        )
+        if tile.widget is None:
+            raise exceptions.ValidationError(f"Tile {payload['tile_id']} is not a widget tile.")
+
+        widget_data: dict[str, Any] = {
+            field: payload[field] for field in ("widget_type", "config", "name", "description") if field in payload
+        }
+        if widget_data:
+            DashboardSerializer._apply_patch_widget_update(
+                widget=tile.widget,
+                widget_data=widget_data,
+                user=user,
+                user_access_control=user_access_control,
+                dashboard=dashboard,
+                request=request,
+            )
+
+        return tile
+
     def _format_insight_for_llm(self, insight: Insight, insight_data: dict) -> str | None:
         if not settings.EE_AVAILABLE:
             return None
@@ -2938,6 +3541,68 @@ class DashboardsViewSet(
                 DashboardSerializer(dashboard, context=self.get_serializer_context()).data,
                 status=status.HTTP_201_CREATED,
             )
+
+    @extend_schema(
+        request=None,
+        responses={
+            201: DashboardSubscribeNudgeResponseSerializer,
+            200: DashboardSubscribeNudgeResponseSerializer,
+        },
+        description="Send the requesting user an in-app notification suggesting they subscribe to this "
+        "dashboard. Deduplicated server-side: at most one notification per user and dashboard, ever, "
+        "so repeat calls return 200 with created=false.",
+    )
+    @action(methods=["POST"], detail=True, url_path="subscribe_nudge", required_scopes=["dashboard:write"])
+    def subscribe_nudge(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        dashboard = self.get_object()
+        user = cast(User, request.user)
+
+        dedupe_key = f"dashboard_subscribe_nudge:{user.pk}:{dashboard.pk}"
+        if not safe_cache_add(dedupe_key, "1", timeout=SUBSCRIBE_NUDGE_DEDUPE_TTL_SECONDS):
+            return Response({"created": False}, status=status.HTTP_200_OK)
+
+        # Durable backstop behind the cache sentinel: a nudge is once-ever per (user, dashboard),
+        # so losing the sentinel (cache flush, eviction, Redis outage) must not let a second one
+        # through. Mirrors the client's permanent notified marker.
+        if has_been_dispatched(
+            notification_type=NotificationType.SUBSCRIPTION_NUDGE,
+            target_type=TargetType.USER,
+            target_id=str(user.pk),
+            resource_id=str(dashboard.pk),
+        ):
+            return Response({"created": False}, status=status.HTTP_200_OK)
+
+        try:
+            event = create_notification(
+                NotificationData(
+                    team_id=self.team_id,
+                    notification_type=NotificationType.SUBSCRIPTION_NUDGE,
+                    priority=Priority.NORMAL,
+                    title=f"You keep coming back to {dashboard.name or 'this dashboard'}",
+                    body="Get it delivered to your inbox every Monday instead of checking back.",
+                    target_type=TargetType.USER,
+                    target_id=str(user.pk),
+                    resource_type="dashboard",
+                    resource_id=str(dashboard.pk),
+                    # Query params mirror SUBSCRIPTION_PREFILL_PARAMS in
+                    # products/subscriptions/frontend/components/Subscriptions/utils.tsx, which
+                    # consumes them to prefill the new-subscription form.
+                    source_url=f"/dashboard/{dashboard.pk}/subscriptions/new?prefill=nudge&via=notification",
+                )
+            )
+        except Exception:
+            # Release the sentinel so a transient create_notification failure doesn't burn the
+            # nudge for the full dedupe window; then let the error propagate.
+            safe_cache_delete(dedupe_key)
+            raise
+        if event is None:
+            # Notifications disabled or no recipients resolved — report honestly so the caller
+            # doesn't treat this as a delivered nudge, and release the sentinel so the nudge isn't
+            # silently burned for 30 days once the condition clears.
+            safe_cache_delete(dedupe_key)
+            return Response({"created": False}, status=status.HTTP_200_OK)
+
+        return Response({"created": True}, status=status.HTTP_201_CREATED)
 
 
 class LegacyDashboardsViewSet(DashboardsViewSet):

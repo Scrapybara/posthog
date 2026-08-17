@@ -36,6 +36,7 @@ The accessor surface (full list in `testing/accessor.ts`):
 
 ```ts
 chart.element // wrapper div for the chart
+chart.canvas // the static (data) canvas, not the aria-hidden hover overlay
 chart.seriesCount // visible series count, from the canvas's aria-label
 chart.yTicks() // ['0', '20', '40', …]
 chart.yRightTicks() // right-axis ticks (multi-axis charts)
@@ -55,9 +56,10 @@ For interactions, use the module-level helpers:
 
 - `hoverAtIndex(wrapper, i, totalLabels)` — `mouseMove` over labels[i].
 - `clickAtIndex(wrapper, i, totalLabels)` — hover-then-click. Resolves after the click handler runs.
+- `dragSelection(wrapper, fromIndex, toIndex, totalLabels)` — simulates a drag-to-zoom gesture between two label indices.
 - `waitForHogChartTooltip()` — resolves with the rendered tooltip element once it mounts in the `FloatingPortal`.
 
-`chart.hoverAtIndex(i)` and `chart.waitForTooltip()` (returning a structured `TooltipSnapshot` with `seriesData`, `isPinned`, etc.) need `renderHogChart` — they read label count and the captured `TooltipContext` that only the library's own render wrapper sets up. For most consumer tests, DOM assertions through the accessor are enough.
+`chart.hoverAtIndex(i)`, `chart.dragSelection(i, j)`, and `chart.waitForTooltip()` (returning a structured `TooltipSnapshot` with `seriesData`, `isPinned`, etc.) need `renderHogChart` — they read label count and the captured `TooltipContext` that only the library's own render wrapper sets up. For most consumer tests, DOM assertions through the accessor are enough.
 
 ## Testing the library itself
 
@@ -172,7 +174,7 @@ it('reports render errors through onError', () => {
 
 **Don't inspect canvas pixels.** No `getContext('2d')` spies, no pixel snapshots — JSdom's canvas is a stub anyway.
 
-**Don't fall back to `container.querySelector('canvas')` for canvas presence.** `renderHogChart` already throws when the canvas is missing.
+**Don't fall back to `container.querySelector('canvas')` for canvas presence.** `renderHogChart` already throws when the canvas is missing. To act on a rendered canvas — asserting its backing store, dispatching a canvas-level event like `contextrestored` — use `chart.canvas` rather than re-querying the DOM. Absence assertions (`expect(container.querySelector('canvas')).toBeNull()`) still need a raw query, since the accessor throws when there's no canvas.
 
 **Don't write `it.each` matrices that only assert "a canvas rendered".** Each row should read at least one observable property of that permutation — `chart.yTicks().some(t => t.endsWith('%'))` for percent layout, `chart.hasRightAxis` for a multi-axis case.
 

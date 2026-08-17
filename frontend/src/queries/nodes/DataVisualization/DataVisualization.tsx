@@ -10,6 +10,7 @@ import { ExportButton } from 'lib/components/ExportButton/ExportButton'
 import { useAttachedLogic } from 'lib/logic/scenes/useAttachedLogic'
 import { InsightErrorState, StatelessInsightLoadingState } from 'scenes/insights/EmptyStates'
 import { insightDataLogic } from 'scenes/insights/insightDataLogic'
+import { insightLogic } from 'scenes/insights/insightLogic'
 import { HogQLBoldNumber } from 'scenes/insights/views/BoldNumber/BoldNumber'
 import { urls } from 'scenes/urls'
 
@@ -26,15 +27,20 @@ import { QueryContext } from '~/queries/types'
 import { shouldQueryBeAsync } from '~/queries/utils'
 import { ChartDisplayType, ExportContext, ExporterFormat, InsightLogicProps } from '~/types'
 
+import { alertsToThresholdGoalLines, insightAlertsLogic } from 'products/alerts/frontend/logic/insightAlertsLogic'
+
 import { DataNodeLogicProps, dataNodeLogic } from '../DataNode/dataNodeLogic'
 import { DateRange } from '../DataNode/DateRange'
 import { ElapsedTime } from '../DataNode/ElapsedTime'
 import { Reload } from '../DataNode/Reload'
 import { QueryFeature } from '../DataTable/queryFeatures'
-import { LineGraph } from './Components/Charts/LineGraph'
 import { PieChart } from './Components/Charts/PieChart'
+import { SqlChart } from './Components/Charts/SqlChart'
+import { SqlScatterGraph } from './Components/Charts/SqlScatterGraph'
 import { TwoDimensionalHeatmap } from './Components/Heatmap/TwoDimensionalHeatmap'
 import { seriesBreakdownLogic } from './Components/seriesBreakdownLogic'
+import { SideBar } from './Components/SideBar'
+import { SqlInsightDateFilterNotice } from './Components/SqlInsightDateFilterNotice'
 import { Table } from './Components/Table'
 import { TableDisplay } from './Components/TableDisplay'
 import { AddVariableButton } from './Components/Variables/AddVariableButton'
@@ -185,6 +191,24 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
     const { seriesBreakdownData } = useValues(seriesBreakdownLogic({ key: dataVisualizationProps.key }))
     const { goalLines } = useValues(displayLogic)
 
+    // Overlay alert threshold bounds on the chart, like trends does — only when rendering a saved
+    // insight (the SQL editor and other unsaved contexts have no alerts to show). Deliberately maps
+    // alerts directly instead of using the alertThresholdLines selector: that selector gates on the
+    // trends-only showAlertThresholdLines viz setting, which DataVisualizationNode doesn't have, so
+    // going through it would hide the lines on SQL charts entirely.
+    const alertsInsightProps = (props.context?.insightProps as InsightLogicProps | undefined) ?? {
+        dashboardItemId: undefined,
+    }
+    const { insight } = useValues(insightLogic(alertsInsightProps))
+    const { alerts } = useValues(
+        insightAlertsLogic({
+            insightId: insight?.id ?? 0,
+            insightLogicProps: alertsInsightProps,
+            deferInitialAlertsLoad: !insight?.id,
+        })
+    )
+    const alertThresholdLines = insight?.id ? alertsToThresholdGoalLines(alerts) : []
+
     const { toggleChartSettingsPanel } = useActions(dataVisualizationLogic)
 
     const { queryId, pollResponse } = useValues(dataNodeLogic)
@@ -238,14 +262,14 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
         const _xData = seriesBreakdownData.xData.data.length ? seriesBreakdownData.xData : xData
         const _yData = seriesBreakdownData.xData.data.length ? seriesBreakdownData.seriesData : yData
         component = (
-            <LineGraph
+            <SqlChart
                 className="p-3"
                 xData={_xData}
                 yData={_yData}
                 visualizationType={effectiveVisualizationType}
                 chartSettings={chartSettings}
                 dashboardId={dashboardId}
-                goalLines={goalLines}
+                goalLines={[...alertThresholdLines, ...goalLines]}
                 presetChartHeight={presetChartHeight}
             />
         )
@@ -258,9 +282,20 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
         component = (
             <PieChart
                 className="p-3"
-                uniqueKey={props.uniqueKey?.toString() ?? dataVisualizationProps.key}
                 xData={_xData}
                 yData={_yData}
+                chartSettings={chartSettings}
+                presetChartHeight={presetChartHeight}
+            />
+        )
+    } else if (effectiveVisualizationType === ChartDisplayType.ScatterPlot) {
+        // Both axes are continuous, so a scatter reads the x column's own values rather than the
+        // breakdown path's categorical labels (which dedupe x — fatal for a point cloud).
+        component = (
+            <SqlScatterGraph
+                className="p-3"
+                xData={xData}
+                yData={yData}
                 chartSettings={chartSettings}
                 presetChartHeight={presetChartHeight}
             />
@@ -341,9 +376,19 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
                     </>
                 )}
 
+                <SqlInsightDateFilterNotice source={query.source} />
+
                 {!props.embedded && <VariablesForInsight />}
 
                 <div className="flex flex-1 flex-row gap-4">
+                    {/* The gear above toggles this panel (Series/Display tabs) — same layout the
+                        SQL editor's OutputPane builds around its own visualization fork. */}
+                    {!readOnly && showResultControls && isChartSettingsPanelOpen && (
+                        <>
+                            <SideBar />
+                            <LemonDivider vertical className="h-full" />
+                        </>
+                    )}
                     <div className="w-full h-full flex-1 overflow-auto">{component}</div>
                 </div>
             </div>

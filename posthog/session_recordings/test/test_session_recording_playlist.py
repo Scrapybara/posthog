@@ -2,11 +2,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from freezegun import freeze_time
 from posthog.test.base import APIBaseTest, QueryMatchingTest, snapshot_postgres_queries
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
+from django.core.cache import cache
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 
@@ -16,6 +18,7 @@ from parameterized import parameterized
 from rest_framework import status
 
 from posthog import redis
+from posthog.constants import AvailableFeature
 from posthog.models import Organization, PersonalAPIKey, SessionRecording, SessionRecordingPlaylistItem, Team
 from posthog.models.file_system.file_system import FileSystem
 from posthog.models.user import User
@@ -32,14 +35,22 @@ from posthog.session_recordings.session_recording_playlist_api import (
     PLAYLIST_LIST_MAX_LIMIT,
     _attach_empty_recordings_counts,
     _empty_saved_filters_counts,
+    parse_non_negative_int,
+    parse_positive_int,
     precompute_recordings_counts,
 )
+from posthog.session_recordings.synthetic_playlists import ExpiringPlaylistSource
 from posthog.settings import (
     OBJECT_STORAGE_ACCESS_KEY_ID,
     OBJECT_STORAGE_BUCKET,
     OBJECT_STORAGE_ENDPOINT,
     OBJECT_STORAGE_SECRET_ACCESS_KEY,
 )
+
+from products.experiments.backend.models.experiment import Experiment
+from products.feature_flags.backend.models.feature_flag import FeatureFlag
+
+from ee.models.rbac.access_control import AccessControl
 
 TEST_BUCKET = "test_storage_bucket-ee.TestSessionRecordingPlaylist"
 
@@ -78,7 +89,7 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
 
         return post_response
 
-    def _get_non_synthetic_playlists(self, query_params: str = "", expected_synthetic_count: int = 7) -> list[dict]:
+    def _get_non_synthetic_playlists(self, query_params: str = "", expected_synthetic_count: int = 6) -> list[dict]:
         url = f"/api/projects/{self.team.id}/session_recording_playlists{query_params}"
         response = self.client.get(url)
         assert response.status_code == status.HTTP_200_OK
@@ -119,7 +130,7 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
 
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert response_data["count"] == 9
+        assert response_data["count"] == 8
         assert response_data["next"] is None
         assert response_data["previous"] is None
         assert [x for x in response_data["results"] if not x["is_synthetic"]] == [
@@ -415,6 +426,60 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert SessionRecordingPlaylistViewed.objects.count() == 0
+
+    def _create_denied_experiment_and_viewer(self) -> tuple[Experiment, User]:
+        self.organization.available_product_features = [
+            {"key": AvailableFeature.ACCESS_CONTROL, "name": AvailableFeature.ACCESS_CONTROL}
+        ]
+        self.organization.save()
+        flag = FeatureFlag.objects.create(
+            team=self.team, key="playlist-exposure-flag", created_by=self.user, filters={}
+        )
+        experiment = Experiment.objects.create(
+            team=self.team,
+            name="playlist exposure experiment",
+            feature_flag=flag,
+            created_by=self.user,
+            exposure_criteria={},
+            metrics=[],
+        )
+        AccessControl.objects.create(
+            team=self.team, resource="experiment", resource_id=str(experiment.pk), access_level="none"
+        )
+        return experiment, self._create_user("denied-playlist-viewer@posthog.com")
+
+    def test_rejects_saving_filters_that_reference_an_experiment_the_saver_cannot_view(self) -> None:
+        experiment, denied_user = self._create_denied_experiment_and_viewer()
+        exposure_filters = {"date_from": "-30d", "experiment_exposure": {"experiment_id": experiment.id}}
+        self.client.force_login(denied_user)
+        plain_playlist = self._create_playlist({"type": "filters", "filters": {"date_from": "-30d"}})
+
+        create_response = self.client.post(
+            f"/api/projects/{self.team.id}/session_recording_playlists",
+            data={"name": "exposed sessions", "type": "filters", "filters": exposure_filters},
+        )
+        assert create_response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "experiment you don't have access to" in create_response.json()["detail"]
+
+        update_response = self.client.patch(
+            f"/api/projects/{self.team.id}/session_recording_playlists/{plain_playlist.json()['short_id']}",
+            {"filters": exposure_filters},
+        )
+        assert update_response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "experiment you don't have access to" in update_response.json()["detail"]
+
+    def test_saves_filters_that_reference_an_experiment_the_saver_can_view(self) -> None:
+        # The experiment's creator keeps viewer access despite the team-wide "none", so the
+        # save-time check must let their save through.
+        experiment, _ = self._create_denied_experiment_and_viewer()
+
+        self._create_playlist(
+            {
+                "name": "exposed sessions",
+                "type": "filters",
+                "filters": {"date_from": "-30d", "experiment_exposure": {"experiment_id": experiment.id}},
+            }
+        )
 
     def test_updates_playlist(self):
         create_response = self._create_playlist(
@@ -898,12 +963,19 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
         )
 
     @patch(
-        "posthog.hogql.database.database.posthoganalytics.feature_enabled",
+        "posthog.hogql.database.database.feature_enabled_or_false",
         new=MagicMock(return_value=False),
     )
     @snapshot_postgres_queries
     @freeze_time("2025-01-01T12:00:00Z")
     def test_filters_playlist_by_type(self):
+        # Prime the expiring-playlist cache so its cold-start scan (which builds the
+        # warehouse HogQL Database and emits a DataWarehouseSavedQuery lookup) stays
+        # out of this query snapshot. The scan runs once per hour in production; left
+        # to LocMemCache state it fires or not depending on test order, making the
+        # captured query set flaky.
+        cache.set(ExpiringPlaylistSource._get_cache_key(self.team.pk), [], ExpiringPlaylistSource.CACHE_TTL)
+
         # Setup playlists with different types and conditions
         p_filters_explicit = SessionRecordingPlaylist.objects.create(
             team=self.team,
@@ -950,9 +1022,9 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
 
     @parameterized.expand(
         [
-            ["no_filter", "", 7, 2],
+            ["no_filter", "", 6, 2],
             ["custom_only", "?collection_type=custom", 0, 2],
-            ["synthetic_only", "?collection_type=synthetic", 7, 0],
+            ["synthetic_only", "?collection_type=synthetic", 6, 0],
         ]
     )
     def test_filters_playlist_by_collection_type(
@@ -1139,6 +1211,218 @@ class TestSessionRecordingPlaylist(APIBaseTest, QueryMatchingTest):
         assert result["added_count"] == 2  # Only new ones counted
         assert result["total_requested"] == 3
 
+    @parameterized.expand(
+        [
+            # (order, limit) across the synth/DB boundary, both sort directions.
+            ["desc_boundary", "-last_modified_at", 30],
+            ["desc_smaller", "-last_modified_at", 17],
+            ["asc_boundary", "last_modified_at", 30],
+            ["name_asc", "name", 12],
+        ]
+    )
+    def test_pagination_covers_every_db_playlist_across_pages(self, _name: str, order: str, limit: int) -> None:
+        # Walking every page must return each DB playlist exactly once with no empty
+        # interior pages — synthetics displaced items off page boundaries before the fix.
+        db_playlist_count = 50
+        for i in range(db_playlist_count):
+            SessionRecordingPlaylist.objects.create(
+                team=self.team, name=f"playlist-{i:02d}", created_by=self.user, type="collection"
+            )
+
+        seen_db_ids: list[str] = []
+        seen_synth_ids: set[str] = set()
+        offset = 0
+        total_count: int | None = None
+        while True:
+            response = self.client.get(
+                f"/api/projects/{self.team.id}/session_recording_playlists?order={order}&limit={limit}&offset={offset}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            total_count = data["count"]
+            results = data["results"]
+            # Synthetics may span several pages, so accumulate unique ids across the walk.
+            seen_synth_ids.update(r["short_id"] for r in results if r.get("is_synthetic"))
+
+            assert results, f"page at offset={offset} was unexpectedly empty"
+            if offset + limit < total_count:
+                assert len(results) == limit, "interior pages must be full"
+
+            seen_db_ids.extend(r["short_id"] for r in results if not r.get("is_synthetic"))
+            offset += limit
+            if offset >= total_count:
+                break
+
+        assert len(seen_synth_ids) > 0, "test relies on synthetic playlists being present"
+        assert total_count == db_playlist_count + len(seen_synth_ids)
+        # Every DB playlist appears exactly once — no skips, no duplicates.
+        assert len(seen_db_ids) == db_playlist_count
+        assert len(set(seen_db_ids)) == db_playlist_count
+
+    def test_pagination_returns_displaced_db_playlists_on_later_pages(self) -> None:
+        # The reported bug: synthetics fill slots on page 1, so page 2 came back empty
+        # while count still claimed more. Page 2 must return the displaced DB rows.
+        page_size = 30
+        db_playlist_count = page_size
+        for i in range(db_playlist_count):
+            SessionRecordingPlaylist.objects.create(
+                team=self.team, name=f"playlist-{i:02d}", created_by=self.user, type="collection"
+            )
+
+        page_one = self.client.get(
+            f"/api/projects/{self.team.id}/session_recording_playlists?limit={page_size}&offset=0"
+        )
+        assert page_one.status_code == status.HTTP_200_OK
+        page_one_data = page_one.json()
+        synth_count = sum(1 for r in page_one_data["results"] if r.get("is_synthetic"))
+        total_count = page_one_data["count"]
+        assert synth_count > 0, "test relies on synthetic playlists being present"
+        assert total_count == db_playlist_count + synth_count
+        assert len(page_one_data["results"]) == page_size
+        assert page_one_data["next"] is not None
+        assert page_one_data["previous"] is None
+
+        page_two = self.client.get(
+            f"/api/projects/{self.team.id}/session_recording_playlists?limit={page_size}&offset={page_size}"
+        )
+        assert page_two.status_code == status.HTTP_200_OK
+        page_two_data = page_two.json()
+        assert page_two_data["count"] == total_count
+        # Displaced DB rows must appear here — previously this page was empty.
+        assert len(page_two_data["results"]) == total_count - page_size
+        assert all(not r.get("is_synthetic") for r in page_two_data["results"])
+        assert page_two_data["previous"] is not None
+        assert page_two_data["next"] is None
+
+        # No overlap, and together they cover every DB playlist.
+        page_one_db_ids = {r["short_id"] for r in page_one_data["results"] if not r.get("is_synthetic")}
+        page_two_db_ids = {r["short_id"] for r in page_two_data["results"]}
+        assert page_one_db_ids.isdisjoint(page_two_db_ids)
+        assert len(page_one_db_ids | page_two_db_ids) == db_playlist_count
+
+    def test_pagination_with_name_sort_places_synthetics_by_name(self) -> None:
+        # Under name-ascending, synthetics sit at their alphabetical position, not
+        # unconditionally at the start or end of the merged list.
+        SessionRecordingPlaylist.objects.create(
+            team=self.team, name="aaa-first", created_by=self.user, type="collection"
+        )
+        SessionRecordingPlaylist.objects.create(
+            team=self.team, name="zzz-last", created_by=self.user, type="collection"
+        )
+
+        response = self.client.get(
+            f"/api/projects/{self.team.id}/session_recording_playlists?order=name&limit=3&offset=0"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        names = [r["name"] for r in response.json()["results"]]
+        # "aaa-first" sorts ahead of every synthetic, so page 1 must include it.
+        assert "aaa-first" in names
+        # "zzz-last" sorts after every synthetic; it must not appear on page 1.
+        assert "zzz-last" not in names
+
+    def test_pagination_with_name_sort_is_case_insensitive(self) -> None:
+        # Rank math and the DB slice must share one case-insensitive order, else mixed-case
+        # names get skipped or duplicated across pages.
+        db_names = ["Banana", "apple", "Cherry", "date", "Elder", "fig", "Grape", "kiwi"]
+        for name in db_names:
+            SessionRecordingPlaylist.objects.create(team=self.team, name=name, created_by=self.user, type="collection")
+
+        page_size = 5
+        seen_db_names: list[str] = []
+        offset = 0
+        while True:
+            response = self.client.get(
+                f"/api/projects/{self.team.id}/session_recording_playlists?order=name&limit={page_size}&offset={offset}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            seen_db_names.extend(r["name"] for r in data["results"] if not r.get("is_synthetic"))
+            offset += page_size
+            if offset >= data["count"]:
+                break
+
+        # Every DB playlist appears exactly once across all pages — no skips, no duplicates.
+        assert sorted(seen_db_names) == sorted(db_names)
+
+    def test_pagination_with_name_ties_across_page_boundary(self) -> None:
+        # Duplicate names (including one colliding with a synthetic, "Expiring soon")
+        # force ties that straddle page boundaries. The unique id tiebreaker must keep
+        # every DB row appearing exactly once — without it the slice skips/repeats rows.
+        created_ids: set[str] = set()
+        for name in ["dup-a", "dup-a", "dup-a", "Expiring soon", "Expiring soon", "dup-z", "dup-z", "dup-z"]:
+            playlist = SessionRecordingPlaylist.objects.create(
+                team=self.team, name=name, created_by=self.user, type="collection"
+            )
+            created_ids.add(playlist.short_id)
+
+        page_size = 3
+        seen: list[str] = []
+        offset = 0
+        while True:
+            response = self.client.get(
+                f"/api/projects/{self.team.id}/session_recording_playlists?order=name&limit={page_size}&offset={offset}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            seen.extend(r["short_id"] for r in data["results"] if not r.get("is_synthetic"))
+            offset += page_size
+            if offset >= data["count"]:
+                break
+
+        assert sorted(seen) == sorted(created_ids)
+        assert len(seen) == len(set(seen))
+
+    def test_pagination_synthetics_only_when_no_db_collections(self) -> None:
+        # No DB rows: the response is exactly the synthetics, and paging across a small
+        # limit returns each once — pins the rank range() branch with zero DB rows.
+        page_size = 3
+        seen: list[str] = []
+        offset = 0
+        total = 0
+        while True:
+            response = self.client.get(
+                f"/api/projects/{self.team.id}/session_recording_playlists?limit={page_size}&offset={offset}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            total = data["count"]
+            assert all(r.get("is_synthetic") for r in data["results"])
+            seen.extend(r["short_id"] for r in data["results"])
+            offset += page_size
+            if offset >= total:
+                break
+
+        assert total > 0
+        assert len(seen) == total
+        assert len(set(seen)) == total
+
+    def test_pagination_with_zero_synthetics(self) -> None:
+        # collection_type=custom filters out all synthetics, exercising the empty-ranks
+        # early return; pure-DB pagination must still return each row exactly once.
+        db_names = [f"custom-{i:02d}" for i in range(8)]
+        for name in db_names:
+            SessionRecordingPlaylist.objects.create(team=self.team, name=name, created_by=self.user, type="collection")
+
+        page_size = 3
+        seen: list[str] = []
+        offset = 0
+        total = 0
+        while True:
+            response = self.client.get(
+                f"/api/projects/{self.team.id}/session_recording_playlists?collection_type=custom&limit={page_size}&offset={offset}"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            total = data["count"]
+            assert not any(r.get("is_synthetic") for r in data["results"])
+            seen.extend(r["name"] for r in data["results"])
+            offset += page_size
+            if offset >= total:
+                break
+
+        assert total == len(db_names)
+        assert sorted(seen) == sorted(db_names)
+
 
 class TestSessionRecordingPlaylistPersonalAPIKey(APIBaseTest):
     def _create_personal_api_key(self, scopes: list[str], scoped_teams: list[int] | None = None) -> str:
@@ -1177,6 +1461,68 @@ class TestSessionRecordingPlaylistPersonalAPIKey(APIBaseTest):
         response = self.client.get(url, headers={"authorization": f"Bearer {personal_api_key}"})
 
         assert response.status_code == expected_status
+
+    @parameterized.expand(
+        [
+            ("create", "", {"name": "new playlist", "type": "collection"}, status.HTTP_201_CREATED),
+            ("add_recording", "/{short_id}/recordings/test_session_id", None, status.HTTP_200_OK),
+            (
+                "bulk_add",
+                "/{short_id}/recordings/bulk_add",
+                {"session_recording_ids": ["test_session_id"]},
+                status.HTTP_200_OK,
+            ),
+            (
+                "bulk_delete",
+                "/{short_id}/recordings/bulk_delete",
+                {"session_recording_ids": ["test_session_id"]},
+                status.HTTP_200_OK,
+            ),
+        ]
+    )
+    def test_personal_api_key_can_access_write_endpoints(
+        self, _name: str, path_suffix: str, data: dict | None, expected_status: int
+    ) -> None:
+        playlist = SessionRecordingPlaylist.objects.create(
+            team=self.team,
+            name="test playlist",
+            created_by=self.user,
+            type=SessionRecordingPlaylist.PlaylistType.COLLECTION,
+        )
+        personal_api_key = self._create_personal_api_key(["session_recording_playlist:write"])
+        url = (
+            f"/api/projects/{self.team.pk}/session_recording_playlists{path_suffix.format(short_id=playlist.short_id)}"
+        )
+
+        response = self.client.post(url, data, headers={"authorization": f"Bearer {personal_api_key}"})
+
+        assert response.status_code == expected_status
+
+    @parameterized.expand(
+        [
+            ("create", "", {"name": "new playlist", "type": "collection"}),
+            ("add_recording", "/{short_id}/recordings/test_session_id", None),
+            ("bulk_add", "/{short_id}/recordings/bulk_add", {"session_recording_ids": ["test_session_id"]}),
+            ("bulk_delete", "/{short_id}/recordings/bulk_delete", {"session_recording_ids": ["test_session_id"]}),
+        ]
+    )
+    def test_personal_api_key_with_read_scope_denied_on_write_endpoints(
+        self, _name: str, path_suffix: str, data: dict | None
+    ) -> None:
+        playlist = SessionRecordingPlaylist.objects.create(
+            team=self.team,
+            name="test playlist",
+            created_by=self.user,
+            type=SessionRecordingPlaylist.PlaylistType.COLLECTION,
+        )
+        personal_api_key = self._create_personal_api_key(["session_recording_playlist:read"])
+        url = (
+            f"/api/projects/{self.team.pk}/session_recording_playlists{path_suffix.format(short_id=playlist.short_id)}"
+        )
+
+        response = self.client.post(url, data, headers={"authorization": f"Bearer {personal_api_key}"})
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     @parameterized.expand(
         [
@@ -1444,3 +1790,42 @@ class TestPrecomputeRecordingsCounts(APIBaseTest):
         # and by the paginator.)
         results = response.json()["results"]
         assert len(results) <= PLAYLIST_LIST_MAX_LIMIT
+
+    def test_list_with_zero_limit_does_not_loop_pagination(self) -> None:
+        # limit=0 would make the next link point back at the same offset (infinite paging);
+        # it must fall back to the default page size and terminate.
+        response = self.client.get(f"/api/projects/{self.team.id}/session_recording_playlists?limit=0")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        # Default page size (100) comfortably holds the synthetics, so there's no next page
+        # and certainly no self-referential loop.
+        assert data["next"] is None
+        assert len(data["results"]) == data["count"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("30", 30),
+        ("0", 0),
+        ("-5", 0),
+        ("abc", 100),
+        (None, 100),
+    ],
+)
+def test_parse_non_negative_int(value: object, expected: int) -> None:
+    assert parse_non_negative_int(value, 100) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("30", 30),
+        ("0", 100),  # limit=0 would loop pagination -> default
+        ("-5", 100),  # non-positive -> default
+        ("abc", 100),
+        (None, 100),
+    ],
+)
+def test_parse_positive_int(value: object, expected: int) -> None:
+    assert parse_positive_int(value, 100) == expected

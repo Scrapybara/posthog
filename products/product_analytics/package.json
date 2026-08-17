@@ -12,10 +12,11 @@
     },
     "devDependencies": {
         "@storybook/react": "catalog:",
-        "@testing-library/react": "*"
+        "@testing-library/react": "*",
+        "kea-test-utils": "catalog:"
     },
     "peerDependencies": {
-        "@posthog/icons": "*",
+        "@posthog/icons": "catalog:",
         "@types/react": "*",
         "clsx": "*",
         "fuse.js": "*",

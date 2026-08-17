@@ -26,7 +26,7 @@ import { INSIGHT_UNIT_OPTIONS_SHORT } from 'scenes/insights/aggregationAxisForma
 import { ResultCustomizationBy } from '~/queries/schema/schema-general'
 import { ChartDisplayType } from '~/types'
 
-import { AxisSeries, dataVisualizationLogic } from '../dataVisualizationLogic'
+import { AxisSeries, Column, dataVisualizationLogic } from '../dataVisualizationLogic'
 import { HeatmapSeriesTab } from './Heatmap/HeatmapSeriesTab'
 import { AxisBreakdownSeries, BREAKDOWN_LIMIT_LABEL, seriesBreakdownLogic } from './seriesBreakdownLogic'
 import { getAvailableSeriesBreakdownColumns } from './seriesBreakdownUtils'
@@ -47,16 +47,21 @@ export const SeriesTab = (): JSX.Element => {
         dataVisualizationProps,
         effectiveVisualizationType,
     } = useValues(dataVisualizationLogic)
-    const { updateXSeries, addYSeries, setTransposeResults } = useActions(dataVisualizationLogic)
+    const { updateXSeries, addYSeries, updateSeriesIndex, deleteYSeries, setTransposeResults } =
+        useActions(dataVisualizationLogic)
     const breakdownLogic = seriesBreakdownLogic({ key: dataVisualizationProps.key })
     const { selectedSeriesBreakdownColumn, showSeriesBreakdown } = useValues(breakdownLogic)
     const { addSeriesBreakdown } = useActions(breakdownLogic)
 
+    const isScatterPlot = effectiveVisualizationType === ChartDisplayType.ScatterPlot
     const availableBreakdownColumns = getAvailableSeriesBreakdownColumns(columns, selectedXAxis, selectedYAxis)
     const hideAddYSeries = yData.length >= numericalColumns.length
+    // A breakdown buckets rows by x value, which a point cloud can't survive — a scatter reads the x
+    // column's own values instead, so the option does nothing there.
     const hideAddSeriesBreakdown =
-        showSeriesBreakdown || selectedXAxis === null || availableBreakdownColumns.length === 0
+        isScatterPlot || showSeriesBreakdown || selectedXAxis === null || availableBreakdownColumns.length === 0
     const showSeriesBreakdownSelector =
+        !isScatterPlot &&
         selectedXAxis !== null &&
         showSeriesBreakdown &&
         (selectedSeriesBreakdownColumn !== null || availableBreakdownColumns.length > 0)
@@ -87,7 +92,7 @@ export const SeriesTab = (): JSX.Element => {
         )
     }
 
-    const options = columns.map(({ name, type }) => ({
+    const toColumnOption = ({ name, type }: Column): { value: string; label: JSX.Element } => ({
         value: name,
         label: (
             <div className="items-center flex-1">
@@ -97,7 +102,71 @@ export const SeriesTab = (): JSX.Element => {
                 </LemonTag>
             </div>
         ),
-    }))
+    })
+
+    const options = columns.map(toColumnOption)
+    // A scatter's x axis holds a second measure rather than a category, so only numeric columns fit.
+    const xAxisOptions = isScatterPlot ? numericalColumns.map(toColumnOption) : options
+
+    if (effectiveVisualizationType === ChartDisplayType.ActionsPie) {
+        const valueColumn = selectedYAxis?.find((series) => series !== null)?.name ?? null
+        const valueOptions = numericalColumns.map(({ name, type }) => ({
+            value: name,
+            label: (
+                <div className="items-center flex-1">
+                    {name}
+                    <LemonTag className="ml-2" type="default">
+                        {type.name}
+                    </LemonTag>
+                </div>
+            ),
+        }))
+
+        // A pie encodes a single value column. Set it on the first series and drop any others
+        // the chart may have carried over from another chart type.
+        const setValueColumn = (columnName: string): void => {
+            if (!selectedYAxis || selectedYAxis.length === 0) {
+                addYSeries(columnName)
+                return
+            }
+            updateSeriesIndex(0, columnName)
+            for (let index = selectedYAxis.length - 1; index >= 1; index--) {
+                deleteYSeries(index)
+            }
+        }
+
+        return (
+            <div className="flex flex-col w-full p-3">
+                <LemonLabel className="mb-1">Label</LemonLabel>
+                <LemonSelect
+                    className="w-full"
+                    value={xData !== null ? xData.column.name : 'None'}
+                    options={options}
+                    disabledReason={responseLoading ? 'Query loading...' : undefined}
+                    onChange={(value) => {
+                        const column = columns.find((n) => n.name === value)
+                        if (column) {
+                            updateXSeries(column.name)
+                        }
+                    }}
+                />
+
+                <LemonLabel className="mt-4 mb-1">Value</LemonLabel>
+                <LemonSelect
+                    className="w-full"
+                    placeholder="Select a column"
+                    value={valueColumn}
+                    options={valueOptions}
+                    disabledReason={responseLoading ? 'Query loading...' : undefined}
+                    onChange={(value) => {
+                        if (value) {
+                            setValueColumn(value)
+                        }
+                    }}
+                />
+            </div>
+        )
+    }
 
     return (
         <div className="flex flex-col w-full p-3">
@@ -105,7 +174,7 @@ export const SeriesTab = (): JSX.Element => {
             <LemonSelect
                 className="w-full"
                 value={xData !== null ? xData.column.name : 'None'}
-                options={options}
+                options={xAxisOptions}
                 disabledReason={responseLoading ? 'Query loading...' : undefined}
                 onChange={(value) => {
                     const column = columns.find((n) => n.name === value)
@@ -425,6 +494,8 @@ export const YSeriesDisplayTab = ({ ySeriesLogicProps }: { ySeriesLogicProps: YS
     const { updateSeriesIndex } = useActions(dataVisualizationLogic)
 
     const isPieChart = effectiveVisualizationType === ChartDisplayType.ActionsPie
+    // Neither a pie nor a scatter has a second gutter, a trend line, or a bar/line/area choice.
+    const hideChartSpecificOptions = isPieChart || effectiveVisualizationType === ChartDisplayType.ScatterPlot
     const showColorPicker = !showTableSettings && !selectedSeriesBreakdownColumn
     const showLabelInput = showTableSettings || !selectedSeriesBreakdownColumn
 
@@ -481,7 +552,7 @@ export const YSeriesDisplayTab = ({ ySeriesLogicProps }: { ySeriesLogicProps: YS
                     )}
                 </div>
             )}
-            {!showTableSettings && !isPieChart && (
+            {!showTableSettings && !hideChartSpecificOptions && (
                 <>
                     {!selectedSeriesBreakdownColumn && (
                         <LemonField name="trendLine" label="Trend line">

@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Provider } from 'kea'
 
-import { dateMapping } from 'lib/utils'
+import { dateMapping } from 'lib/utils/dateFilters'
 
 import { initKeaTests } from '~/test/init'
 
@@ -101,5 +101,33 @@ describe('DateFilter with allowFixedRangeWithTime', () => {
         await waitFor(() => {
             expect(screen.getByText(/select a date and time range/i)).toBeInTheDocument()
         })
+    })
+})
+
+describe('DateFilter without custom ranges', () => {
+    beforeEach(() => {
+        initKeaTests()
+        render(
+            <Provider>
+                <DateFilter
+                    onChange={jest.fn()}
+                    dateOptions={dateMapping.filter(({ values }) => values[0] === '-1h')}
+                    showRollingRangePicker={false}
+                    showCustomRangeOptions={false}
+                />
+            </Provider>
+        )
+    })
+
+    afterEach(() => {
+        cleanup()
+    })
+
+    it('only shows the supplied presets', async () => {
+        await userEvent.click(screen.getByTestId('date-filter'))
+
+        expect(screen.getByText('Last hour')).toBeInTheDocument()
+        expect(screen.queryByTestId('rolling-date-range-input')).not.toBeInTheDocument()
+        expect(screen.queryByText(/custom/i)).not.toBeInTheDocument()
     })
 })

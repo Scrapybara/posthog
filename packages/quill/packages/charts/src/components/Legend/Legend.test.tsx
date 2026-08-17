@@ -46,7 +46,42 @@ describe('Legend', () => {
         const buttons = clickable.querySelectorAll('button')
         expect(buttons).toHaveLength(ITEMS.length)
         fireEvent.click(buttons[1])
-        expect(onClick).toHaveBeenCalledWith('returning')
+        expect(onClick).toHaveBeenCalledWith('returning', { additive: false })
+    })
+
+    it.each([
+        { name: 'meta', event: { metaKey: true } },
+        { name: 'ctrl', event: { ctrlKey: true } },
+        { name: 'shift', event: { shiftKey: true } },
+    ])('reports a $name-click as additive so the handler can add to the selection', ({ event }) => {
+        const onClick = jest.fn()
+        const { container } = render(<Legend items={ITEMS} onItemClick={onClick} />)
+        fireEvent.click(container.querySelectorAll('button')[0], event)
+        expect(onClick).toHaveBeenCalledWith('new', { additive: true })
+    })
+
+    it('wraps each row via renderItem while preserving the default node', () => {
+        const onClick = jest.fn()
+        const { container } = render(
+            <Legend
+                items={ITEMS}
+                onItemClick={onClick}
+                renderItem={(node, item) => <div data-attr={`wrap-${item.key}`}>{node}</div>}
+            />
+        )
+        expect(container.querySelectorAll('[data-attr^="wrap-"]')).toHaveLength(ITEMS.length)
+        const wrapped = container.querySelector('[data-attr="wrap-returning"] button')!
+        fireEvent.click(wrapped)
+        expect(onClick).toHaveBeenCalledWith('returning', { additive: false })
+    })
+
+    it('keeps the full label text and exposes it via a native title tooltip', () => {
+        // The visual clipping itself is covered by the LongLabelsTruncate storybook snapshot; here we
+        // only guard that a clipped row still carries the whole name for hover recovery.
+        const long = 'Breakdown value with an extremely long name that would otherwise crush the plot'
+        const { container } = render(<Legend items={[{ key: 'a', label: long, color: '#000' }]} />)
+        const label = container.querySelector<HTMLElement>(`[title="${long}"]`)!
+        expect(label.textContent).toBe(long)
     })
 
     it('dims only rows whose key is in hiddenKeys', () => {

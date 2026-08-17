@@ -23,7 +23,6 @@ from posthog.api.forbid_destroy_model import ForbidDestroyModel
 from posthog.api.monitoring import Feature, monitor
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
-from posthog.cdp.validation import compile_hog
 from posthog.clickhouse.query_tagging import (
     Feature as QueryFeature,
     Product,
@@ -36,6 +35,7 @@ from posthog.temporal.ai_observability.message_utils import extract_text_from_me
 from posthog.temporal.ai_observability.run_evaluation import extract_event_io
 from posthog.temporal.ai_observability.run_tagger import run_hog_tagger
 
+from ..hog import compile_ai_observability_hog
 from ..models.model_configuration import LLMModelConfiguration
 from ..models.provider_keys import LLMProvider, LLMProviderKey
 from ..models.taggers import Tagger, TaggerType, validate_tagger_config
@@ -549,7 +549,7 @@ class TaggerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, ForbidDes
         try:
             # Use "tagger" kind so we don't expose PRODUCT_ASYNC_FUNCTIONS (fetch, posthogCapture, …) —
             # taggers should only classify, never perform side effects.
-            bytecode = compile_hog(source, "tagger")
+            bytecode = compile_ai_observability_hog(source, "tagger")
         except (ValueError, SyntaxError):
             logger.exception("Compilation error in Hog source")
             return Response({"error": "Invalid Hog source provided"}, status=400)
@@ -614,9 +614,9 @@ class TaggerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, ForbidDes
 
             result = run_hog_tagger(bytecode, event_data, valid_tag_names)
 
-            input_raw, output_raw = extract_event_io(event_type, properties)
-            input_preview = extract_text_from_messages(input_raw)[:200]
-            output_preview = extract_text_from_messages(output_raw)[:200]
+            io = extract_event_io(event_type, properties)
+            input_preview = extract_text_from_messages(io.input_raw)[:200]
+            output_preview = extract_text_from_messages(io.output_raw)[:200]
 
             results.append(
                 {

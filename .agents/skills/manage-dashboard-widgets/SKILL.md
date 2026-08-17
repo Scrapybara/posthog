@@ -44,7 +44,9 @@ Shipped types (code truth): [architecture.md § Shipped types](references/archit
 
 ### Execute
 
-After spec confirmation → [checklist-new-widget-type.md](references/checklist-new-widget-type.md) **§1 → §8**. §5b after MVP tests green.
+After spec confirmation → [checklist-new-widget-type.md](references/checklist-new-widget-type.md) **§1 → §8**. §5b (dedicated stories — required before the PR, not a follow-up) is sequenced once MVP tests are green.
+
+Self-updating / real-time tile? Read [live-widgets.md](references/live-widgets.md) first — the live contract (`is_live`, `creation_flag`, `generatedAt` seeds) and the `widgets/live/` toolkit.
 
 ## 3. Update a shipped type
 
@@ -82,7 +84,7 @@ New `widget_type` strings need **no migration** — register registries + catalo
 
 ## 6. Verify
 
-**Ship (MVP):**
+**MVP smoke (renders + core tests — not a ship point):**
 
 ```bash
 hogli test products/dashboards/backend/api/test/test_run_widgets.py
@@ -90,7 +92,7 @@ hogli test products/dashboards/backend/api/test/test_dashboard_widgets.py
 hogli test products/dashboards/frontend/widgets/registry.test.tsx
 ```
 
-**Ship (before PR):** [checklist §8](references/checklist-new-widget-type.md#8-tests) + `hogli build:openapi`.
+**Ship gate (required before the PR):** [checklist §8](references/checklist-new-widget-type.md#8-tests) + `hogli build:openapi` + dedicated Storybook stories per [checklist §5b](references/checklist-new-widget-type.md#5b-storybook) (component + edit modal — required, not just the catalog overview).
 
 **Config SSOT changes** (also run after `widget_specs/` edits):
 
@@ -104,17 +106,18 @@ hogli test products/dashboards/backend/api/test/test_widget_openapi_enums.py   #
 
 ## Reference appendix
 
-| Topic                      | Doc                                                                               |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| Intake (new types only)    | [widget-intake.md](references/widget-intake.md) — canonical defaults + spec recap |
-| New type checklist         | [checklist-new-widget-type.md](references/checklist-new-widget-type.md)           |
-| Update shipped type        | [managing-existing-widgets.md](references/managing-existing-widgets.md)           |
-| Architecture               | [architecture.md](references/architecture.md) — file map, invariants              |
-| Config + codegen           | [config-and-codegen.md](references/config-and-codegen.md)                         |
-| WidgetCard / edit modal    | [composition.md](references/composition.md)                                       |
-| List footer / tile filters | [list-widget-patterns.md](references/list-widget-patterns.md)                     |
-| Tile min/max               | [layout-and-ux.md](references/layout-and-ux.md)                                   |
-| RBAC / sharing             | [permissions-and-sharing.md](references/permissions-and-sharing.md)               |
-| Setup gates                | [availability-and-gating.md](references/availability-and-gating.md)               |
-| MCP after ship             | [mcp.md](references/mcp.md)                                                       |
-| Skill doc maintenance      | [skill-maintenance.md](references/skill-maintenance.md)                           |
+| Topic                      | Doc                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------- |
+| Intake (new types only)    | [widget-intake.md](references/widget-intake.md) — canonical defaults + spec recap  |
+| New type checklist         | [checklist-new-widget-type.md](references/checklist-new-widget-type.md)            |
+| Update shipped type        | [managing-existing-widgets.md](references/managing-existing-widgets.md)            |
+| Architecture               | [architecture.md](references/architecture.md) — file map, invariants               |
+| Config + codegen           | [config-and-codegen.md](references/config-and-codegen.md)                          |
+| WidgetCard / edit modal    | [composition.md](references/composition.md)                                        |
+| List footer / tile filters | [list-widget-patterns.md](references/list-widget-patterns.md)                      |
+| Live / self-updating tiles | [live-widgets.md](references/live-widgets.md) — contract + `widgets/live/` toolkit |
+| Tile min/max               | [layout-and-ux.md](references/layout-and-ux.md)                                    |
+| RBAC / sharing             | [permissions-and-sharing.md](references/permissions-and-sharing.md)                |
+| Setup gates                | [availability-and-gating.md](references/availability-and-gating.md)                |
+| MCP after ship             | [mcp.md](references/mcp.md)                                                        |
+| Skill doc maintenance      | [skill-maintenance.md](references/skill-maintenance.md)                            |

@@ -8,6 +8,13 @@ export interface McpToolResult {
 /**
  * Invoke an MCP tool via the PostHog API.
  *
+ * Goes through `context.api.request` rather than calling `fetch` directly. That is the seam a
+ * re-routed client overrides (see lib/connection-forwarding.ts), so a tool built on this reaches
+ * whichever project its context points at without the caller's bearer token ever going anywhere the
+ * client did not build itself. It also picks up the shared 429 retry policy and the typed error
+ * mapping (`PostHogRateLimitError`, `PostHogPermissionError`, `PostHogValidationError`) that error
+ * classification reads.
+ *
  * @param context - The MCP context containing API client and state
  * @param toolName - Name of the MCP tool to invoke (e.g., 'execute_sql')
  * @param args - Arguments to pass to the tool
@@ -20,31 +27,9 @@ export async function invokeMcpTool(
 ): Promise<McpToolResult> {
     const projectId = await context.stateManager.getProjectId()
 
-    const url = `${context.api.baseUrl}/api/environments/${projectId}/mcp_tools/${toolName}/`
-
-    const response = await fetch(url, {
+    return await context.api.request<McpToolResult>({
         method: 'POST',
-        headers: {
-            Authorization: `Bearer ${context.api.config.apiToken}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ args }),
+        path: `/api/environments/${projectId}/mcp_tools/${toolName}/`,
+        body: { args },
     })
-
-    if (!response.ok) {
-        const errorText = await response.text()
-        let errorMessage: string
-        try {
-            const errorData = JSON.parse(errorText)
-            errorMessage = errorData.content || errorText
-        } catch {
-            errorMessage = errorText
-        }
-        return {
-            success: false,
-            content: `Failed to invoke MCP tool '${toolName}': ${errorMessage}`,
-        }
-    }
-
-    return response.json() as Promise<McpToolResult>
 }

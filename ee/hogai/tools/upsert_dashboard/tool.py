@@ -279,6 +279,8 @@ class UpsertDashboardTool(MaxTool):
                     "insight created",
                     {
                         "insight_id": insight.short_id,
+                        **insight.get_analytics_query_kinds(),
+                        **insight.get_analytics_query_metadata(),
                         "source": EventSource.POSTHOG_AI,
                     },
                     team=self._team,
@@ -565,6 +567,7 @@ class UpsertDashboardTool(MaxTool):
         context = DashboardContext(
             team=self._team,
             insights_data=insights_data,
+            user=self._user,
             name=dashboard.name,
             description=dashboard.description,
             dashboard_id=str(dashboard.id),

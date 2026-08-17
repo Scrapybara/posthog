@@ -1,6 +1,7 @@
 import abc
 import threading
 from typing import IO, Any, Optional, Union
+from urllib.parse import urlparse
 
 from django.conf import settings
 
@@ -56,6 +57,10 @@ class ObjectStorageClient(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def read_bytes(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[bytes]:
+        pass
+
+    @abc.abstractmethod
+    def read_object(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[tuple[bytes, Optional[str]]]:
         pass
 
     @abc.abstractmethod
@@ -123,6 +128,9 @@ class UnavailableStorage(ObjectStorageClient):
         return None
 
     def read_bytes(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[bytes]:
+        return None
+
+    def read_object(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[tuple[bytes, Optional[str]]]:
         return None
 
     def tag(self, bucket: str, key: str, tags: dict[str, str]) -> None:
@@ -236,10 +244,14 @@ class ObjectStorage(ObjectStorageClient):
             return None
 
     def read_bytes(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[bytes]:
+        result = self.read_object(bucket, key, missing_ok=missing_ok)
+        return None if result is None else result[0]
+
+    def read_object(self, bucket: str, key: str, *, missing_ok: bool = False) -> Optional[tuple[bytes, Optional[str]]]:
         s3_response = {}
         try:
             s3_response = self.aws_client.get_object(Bucket=bucket, Key=key)
-            return s3_response["Body"].read()
+            return s3_response["Body"].read(), s3_response.get("ContentType")
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
             if error_code == "NoSuchKey" and missing_ok:
@@ -249,7 +261,6 @@ class ObjectStorage(ObjectStorageClient):
                 bucket=bucket,
                 file_name=key,
                 error=e,
-                s3_response={},
             )
             capture_exception(e)
             raise ObjectStorageError("read failed") from e
@@ -405,6 +416,14 @@ class ObjectStorage(ObjectStorageClient):
 _client: ObjectStorageClient = UnavailableStorage()
 
 
+def is_usable_endpoint(endpoint: str | None) -> bool:
+    """A usable endpoint is a syntactically valid URL with no unsubstituted ${...} deployment placeholders."""
+    if not endpoint or "${" in endpoint:
+        return False
+    parsed = urlparse(endpoint)
+    return bool(parsed.scheme and parsed.netloc)
+
+
 def object_storage_client() -> ObjectStorageClient:
     global _client
 
@@ -425,15 +444,32 @@ def object_storage_client() -> ObjectStorageClient:
             region_name=settings.OBJECT_STORAGE_REGION,
         )
         presigned_client = None
-        if settings.OBJECT_STORAGE_PUBLIC_ENDPOINT != settings.OBJECT_STORAGE_ENDPOINT:
-            presigned_client = client(
-                "s3",
-                endpoint_url=settings.OBJECT_STORAGE_PUBLIC_ENDPOINT,
-                aws_access_key_id=settings.OBJECT_STORAGE_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.OBJECT_STORAGE_SECRET_ACCESS_KEY,
-                config=s3_config,
-                region_name=settings.OBJECT_STORAGE_REGION,
-            )
+        public_endpoint = settings.OBJECT_STORAGE_PUBLIC_ENDPOINT
+        if public_endpoint != settings.OBJECT_STORAGE_ENDPOINT:
+            # A misconfigured public endpoint (e.g. an unsubstituted `${POSTHOG_DOMAIN}`
+            # deployment template literal) must never take down the read path: every reader
+            # routes through this factory, and boto3 raises `ValueError` when handed an
+            # invalid endpoint. Validate up front and degrade to the internal client so
+            # presigned URLs lose their public host but reads keep working.
+            if is_usable_endpoint(public_endpoint):
+                try:
+                    presigned_client = client(
+                        "s3",
+                        endpoint_url=public_endpoint,
+                        aws_access_key_id=settings.OBJECT_STORAGE_ACCESS_KEY_ID,
+                        aws_secret_access_key=settings.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+                        config=s3_config,
+                        region_name=settings.OBJECT_STORAGE_REGION,
+                    )
+                except Exception as e:
+                    logger.exception("object_storage.invalid_public_endpoint", endpoint=public_endpoint, error=e)
+                    capture_exception(e)
+            else:
+                # The Django system check only fails `manage.py`-style startup; gunicorn/ASGI
+                # workers skip it, so capture here too to surface the bad config in Sentry.
+                error = ValueError(f"Invalid OBJECT_STORAGE_PUBLIC_ENDPOINT: {public_endpoint!r}")
+                logger.error("object_storage.invalid_public_endpoint", endpoint=public_endpoint, error=error)
+                capture_exception(error)
         _client = ObjectStorage(aws_client, presigned_client)
 
     return _client
@@ -488,8 +524,15 @@ def read_bytes(file_name: str, bucket: str | None = None, *, missing_ok: bool = 
     return object_storage_client().read_bytes(bucket, file_name, missing_ok=missing_ok)
 
 
-def list_objects(prefix: str) -> Optional[list[str]]:
-    return object_storage_client().list_objects(bucket=settings.OBJECT_STORAGE_BUCKET, prefix=prefix)
+def read_object(
+    file_name: str, bucket: str | None = None, *, missing_ok: bool = False
+) -> Optional[tuple[bytes, Optional[str]]]:
+    bucket = bucket or settings.OBJECT_STORAGE_BUCKET
+    return object_storage_client().read_object(bucket, file_name, missing_ok=missing_ok)
+
+
+def list_objects(prefix: str, bucket: str | None = None) -> Optional[list[str]]:
+    return object_storage_client().list_objects(bucket=bucket or settings.OBJECT_STORAGE_BUCKET, prefix=prefix)
 
 
 def copy_objects(source_prefix: str, target_prefix: str) -> int:
@@ -516,9 +559,10 @@ def get_presigned_url(
     expiration: int = 3600,
     content_type: Optional[str] = None,
     content_disposition: Optional[str] = None,
+    bucket: str | None = None,
 ) -> Optional[str]:
     return object_storage_client().get_presigned_url(
-        bucket=settings.OBJECT_STORAGE_BUCKET,
+        bucket=bucket or settings.OBJECT_STORAGE_BUCKET,
         file_key=file_key,
         expiration=expiration,
         content_type=content_type,

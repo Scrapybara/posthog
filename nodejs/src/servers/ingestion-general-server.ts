@@ -1,6 +1,46 @@
 import { IntegrationManagerService } from '~/cdp/services/managers/integration-manager.service'
+import { initializePrometheusLabels } from '~/common/api/router'
+import { defaultConfig, overrideConfigWithEnv } from '~/common/config/config'
+import {
+    KAFKA_EVENTS_PLUGIN_INGESTION,
+    KAFKA_EVENTS_PLUGIN_INGESTION_AI,
+    KAFKA_EVENTS_PLUGIN_INGESTION_HISTORICAL,
+    KAFKA_EVENTS_PLUGIN_INGESTION_OVERFLOW,
+} from '~/common/config/kafka-topics'
+import {
+    createCookielessRedisConnectionConfig,
+    createFeatureFlagCalledDedupRedisConnectionConfig,
+    createIngestionRedisConnectionConfig,
+} from '~/common/config/redis-pools'
+import { GroupTypeManager } from '~/common/groups/group-type-manager'
+import { ClickhouseGroupRepository } from '~/common/groups/repositories/clickhouse-group-repository'
+import { PostgresGroupRepository } from '~/common/groups/repositories/postgres-group-repository'
+import { HogTransformerComponent } from '~/common/hog-transformations/hog-transformer-component'
+import { IngestionOutputsComponent } from '~/common/outputs/ingestion-outputs'
+import { PersonHogConfig, buildGroupRepository, buildPersonRepository, createPersonHogClient } from '~/common/personhog'
+import { PostgresPersonRepository } from '~/common/persons/repositories/postgres-person-repository'
+import { ServerCommands } from '~/common/utils/commands'
+import { PostgresRouter, PostgresRouterComponent } from '~/common/utils/db/postgres'
+import { RedisPoolComponent } from '~/common/utils/db/redis'
+import { GeoIPService } from '~/common/utils/geoip'
+import { DEFAULT_LOADER_RETRY } from '~/common/utils/lazy-loader'
+import { logger } from '~/common/utils/logger'
+import { PubSub } from '~/common/utils/pubsub'
+import { TeamManagerComponent } from '~/common/utils/team-manager'
+import { CookielessManagerComponent } from '~/ingestion/common/cookieless/cookieless-manager'
+import { KafkaProducerRegistryComponent } from '~/ingestion/common/outputs/producer-registry'
+import {
+    KafkaDownstreamProducerEnvConfig,
+    KafkaUpstreamProducerEnvConfig,
+    getDefaultKafkaDownstreamProducerEnvConfig,
+    getDefaultKafkaUpstreamProducerEnvConfig,
+} from '~/ingestion/common/outputs/producers'
+import { createAiConsumer } from '~/ingestion/pipelines/ai'
+import { createOutputsRegistry as createAiOutputsRegistry } from '~/ingestion/pipelines/ai/outputs/registry'
+import { createOutputsRegistry } from '~/ingestion/pipelines/analytics/outputs/registry'
+import { createClientWarningsConsumer } from '~/ingestion/pipelines/clientwarnings'
+import { createHeatmapsConsumer } from '~/ingestion/pipelines/heatmaps'
 
-import { initializePrometheusLabels } from '../api/router'
 import {
     HogTransformerServiceConfig,
     HogTransformerServiceDeps,
@@ -8,23 +48,7 @@ import {
 } from '../cdp/hog-transformations/hog-transformer.service'
 import { EncryptedFields } from '../cdp/utils/encryption-utils'
 import { CommonConfig, PluginServerMode } from '../common/config'
-import { defaultConfig, overrideConfigWithEnv } from '../config/config'
-import {
-    KAFKA_EVENTS_PLUGIN_INGESTION,
-    KAFKA_EVENTS_PLUGIN_INGESTION_HISTORICAL,
-    KAFKA_EVENTS_PLUGIN_INGESTION_OVERFLOW,
-} from '../config/kafka-topics'
-import { createCookielessRedisConnectionConfig, createIngestionRedisConnectionConfig } from '../config/redis-pools'
-import { createOutputsRegistry } from '../ingestion/analytics/outputs/registry'
-import { createClientWarningsConsumer } from '../ingestion/clientwarnings'
-import {
-    KafkaDownstreamProducerEnvConfig,
-    KafkaUpstreamProducerEnvConfig,
-    getDefaultKafkaDownstreamProducerEnvConfig,
-    getDefaultKafkaUpstreamProducerEnvConfig,
-} from '../ingestion/common/config'
 import { ingestionConsumerService } from '../ingestion/common/ingestion-consumer'
-import { KafkaProducerRegistryComponent } from '../ingestion/common/outputs/registry'
 import { extend, newScope } from '../ingestion/common/scopes'
 import {
     DatabaseConnectionConfig,
@@ -32,26 +56,12 @@ import {
     IngestionOutputsConfig,
     KafkaBrokerConfig,
     KafkaConsumerBaseConfig,
-    PersonHogConfig,
     RedisConnectionsConfig,
+    getDefaultIngestionConsumerConfig,
     getDefaultIngestionOutputsConfig,
 } from '../ingestion/config'
-import { CookielessManagerComponent } from '../ingestion/cookieless/cookieless-manager'
-import { createHeatmapsConsumer } from '../ingestion/heatmaps'
 import { IngestionConsumer, IngestionConsumerDeps } from '../ingestion/ingestion-consumer'
-import { buildGroupRepository, buildPersonRepository, createPersonHogClient } from '../ingestion/personhog'
 import { PluginServerService, RedisPool } from '../types'
-import { ServerCommands } from '../utils/commands'
-import { PostgresRouter, PostgresRouterComponent } from '../utils/db/postgres'
-import { RedisPoolComponent } from '../utils/db/redis'
-import { GeoIPService } from '../utils/geoip'
-import { logger } from '../utils/logger'
-import { PubSub } from '../utils/pubsub'
-import { TeamManagerComponent } from '../utils/team-manager'
-import { GroupTypeManager } from '../worker/ingestion/group-type-manager'
-import { ClickhouseGroupRepository } from '../worker/ingestion/groups/repositories/clickhouse-group-repository'
-import { PostgresGroupRepository } from '../worker/ingestion/groups/repositories/postgres-group-repository'
-import { PostgresPersonRepository } from '../worker/ingestion/persons/repositories/postgres-person-repository'
 import { BaseServerConfig, CleanupResources, NodeServer, ServerLifecycle } from './base-server'
 
 /**
@@ -60,7 +70,9 @@ import { BaseServerConfig, CleanupResources, NodeServer, ServerLifecycle } from 
  * This is the union of:
  * - BaseServerConfig: HTTP server, profiling, pod termination lifecycle
  * - IngestionConsumerConfig: ingestion pipeline, person/group processing, overflow, cookieless, etc.
- * - HogTransformerServiceConfig: CDP keys needed by the hog transformer running in-process
+ * - HogTransformerServiceConfig: the transformation-only keys the in-process hog transformer reads.
+ *   No CDP delivery config (Redis, watcher, SES, fetch) - transformations run the synchronous
+ *   Hog core alone, so those keys are deliberately absent rather than inherited.
  * - Infrastructure configs: Kafka broker, Postgres, Redis, consumer tuning
  * - Remaining CommonConfig picks: server mode, services, observability
  *
@@ -82,6 +94,7 @@ export type IngestionGeneralServerConfig = BaseServerConfig &
         | 'LOG_LEVEL'
         | 'PLUGIN_SERVER_MODE'
         | 'CLOUD_DEPLOYMENT'
+        | 'ENCRYPTION_SALT_KEYS'
         | 'MMDB_FILE_LOCATION'
         | 'CAPTURE_INTERNAL_URL'
         | 'LAZY_LOADER_DEFAULT_BUFFER_MS'
@@ -105,6 +118,7 @@ export class IngestionGeneralServer implements NodeServer {
     constructor(config: Partial<IngestionGeneralServerConfig> = {}) {
         this.config = {
             ...defaultConfig,
+            ...overrideConfigWithEnv(getDefaultIngestionConsumerConfig()),
             ...overrideConfigWithEnv(getDefaultKafkaUpstreamProducerEnvConfig()),
             ...overrideConfigWithEnv(getDefaultKafkaDownstreamProducerEnvConfig()),
             ...overrideConfigWithEnv(getDefaultIngestionOutputsConfig()),
@@ -154,6 +168,17 @@ export class IngestionGeneralServer implements NodeServer {
                         poolMaxSize: this.config.REDIS_POOL_MAX_SIZE,
                     })
                 )
+                // Dedicated $feature_flag_called dedup Redis, so its claim keys don't compete
+                // with ingestion's overflow-redirect keys under eviction. Falls back to the
+                // ingestion connection until the dedup host is configured.
+                .add(
+                    'featureFlagCalledDedupRedisPool',
+                    new RedisPoolComponent({
+                        connection: createFeatureFlagCalledDedupRedisConnectionConfig(this.config),
+                        poolMinSize: this.config.REDIS_POOL_MIN_SIZE,
+                        poolMaxSize: this.config.REDIS_POOL_MAX_SIZE,
+                    })
+                )
                 .add('producerRegistry', new KafkaProducerRegistryComponent(this.config.KAFKA_CLIENT_RACK, this.config))
         )
 
@@ -168,7 +193,7 @@ export class IngestionGeneralServer implements NodeServer {
                     // ECONNREFUSED). The team loader runs detached in the LazyLoader buffer, so an un-retried
                     // transient failure can surface as an unhandled rejection and restart the worker.
                     new TeamManagerComponent(container.postgres, {
-                        loaderRetry: { retryIntervalMs: 250, retryJitterMs: 250, maxElapsedMs: 5000 },
+                        loaderRetry: DEFAULT_LOADER_RETRY,
                     })
                 )
                 .add('cookielessManager', new CookielessManagerComponent(this.config, container.cookielessRedisPool))
@@ -195,6 +220,7 @@ export class IngestionGeneralServer implements NodeServer {
 
         const postgresPersonRepository = new PostgresPersonRepository(this.postgres, {
             calculatePropertiesSize: this.config.PERSON_UPDATE_CALCULATE_PROPERTIES_SIZE,
+            personMergeTombstoneTeamAllowlist: this.config.PERSON_MERGE_TOMBSTONE_TEAM_ALLOWLIST,
         })
         const personRepository = buildPersonRepository(
             personhogClient,
@@ -217,7 +243,12 @@ export class IngestionGeneralServer implements NodeServer {
         const integrationManager = new IntegrationManagerService(this.pubsub, this.postgres, encryptedFields)
 
         // 3. Ingestion-specific services
-        const groupTypeManager = new GroupTypeManager(groupRepository, teamManager)
+        // Same rationale as the team manager's loaderRetry above: group-type loads run
+        // detached in the LazyLoader buffer, so an un-retried transient failure can
+        // surface as an unhandled rejection and restart the worker.
+        const groupTypeManager = new GroupTypeManager(groupRepository, teamManager, {
+            loaderRetry: DEFAULT_LOADER_RETRY,
+        })
 
         const serviceLoaders: (() => Promise<PluginServerService>)[] = []
 
@@ -238,12 +269,12 @@ export class IngestionGeneralServer implements NodeServer {
             encryptedFields,
             integrationManager,
             monitoringOutputs: ingestionOutputs,
-            teamManager,
         }
 
         const ingestionDeps: IngestionConsumerDeps = {
             postgres: this.postgres,
             redisPool: this.redisPool,
+            featureFlagCalledDedupRedisPool: sharedServices.container.featureFlagCalledDedupRedisPool,
             outputs: ingestionOutputs,
             teamManager,
             groupTypeManager,
@@ -284,6 +315,39 @@ export class IngestionGeneralServer implements NodeServer {
             })
         }
 
+        const startAi = (override?: { topic: string; groupId: string }) => {
+            serviceLoaders.push(async () => {
+                const consumerConfig = override
+                    ? {
+                          ...this.config,
+                          INGESTION_CONSUMER_CONSUME_TOPIC: override.topic,
+                          INGESTION_CONSUMER_GROUP_ID: override.groupId,
+                      }
+                    : this.config
+                // The AI lane can't construct the cdp-owned hog transformer itself (boundary),
+                // so the server injects it (and the lane's outputs, which also back the
+                // transformer's monitoring) through an AI-specific scope. The consumer owns
+                // everything else (incl. its personhog client), taking only config + parent scope.
+                const aiOutputs = createAiOutputsRegistry().build(ingestionProducerRegistry, this.config)
+                const aiSharedScope = extend(sharedServicesScope, 'ai-shared', (_container, builder) =>
+                    builder
+                        .add(
+                            'hogTransformer',
+                            new HogTransformerComponent(() =>
+                                createHogTransformerService(this.config, {
+                                    ...hogTransformerDeps,
+                                    monitoringOutputs: aiOutputs,
+                                })
+                            )
+                        )
+                        .add('outputs', new IngestionOutputsComponent(() => aiOutputs))
+                )
+                const consumerScope = createAiConsumer(consumerConfig, aiSharedScope)
+                const { consumer, stop } = await consumerScope.start()
+                return ingestionConsumerService(consumer, stop)
+            })
+        }
+
         if (isCombinedMode) {
             // Local dev / hobby: run multiple consumers for all ingestion topics in one process
             const consumersOptions = [
@@ -312,10 +376,21 @@ export class IngestionGeneralServer implements NodeServer {
                 topic: 'heatmaps_ingestion',
                 groupId: 'heatmaps_ingestion',
             })
+
+            // Capture routes $ai_* events to the dedicated AI topic on every
+            // deployment shape, so combined mode needs the AI consumer too.
+            startAi({
+                topic: KAFKA_EVENTS_PLUGIN_INGESTION_AI,
+                groupId: 'clickhouse-ingestion-ai',
+            })
         } else if (this.config.INGESTION_PIPELINE === 'clientwarnings') {
             startClientWarnings()
         } else if (this.config.INGESTION_PIPELINE === 'heatmaps') {
             startHeatmaps()
+        } else if (this.config.INGESTION_PIPELINE === 'ai') {
+            // Dedicated AI pipeline deployment, consuming the topic capture's
+            // AI routing produces to (config-provided in production).
+            startAi()
         } else {
             // Production ingestion-v2: single consumer using config-provided topic
             serviceLoaders.push(async () => {

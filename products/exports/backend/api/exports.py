@@ -2,26 +2,29 @@ from datetime import timedelta
 from typing import Any, Literal
 
 from django.conf import settings
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.utils.timezone import now
 
 import structlog
 import posthoganalytics
 from asgiref.sync import async_to_sync
 from drf_spectacular.utils import extend_schema
-from loginas.utils import is_impersonated_session
 from rest_framework import mixins, serializers, viewsets
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.request import Request
 from temporalio.common import RetryPolicy, SearchAttributePair, TypedSearchAttributes, WorkflowIDReusePolicy
 
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.utils import action
 from posthog.event_usage import EventSource, get_event_source, groups
+from posthog.helpers.impersonation import is_impersonated
 from posthog.models import Team, User
 from posthog.models.activity_logging.activity_log import Change, Detail, log_activity
 from posthog.models.organization import Organization
+from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
+from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from posthog.security.url_validation import is_url_allowed
 from posthog.settings import HOGQL_INCREASED_MAX_EXECUTION_TIME
 from posthog.settings.temporal import TEMPORAL_WORKFLOW_MAX_ATTEMPTS
@@ -31,7 +34,12 @@ from posthog.temporal.common.search_attributes import POSTHOG_SESSION_RECORDING_
 from posthog.temporal.exports.workflows import ExportAssetWorkflow, ExportAssetWorkflowInputs
 from posthog.temporal.session_replay.rasterize_recording.types import RasterizeRecordingInputs
 
-from products.exports.backend.models.exported_asset import ExportedAsset, get_content_response
+from products.exports.backend.facade.api import EXPORT_WORKFLOW_TIMEOUT
+from products.exports.backend.models.exported_asset import (
+    ExportedAsset,
+    get_content_response,
+    is_valid_session_recording_id,
+)
 from products.product_analytics.backend.models.insight import Insight
 
 # Full video exports per team per calendar month, tiered by plan.
@@ -51,9 +59,14 @@ def get_full_video_exports_limit_for_organization(organization: Organization | N
 logger = structlog.get_logger(__name__)
 
 
-class ExportedAssetSerializer(serializers.ModelSerializer):
+class ExportedAssetSerializer(UserAccessControlSerializerMixin, serializers.ModelSerializer):
     """Standard ExportedAsset serializer that doesn't return content."""
 
+    export_format = serializers.ChoiceField(
+        choices=ExportedAsset.get_supported_format_values(),
+        read_only=True,
+        help_text="File format of the generated export.",
+    )
     has_content = serializers.BooleanField(read_only=True)
     filename = serializers.CharField(read_only=True)
 
@@ -70,6 +83,7 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
             "filename",
             "expires_after",
             "exception",
+            "user_access_level",
         ]
         read_only_fields = ["id", "created_at", "has_content", "filename", "expires_after", "exception"]
 
@@ -77,9 +91,12 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
         """Override to show stuck exports as having an exception."""
         data = super().to_representation(instance)
 
-        # Check if this export is stuck (created over HOGQL_INCREASED_MAX_EXECUTION_TIME seconds ago,
-        # has no content, and has no recorded exception)
-        timeout_threshold = now() - timedelta(seconds=HOGQL_INCREASED_MAX_EXECUTION_TIME + 30)
+        timeout = (
+            EXPORT_WORKFLOW_TIMEOUT
+            if instance.is_dataset_export
+            else timedelta(seconds=HOGQL_INCREASED_MAX_EXECUTION_TIME)
+        )
+        timeout_threshold = now() - timeout - timedelta(seconds=30)
         if (
             timeout_threshold
             and instance.created_at < timeout_threshold
@@ -120,9 +137,15 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
         if data.get("insight") and data["insight"].team.id != self.context["team_id"]:
             raise ValidationError({"insight": ["This insight does not belong to your team."]})
 
+        export_context = data.get("export_context") or {}
+        # Truthiness, not `is not None`: an absent or empty id is a no-op everywhere downstream,
+        # and rejecting it here would 400 exports that never touch a recording.
+        session_recording_id = export_context.get("session_recording_id")
+        if session_recording_id and not is_valid_session_recording_id(session_recording_id):
+            raise ValidationError({"export_context": ["Invalid session_recording_id."]})
+
         # Check full video export limit for team (video session recording exports)
         export_format = data.get("export_format")
-        export_context = data.get("export_context", {})
 
         is_full_video_export = export_format in ("video/mp4", "video/webm", "image/gif") and export_context.get(
             "session_recording_id"
@@ -192,7 +215,28 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data: dict, *args: Any, **kwargs: Any) -> ExportedAsset:
         request = self.context["request"]
+        self._assert_may_export_session_recording(validated_data)
         return self._create_asset(validated_data, user=request.user, reason=None)
+
+    def _assert_may_export_session_recording(self, validated_data: dict) -> None:
+        """Rendering a recording export must need the access that viewing the recording needs."""
+        session_recording_id = (validated_data.get("export_context") or {}).get("session_recording_id")
+        user_access_control = self.user_access_control
+        if not session_recording_id or user_access_control is None:
+            return
+
+        from posthog.session_recordings.models.session_recording import SessionRecording
+
+        recording = SessionRecording.objects.filter(
+            team_id=validated_data["team_id"], session_id=session_recording_id
+        ).first()
+        if recording is not None:
+            allowed = user_access_control.check_access_level_for_object(recording, required_level="viewer")
+        else:
+            allowed = user_access_control.check_access_level_for_resource("session_recording", required_level="viewer")
+
+        if not allowed:
+            raise PermissionDenied("You do not have access to this session recording.")
 
     def _create_asset(
         self,
@@ -280,7 +324,7 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
         instance.refresh_from_db()
         insight_id = instance.insight_id
         dashboard_id = instance.dashboard_id
-        if insight_id and not dashboard_id:  # we don't log dashboard activity ¯\_(ツ)_/¯
+        if insight_id and not dashboard_id:  # logged against the insight's own activity history
             try:
                 # nosemgrep: idor-lookup-without-team (insight_id validated as team-owned in validate())
                 insight: Insight = Insight.objects.select_related("team__organization").get(id=insight_id)
@@ -288,9 +332,7 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
                     organization_id=insight.team.organization.id,
                     team_id=self.context["team_id"],
                     user=user,
-                    was_impersonated=is_impersonated_session(self.context["request"])
-                    if "request" in self.context
-                    else False,
+                    was_impersonated=is_impersonated(self.context.get("request")),
                     item_id=insight_id,  # Type: ignore
                     scope="Insight",
                     activity="exported" if reason is None else f"exported for {reason}",
@@ -314,7 +356,62 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
                     insight_id=insight_id,
                 )
                 pass
+        elif user is not None:
+            # Dashboard, session recording, heatmap and SQL/HogQL query exports aren't tied to a
+            # single insight's history, so they go under a dedicated ExportedAsset scope — making
+            # every data export auditable. Insight-only exports are logged above (Insight scope) and
+            # never reach here, so we never write two activity rows for one export. System/synthetic
+            # exports (user is None, e.g. open-graph image renders) are intentionally not logged.
+            self._log_exported_asset_activity(instance, user)
         return instance
+
+    def _log_exported_asset_activity(self, instance: ExportedAsset, user: User) -> None:
+        log_activity(
+            organization_id=instance.team.organization_id,
+            team_id=instance.team_id,
+            user=user,
+            was_impersonated=is_impersonated(self.context.get("request")),
+            item_id=instance.id,
+            scope="ExportedAsset",
+            activity="exported",
+            detail=Detail(
+                name=self._describe_exported_asset(instance),
+                type=instance.export_type,
+                changes=[
+                    Change(
+                        type="ExportedAsset",
+                        action="exported",
+                        field="export_format",
+                        after=instance.export_format,
+                    )
+                ],
+            ),
+        )
+
+    @staticmethod
+    def _describe_exported_asset(instance: ExportedAsset) -> str:
+        """Human-readable name of what was exported, for the activity log entry."""
+        context = instance.export_context or {}
+        export_type = instance.export_type
+        if export_type == "dashboard":
+            return instance.dashboard.name if instance.dashboard and instance.dashboard.name else "a dashboard"
+        if export_type == "insight":
+            # Reachable only when an insight export is also tied to a dashboard (the insight-only
+            # path is logged under the Insight scope above); name it after the insight either way.
+            if instance.insight:
+                return instance.insight.name or instance.insight.derived_name or "an insight"
+            return "an insight"
+        if export_type == "recording":
+            session_recording_id = context.get("session_recording_id")
+            return f"session recording {session_recording_id}" if session_recording_id else "a session recording"
+        if export_type == "heatmap":
+            heatmap_url = context.get("heatmap_url")
+            return f"heatmap {heatmap_url}" if heatmap_url else "a heatmap"
+        if context.get("source"):
+            return "SQL query results"
+        if context.get("filename"):
+            return str(context["filename"])
+        return "an export"
 
     def _start_export_workflow(
         self, instance: ExportedAsset, team: Team, user: User | None, force_async: bool = False
@@ -378,26 +475,36 @@ class ExportedAssetSerializer(serializers.ModelSerializer):
         )
 
 
+class ExportedAssetCreateSerializer(ExportedAssetSerializer):
+    export_format = serializers.ChoiceField(
+        choices=[
+            export_format
+            for export_format in ExportedAsset.get_supported_format_values()
+            if export_format != ExportedAsset.ExportFormat.JSONL
+        ],
+        help_text="File format to generate. Dataset JSONL exports use the dataset export endpoint.",
+    )
+
+
 @extend_schema(extensions={"x-product": "core"})
 class ExportedAssetViewSet(
     TeamAndOrgViewSetMixin,
+    AccessControlViewSetMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
     scope_object = "export"
-    queryset = ExportedAsset.objects.order_by("-created_at")
+    # Both FKs are read on every retrieve to authorize the asset, so fetch them with it.
+    queryset = ExportedAsset.objects.select_related("dashboard", "insight").order_by("-created_at")
     serializer_class = ExportedAssetSerializer
 
-    def safely_get_queryset(self, queryset):
-        """
-        List shows only exports you created (quota + history are per user).
+    def get_serializer_class(self) -> type[serializers.BaseSerializer]:
+        return ExportedAssetCreateSerializer if self.action == "create" else ExportedAssetSerializer
 
-        Retrieve/content by id: exports without export_context.session_recording_id are only
-        readable by their author; session recording exports are readable by any project member
-        who passes recording viewer checks in safely_get_object.
-        """
+    def safely_get_queryset(self, queryset):
+        """List shows only exports created by the current user."""
         if self.action == "list":
             queryset = queryset.filter(created_by=self.request.user)
 
@@ -420,27 +527,44 @@ class ExportedAssetViewSet(
 
     def safely_get_object(self, queryset):
         instance = get_object_or_404(queryset, pk=self.kwargs["pk"])
+        export_context = instance.export_context or {}
+
+        if instance.is_dataset_export and self.action != "content":
+            raise NotFound()
 
         if not instance.is_session_recording_export and instance.created_by_id != self.request.user.id:
             raise NotFound()
 
-        export_context = instance.export_context or {}
         session_recording_id = export_context.get("session_recording_id")
 
-        resource = instance.dashboard or instance.insight
-        if not resource and session_recording_id:
-            from posthog.session_recordings.models.session_recording import SessionRecording
-
-            resource = SessionRecording.objects.filter(
-                team_id=instance.team_id, session_id=session_recording_id
-            ).first()
-
-        if resource is not None:
-            if not self.user_access_control.check_access_level_for_object(resource, required_level="viewer"):
+        # Both can be set on one asset, and the renderer prefers the insight, so checking only the
+        # first non-null one would let an accessible dashboard authorize an inaccessible insight.
+        for related in (instance.dashboard, instance.insight):
+            if related is not None and not self.user_access_control.check_access_level_for_object(
+                related, required_level="viewer"
+            ):
                 raise NotFound()
-        elif session_recording_id:
+
+        if not session_recording_id:
+            return instance
+
+        # Reached even when a dashboard or insight authorized above: an asset carrying both renders
+        # the recording too, so a viewable dashboard must not stand in for access to it.
+        from posthog.session_recordings.models.session_recording import SessionRecording
+
+        recording = SessionRecording.objects.filter(team_id=instance.team_id, session_id=session_recording_id).first()
+        if recording is not None:
+            if not self.user_access_control.check_access_level_for_object(recording, required_level="viewer"):
+                raise NotFound()
+        elif instance.created_by_id != self.request.user.id:
             # No SessionRecording row — cannot run object-level RBAC; still enforce the team's
-            # session_recording resource default so detail/content are not fail-open.
+            # session_recording resource default for other users so detail/content are not fail-open.
+            # The creator is exempt from this fallback only, because _assert_may_export_session_recording
+            # ran the same check when they created the export, so retrieval must not be stricter than
+            # creation — otherwise a session_recording default below viewer 404s the very user who just
+            # took the screenshot, surfacing as an "Export complete!" toast followed by a blank error
+            # page. Explicit object-level denies (the branch above) still apply to the creator once a
+            # SessionRecording row exists.
             if not self.user_access_control.check_access_level_for_resource(
                 "session_recording", required_level="viewer"
             ):
@@ -452,4 +576,22 @@ class ExportedAssetViewSet(
     @action(methods=["GET"], detail=True, required_scopes=["export:read"])
     def content(self, request: Request, *args: Any, **kwargs: Any) -> HttpResponse:
         instance = self.get_object()
-        return get_content_response(instance, request.query_params.get("download") == "true")
+        if instance.is_dataset_export:
+            dataset_id = (instance.export_context or {}).get("dataset_id")
+            if not isinstance(dataset_id, str):
+                raise NotFound()
+            return HttpResponseRedirect(
+                reverse(
+                    "project_datasets-export-content",
+                    kwargs={
+                        "parent_lookup_team_id": instance.team_id,
+                        "pk": dataset_id,
+                        "export_id": instance.id,
+                    },
+                )
+            )
+        return get_content_response(
+            instance,
+            download=request.query_params.get("download") == "true",
+            direct=request.query_params.get("direct") == "true",
+        )

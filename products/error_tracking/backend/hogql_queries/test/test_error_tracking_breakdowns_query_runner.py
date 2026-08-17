@@ -14,7 +14,11 @@ from posthog.schema import BreakdownValue, DateRange, ErrorTrackingBreakdownsQue
 from products.error_tracking.backend.hogql_queries.error_tracking_breakdowns_query_runner import (
     ErrorTrackingBreakdownsQueryRunner,
 )
-from products.error_tracking.backend.models import ErrorTrackingIssue, ErrorTrackingIssueFingerprintV2
+from products.error_tracking.backend.models import (
+    ErrorTrackingIssue,
+    ErrorTrackingIssueFingerprintV2,
+    sync_issues_to_clickhouse,
+)
 
 
 class TestErrorTrackingBreakdownsQueryRunner(ClickhouseTestMixin, APIBaseTest):
@@ -24,6 +28,7 @@ class TestErrorTrackingBreakdownsQueryRunner(ClickhouseTestMixin, APIBaseTest):
     def create_issue(self, issue_id, fingerprint):
         issue = ErrorTrackingIssue.objects.create(id=issue_id, team=self.team)
         ErrorTrackingIssueFingerprintV2.objects.create(team=self.team, issue=issue, fingerprint=fingerprint)
+        sync_issues_to_clickhouse(issue_ids=[issue.id], team_id=self.team.pk)
         return issue
 
     def create_exception_event(self, distinct_id, properties):
@@ -74,6 +79,29 @@ class TestErrorTrackingBreakdownsQueryRunner(ClickhouseTestMixin, APIBaseTest):
         assert browser_data.values[1].count == 8
         assert browser_data.values[2].value == "C"
         assert browser_data.values[2].count == 6
+
+    @freeze_time("2024-01-10T12:00:00Z")
+    def test_breakdown_with_special_character_property_name(self):
+        self.create_issue(self.issue_id, self.fingerprint)
+        self.create_exception_event("user_1", {"completion%": "50%"})
+        flush_persons_and_events()
+
+        runner = ErrorTrackingBreakdownsQueryRunner(
+            team=self.team,
+            query=ErrorTrackingBreakdownsQuery(
+                kind="ErrorTrackingBreakdownsQuery",
+                issueId=self.issue_id,
+                breakdownProperties=["completion%"],
+                dateRange=DateRange(date_from="-7d"),
+                maxValuesPerProperty=3,
+            ),
+        )
+
+        response = runner.calculate()
+
+        property_data = response.results["completion%"]
+        assert property_data.total_count == 1
+        assert property_data.values == [BreakdownValue(value="50%", count=1)]
 
     def test_rejects_malformed_issue_id(self):
         with self.assertRaises(ValidationError):

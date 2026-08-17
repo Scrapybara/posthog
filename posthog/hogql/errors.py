@@ -35,7 +35,10 @@ class BaseHogQLError(Exception, ABC):
 class ExposedHogQLError(BaseHogQLError):
     """An exception that can be exposed to the user."""
 
-    pass
+    # Surfaced as the error code on API responses so clients can tell a deterministic query
+    # failure from a transient blip without matching on the message. Subclasses override this
+    # fallback with a more specific value.
+    code_name = "hogql_error"
 
 
 class InternalHogQLError(BaseHogQLError):
@@ -50,13 +53,27 @@ class InternalHogQLError(BaseHogQLError):
 class SyntaxError(ExposedHogQLError):
     """The input does not conform to HogQL syntax."""
 
-    pass
+    code_name = "hogql_syntax_error"
 
 
 class QueryError(ExposedHogQLError):
     """The query is invalid, though correct syntactically."""
 
-    pass
+    code_name = "hogql_query_error"
+
+
+class TableAccessDeniedError(QueryError):
+    """The user has no access to the table (raised by Database.get_table)."""
+
+    # Surfaces as the error code on API responses (see posthog/api/query.py), so clients can tell a
+    # denial from any other query error without matching on the message.
+    code_name = "table_access_denied"
+
+    table_name: str
+
+    def __init__(self, table_name: str):
+        super().__init__(f"You don't have access to table `{table_name}`.")
+        self.table_name = table_name
 
 
 class NotImplementedError(InternalHogQLError):

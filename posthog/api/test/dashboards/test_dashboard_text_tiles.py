@@ -294,6 +294,47 @@ class TestDashboardTiles(APIBaseTest, QueryMatchingTest):
         tile = dashboard_json["tiles"][0]
         assert tile["transparent_background"] is True
 
+    def test_section_header_body_and_layout_survive_create_retrieve_and_edit(self) -> None:
+        dashboard_id, _ = self.dashboard_api.create_dashboard({"name": "dashboard"})
+        body = (
+            "<!--posthog-dashboard-section-header:"
+            "%7B%22title%22%3A%22Activation%22%2C%22description%22%3A%22Users%20reaching%20value.%22%7D-->"
+            "\n## Activation\n\nUsers reaching value."
+        )
+
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/dashboards/{dashboard_id}",
+            {
+                "tiles": [
+                    {
+                        "text": {"body": body},
+                        "transparent_background": True,
+                        "layouts": {"sm": {"x": 0, "y": 5, "w": 12, "h": 1}},
+                    }
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tile = response.json()["tiles"][0]
+
+        retrieved_tile = self.dashboard_api.get_dashboard(dashboard_id)["tiles"][0]
+        assert retrieved_tile["id"] == tile["id"]
+        assert retrieved_tile["text"]["body"] == body
+        assert retrieved_tile["transparent_background"] is True
+        assert retrieved_tile["layouts"] == {"sm": {"x": 0, "y": 5, "w": 12, "h": 1}}
+
+        updated_body = body.replace("Activation", "Retention")
+        update_response = self.client.patch(
+            f"/api/projects/{self.team.id}/dashboards/{dashboard_id}",
+            {"tiles": [{"id": tile["id"], "text": {**tile["text"], "body": updated_body}}]},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        updated_tile = update_response.json()["tiles"][0]
+        assert updated_tile["id"] == tile["id"]
+        assert updated_tile["text"]["body"] == updated_body
+
     def test_can_update_text_tile_transparent_background(self) -> None:
         dashboard_id, _ = self.dashboard_api.create_dashboard({"name": "dashboard"})
         _, dashboard_json = self.dashboard_api.create_text_tile(dashboard_id, text="hello")

@@ -6,6 +6,7 @@ import {
     type DashboardWidgetCatalogEntry,
 } from '@posthog/products-dashboards/frontend/widget_types/catalog'
 
+import { isDashboardSectionHeader } from 'lib/components/Cards/TextCard/sectionHeader'
 import { BREAKPOINT_COLUMN_COUNTS } from 'scenes/dashboard/dashboardUtils'
 
 import { getQueryBasedInsightModel } from '~/queries/nodes/InsightViz/utils'
@@ -237,11 +238,15 @@ export const calculateLayouts = (
 
         const layouts = (sortedDashboardTiles || []).map((tile) => {
             const query = tile.insight ? getQueryBasedInsightModel(tile.insight) : null
+            const isSectionHeader = isDashboardSectionHeader(tile.text?.body)
             // Base constraints
             let defaultW = 6
             let defaultH = 5
             // Content-adjusted constraints (note that widths should be factors of 12)
-            if (tile.text) {
+            if (isSectionHeader) {
+                defaultW = columnCount
+                defaultH = 1
+            } else if (tile.text) {
                 defaultW = 2
                 defaultH = 2
             } else if (isFunnelsQuery(query)) {

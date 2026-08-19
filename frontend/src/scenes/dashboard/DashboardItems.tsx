@@ -13,6 +13,7 @@ import { getDashboardWidgetFetchDisplayError } from '@posthog/products-dashboard
 import { ApiError } from 'lib/api'
 import { InsightCard } from 'lib/components/Cards/InsightCard'
 import { EditModeEdge, useResizeHandleScrollbarPassThrough } from 'lib/components/Cards/InsightCard/EditModeEdgeOverlay'
+import { parseDashboardSectionHeader } from 'lib/components/Cards/TextCard/sectionHeader'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
 import { LemonMenuItems } from 'lib/lemon-ui/LemonMenu'
 import { DashboardEventSource, eventUsageLogic } from 'lib/utils/eventUsageLogic'
@@ -38,6 +39,7 @@ import { DashboardLayoutSize, DashboardMode, DashboardPlacement, DashboardType }
 
 import { DashboardButtonTileItem } from './items/DashboardButtonTileItem'
 import { DashboardErrorTileItem } from './items/DashboardErrorTileItem'
+import { DashboardSectionHeaderItem } from './items/DashboardSectionHeaderItem'
 import { DashboardTextItem } from './items/DashboardTextItem'
 
 const DRAG_AUTO_SCROLL_THRESHOLD = 100
@@ -68,6 +70,10 @@ function gridTilePropsEqual(prevProps: Record<string, any>, nextProps: Record<st
 
 const MemoizedInsightCard = memo(InsightCard, gridTilePropsEqual) as typeof InsightCard
 const MemoizedDashboardTextItem = memo(DashboardTextItem, gridTilePropsEqual) as typeof DashboardTextItem
+const MemoizedDashboardSectionHeaderItem = memo(
+    DashboardSectionHeaderItem,
+    gridTilePropsEqual
+) as typeof DashboardSectionHeaderItem
 const MemoizedDashboardButtonTileItem = memo(
     DashboardButtonTileItem,
     gridTilePropsEqual
@@ -600,6 +606,33 @@ export function DashboardItems({ showCreateAnomalyAlertButton }: DashboardItemsP
                             }
 
                             if (text) {
+                                const sectionHeader = parseDashboardSectionHeader(text.body)
+                                if (sectionHeader) {
+                                    return (
+                                        <MemoizedDashboardSectionHeaderItem
+                                            key={tile.id}
+                                            tile={tile}
+                                            sectionHeader={sectionHeader}
+                                            placement={placement}
+                                            dashboardId={dashboard?.id}
+                                            onEdit={() => {
+                                                if (dashboard?.id) {
+                                                    push(urls.dashboardTextTile(dashboard.id, tile.id))
+                                                }
+                                            }}
+                                            onMoveToDashboard={commonTileProps.moveToDashboard}
+                                            onCopyToDashboard={commonTileProps.copyToDashboard}
+                                            onDuplicate={() => duplicateTile(tile)}
+                                            onRemove={commonTileProps.removeFromDashboard}
+                                            showResizeHandles={commonTileProps.showResizeHandles}
+                                            showEditingControls={commonTileProps.showEditingControls}
+                                            canEnterEditModeFromEdge={commonTileProps.canEnterEditModeFromEdge}
+                                            onEnterEditModeFromEdge={commonTileProps.onEnterEditModeFromEdge}
+                                            onDragHandleMouseDown={commonTileProps.onDragHandleMouseDown}
+                                        />
+                                    )
+                                }
+
                                 return (
                                     <MemoizedDashboardTextItem
                                         key={tile.id}

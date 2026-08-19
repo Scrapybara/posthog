@@ -1,5 +1,6 @@
 import { Layout, LayoutItem } from 'react-grid-layout'
 
+import { serializeDashboardSectionHeader } from 'lib/components/Cards/TextCard/sectionHeader'
 import { calculateDuplicateLayout, calculateInsertionLayout, calculateLayouts } from 'scenes/dashboard/tileLayouts'
 
 import { DashboardLayoutSize, DashboardTile, QueryBasedInsightModel, TileLayout } from '~/types'
@@ -25,6 +26,23 @@ describe('calculating tile layouts', () => {
         expect(calculateLayouts(tiles)).toEqual({
             sm: [{ i: '1', x: 0, y: 0, w: 1, h: 1, minW: 1, minH: 1 }],
             // xs uses the same row height as sm when sm is present
+            xs: [{ i: '1', x: 0, y: 0, w: 1, h: 1, minW: 1, minH: 1 }],
+        })
+    })
+
+    it('defaults section headers to a full-width row at every breakpoint', () => {
+        const tiles = [
+            {
+                id: 1,
+                text: {
+                    body: serializeDashboardSectionHeader({ title: 'Acquisition', description: '' }),
+                },
+                layouts: {},
+            } as DashboardTile<QueryBasedInsightModel>,
+        ]
+
+        expect(calculateLayouts(tiles)).toEqual({
+            sm: [{ i: '1', x: 0, y: 0, w: 12, h: 1, minW: 1, minH: 1 }],
             xs: [{ i: '1', x: 0, y: 0, w: 1, h: 1, minW: 1, minH: 1 }],
         })
     })

@@ -2832,9 +2832,22 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
         assert response.status_code == 400, response.json()
 
     def test_create_from_template_json_can_provide_text_tile(self) -> None:
+        body = (
+            "<!--posthog-dashboard-section-header:"
+            "%7B%22title%22%3A%22Activation%22%2C%22description%22%3A%22Users%20reaching%20value.%22%7D-->"
+            "\n## Activation\n\nUsers reaching value."
+        )
+        layouts = {"sm": {"x": 0, "y": 5, "w": 12, "h": 1}}
         template: dict = {
             **valid_template,
-            "tiles": [{"type": "TEXT", "body": "hello world", "layouts": {}}],
+            "tiles": [
+                {
+                    "type": "TEXT",
+                    "body": body,
+                    "layouts": layouts,
+                    "transparent_background": True,
+                }
+            ],
         }
 
         response = self.client.post(
@@ -2853,12 +2866,12 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
                 "insight": None,
                 "is_cached": False,
                 "last_refresh": None,
-                "layouts": {},
+                "layouts": layouts,
                 "order": 0,
                 "show_description": None,
                 "widget": None,
                 "text": {
-                    "body": "hello world",
+                    "body": body,
                     "created_by": None,
                     "dashboard_tiles": [
                         {"dashboard_id": dashboard_id, "deleted": None, "id": ANY},
@@ -2868,7 +2881,7 @@ class TestDashboard(APIBaseTest, QueryMatchingTest):
                     "last_modified_by": None,
                     "team": self.team.pk,
                 },
-                "transparent_background": None,
+                "transparent_background": True,
             },
         ]
 

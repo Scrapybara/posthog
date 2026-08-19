@@ -25,6 +25,81 @@ import { TrendsLineChart } from './TrendsLineChart'
 
 type Story = StoryObj<{}>
 
+const deterministicDays = [
+    '2024-06-07',
+    '2024-06-08',
+    '2024-06-09',
+    '2024-06-10',
+    '2024-06-11',
+    '2024-06-12',
+    '2024-06-13',
+    '2024-06-14',
+    '2024-06-15',
+    '2024-06-16',
+    '2024-06-17',
+    '2024-06-18',
+    '2024-06-19',
+    '2024-06-20',
+]
+const deterministicLabels = [
+    '7-Jun-2024',
+    '8-Jun-2024',
+    '9-Jun-2024',
+    '10-Jun-2024',
+    '11-Jun-2024',
+    '12-Jun-2024',
+    '13-Jun-2024',
+    '14-Jun-2024',
+    '15-Jun-2024',
+    '16-Jun-2024',
+    '17-Jun-2024',
+    '18-Jun-2024',
+    '19-Jun-2024',
+    '20-Jun-2024',
+]
+const deterministicData = [1, 5, 6, 3, 3, 0, 2, 1, 4, 4, 3, 3, 3, 12]
+
+function makeDeterministicFixture(weekdaysOnly: boolean): Record<string, unknown> {
+    const keptIndices = deterministicDays.flatMap((day, index) => {
+        const isoDay = new Date(`${day}T00:00:00Z`).getUTCDay()
+        return !weekdaysOnly || (isoDay !== 0 && isoDay !== 6) ? [index] : []
+    })
+    const days = keptIndices.map((index) => deterministicDays[index])
+    const labels = keptIndices.map((index) => deterministicLabels[index])
+    const data = keptIndices.map((index) => deterministicData[index])
+
+    return {
+        ...trendsLineFixture,
+        id: weekdaysOnly ? 61782 : 61781,
+        short_id: weekdaysOnly ? 'weekdays-only' : 'all-days',
+        derived_name: weekdaysOnly ? 'Weekdays only' : 'All days',
+        result: [
+            {
+                ...trendsLineFixture.result[0],
+                count: data.reduce((sum, value) => sum + value, 0),
+                data,
+                labels,
+                days,
+            },
+        ],
+        query: {
+            ...trendsLineFixture.query,
+            source: {
+                ...trendsLineFixture.query.source,
+                dateRange: {
+                    date_from: '2024-06-07',
+                    date_to: '2024-06-20',
+                    daysOfWeek: weekdaysOnly ? [1, 2, 3, 4, 5] : undefined,
+                },
+                trendsFilter: {
+                    ...trendsLineFixture.query.source.trendsFilter,
+                    showValuesOnSeries: true,
+                },
+            },
+        },
+    }
+}
+
 const meta: Meta = {
     title: 'Insights/TrendsLineChart',
     component: TrendsLineChart,
@@ -127,6 +202,16 @@ export const SingleSeries: Story = {
 
 export const Breakdown: Story = {
     render: () => renderTrendsLineChart(trendsLineBreakdownFixture),
+}
+
+export const AllDays: Story = {
+    name: 'All days',
+    render: () => renderTrendsLineChart(makeDeterministicFixture(false)),
+}
+
+export const WeekdaysOnly: Story = {
+    name: 'Weekdays only',
+    render: () => renderTrendsLineChart(makeDeterministicFixture(true)),
 }
 
 // The area display renders through the same line chart component with filled series

@@ -5,6 +5,7 @@ import {
     BaseIcon,
     IconCheck,
     IconChevronDown,
+    IconChevronLeft,
     IconChevronRight,
     IconComment,
     IconDashboard,
@@ -17,6 +18,7 @@ import {
 import { LemonButton, LemonInput, SideAction, Tooltip } from '@posthog/lemon-ui'
 
 import { SettingsBar, SettingsButton, SettingsToggle } from 'lib/components/PanelSettings/PanelSettings'
+import { ScrollableShadows } from 'lib/components/ScrollableShadows/ScrollableShadows'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { IconUnverifiedEvent } from 'lib/lemon-ui/icons'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
@@ -32,6 +34,7 @@ import { urls } from 'scenes/urls'
 
 import { SessionRecordingPlayerMode, sessionRecordingPlayerLogic } from '../sessionRecordingPlayerLogic'
 import { InspectorSearchInfo } from './components/InspectorSearchInfo'
+import { scrollInspectorToolbar } from './scrollInspectorToolbar'
 
 function sideActionForType({
     miniFilters,
@@ -298,25 +301,53 @@ export function PlayerInspectorControls(): JSX.Element {
 
     return (
         <div className="flex flex-col">
-            <SettingsBar border="bottom" className="justify-end">
-                {mode !== SessionRecordingPlayerMode.Sharing && <EventsFilterSettingsButton />}
-                <ConsoleFilterSettingsButton />
-                <NetworkFilterSettingsButton />
-                {featureFlags[FEATURE_FLAGS.SESSION_REPLAY_BACKEND_LOGS] &&
-                    mode !== SessionRecordingPlayerMode.Sharing && <LogsFilterSettingsButton />}
-                {mode !== SessionRecordingPlayerMode.Sharing && <CommentsFilterSettingsButton />}
-                {(window.IMPERSONATED_SESSION || featureFlags[FEATURE_FLAGS.SESSION_REPLAY_DOCTOR]) &&
-                    mode !== SessionRecordingPlayerMode.Sharing && (
-                        <SettingsToggle
-                            data-attr="player-inspector-doctor-toggle"
-                            title="Doctor events help diagnose the health of a recording, and are used by PostHog support"
-                            icon={<IconStethoscope />}
-                            label="Doctor"
-                            active={!!miniFiltersByKey['doctor']?.enabled}
-                            onClick={() => setMiniFilter('doctor', !miniFiltersByKey['doctor']?.enabled)}
-                        />
-                    )}
-            </SettingsBar>
+            <div className="flex min-w-0">
+                <LemonButton
+                    data-attr="player-inspector-scroll-filters-left"
+                    icon={<IconChevronLeft />}
+                    size="xsmall"
+                    tooltip="Scroll activity filters left"
+                    onClick={(event) => scrollInspectorToolbar(event, -1)}
+                    className="hidden shrink-0 rounded-none border-b @max-[28rem]/replay-sidebar:flex"
+                />
+                <ScrollableShadows
+                    direction="horizontal"
+                    styledScrollbars
+                    className="!h-auto min-w-0"
+                    contentClassName="min-w-max"
+                >
+                    <SettingsBar
+                        border="bottom"
+                        className="w-max min-w-full !overflow-visible justify-end @max-[28rem]/replay-sidebar:justify-start"
+                    >
+                        {mode !== SessionRecordingPlayerMode.Sharing && <EventsFilterSettingsButton />}
+                        <ConsoleFilterSettingsButton />
+                        <NetworkFilterSettingsButton />
+                        {featureFlags[FEATURE_FLAGS.SESSION_REPLAY_BACKEND_LOGS] &&
+                            mode !== SessionRecordingPlayerMode.Sharing && <LogsFilterSettingsButton />}
+                        {mode !== SessionRecordingPlayerMode.Sharing && <CommentsFilterSettingsButton />}
+                        {(window.IMPERSONATED_SESSION || featureFlags[FEATURE_FLAGS.SESSION_REPLAY_DOCTOR]) &&
+                            mode !== SessionRecordingPlayerMode.Sharing && (
+                                <SettingsToggle
+                                    data-attr="player-inspector-doctor-toggle"
+                                    title="Doctor events help diagnose the health of a recording, and are used by PostHog support"
+                                    icon={<IconStethoscope />}
+                                    label="Doctor"
+                                    active={!!miniFiltersByKey['doctor']?.enabled}
+                                    onClick={() => setMiniFilter('doctor', !miniFiltersByKey['doctor']?.enabled)}
+                                />
+                            )}
+                    </SettingsBar>
+                </ScrollableShadows>
+                <LemonButton
+                    data-attr="player-inspector-scroll-filters-right"
+                    icon={<IconChevronRight />}
+                    size="xsmall"
+                    tooltip="Scroll activity filters right"
+                    onClick={(event) => scrollInspectorToolbar(event, 1)}
+                    className="hidden shrink-0 rounded-none border-b @max-[28rem]/replay-sidebar:flex"
+                />
+            </div>
 
             <div className="flex px-2 py-1">
                 <LemonInput

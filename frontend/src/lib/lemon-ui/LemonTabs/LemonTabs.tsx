@@ -1,5 +1,7 @@
 import './LemonTabs.scss'
 
+import { useLayoutEffect } from 'react'
+
 import { IconCheckCircle, IconInfo } from '@posthog/icons'
 
 import { cn } from 'lib/utils/css-classes'
@@ -72,6 +74,64 @@ export function LemonTabs<T extends string | number>({
     const realTabs = tabs.filter(Boolean) as LemonTab<T>[]
     const activeTab = realTabs.find((tab) => tab.key === activeKey)
 
+    useLayoutEffect(() => {
+        const bar = containerRef.current
+        const selectedTab = selectionRef.current
+
+        if (!bar || !selectedTab) {
+            return
+        }
+
+        const selectedStart = selectedTab.offsetLeft
+        const selectedEnd = selectedStart + selectedTab.offsetWidth
+        const visibleStart = bar.scrollLeft
+        const visibleEnd = visibleStart + bar.clientWidth
+
+        if (selectedStart < visibleStart) {
+            bar.scrollTo({ left: selectedStart, behavior: 'smooth' })
+        } else if (selectedEnd > visibleEnd) {
+            bar.scrollTo({ left: selectedEnd - bar.clientWidth, behavior: 'smooth' })
+        }
+    }, [activeKey, containerRef, selectionRef])
+
+    const activateTabFromKeyboard = (
+        event: React.KeyboardEvent<HTMLLIElement>,
+        tab: LemonTab<T>,
+        tabIndex: number
+    ): void => {
+        const enabledTabs = realTabs.filter((candidate) => !candidate.disabledReason)
+        const enabledTabIndex = enabledTabs.findIndex((candidate) => candidate.key === tab.key)
+        let nextTab: LemonTab<T> | undefined
+
+        if (event.key === 'ArrowRight') {
+            nextTab = enabledTabs[(enabledTabIndex + 1) % enabledTabs.length]
+        } else if (event.key === 'ArrowLeft') {
+            nextTab = enabledTabs[(enabledTabIndex - 1 + enabledTabs.length) % enabledTabs.length]
+        } else if (event.key === 'Home') {
+            nextTab = enabledTabs[0]
+        } else if (event.key === 'End') {
+            nextTab = enabledTabs.at(-1)
+        } else if (event.key === 'Enter' || event.key === ' ') {
+            nextTab = tab
+        }
+
+        if (!nextTab) {
+            return
+        }
+
+        event.preventDefault()
+        const nextTabIndex = realTabs.findIndex((candidate) => candidate.key === nextTab.key)
+        const tabElements = event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')
+        const nextTabElement = tabElements?.[nextTabIndex]
+
+        nextTabElement?.focus()
+        if (onChange) {
+            onChange(nextTab.key)
+        } else if (nextTabIndex === tabIndex) {
+            nextTabElement?.querySelector<HTMLAnchorElement>('a')?.click()
+        }
+    }
+
     return (
         <div
             className={cn(
@@ -97,7 +157,7 @@ export function LemonTabs<T extends string | number>({
                         'pr-4': rightSlot,
                     })}
                 >
-                    {realTabs.map((tab) => {
+                    {realTabs.map((tab, tabIndex) => {
                         const disabled = !!tab.disabledReason
                         const content = (
                             <div className="relative flex items-center gap-1" data-attr={tab['data-attr']}>
@@ -129,15 +189,9 @@ export function LemonTabs<T extends string | number>({
                                     role="tab"
                                     aria-selected={tab.key === activeKey}
                                     aria-disabled={disabled || undefined}
-                                    tabIndex={disabled ? -1 : 0}
+                                    tabIndex={disabled || tab.key !== activeKey ? -1 : 0}
                                     onKeyDown={
-                                        onChange && !disabled
-                                            ? (e) => {
-                                                  if (e.key === 'Enter') {
-                                                      onChange(tab.key)
-                                                  }
-                                              }
-                                            : undefined
+                                        disabled ? undefined : (event) => activateTabFromKeyboard(event, tab, tabIndex)
                                     }
                                     ref={tab.key === activeKey ? selectionRef : undefined}
                                 >

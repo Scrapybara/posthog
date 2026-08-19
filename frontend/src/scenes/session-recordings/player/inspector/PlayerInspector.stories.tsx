@@ -111,7 +111,7 @@ const meta: Meta = {
         }, [sessionPlayerMetaData]) // oxlint-disable-line react-hooks/exhaustive-deps
 
         return (
-            <div className="flex flex-col gap-2 min-w-96 min-h-120">
+            <div className="@container/replay-sidebar flex min-w-0 flex-col gap-2 min-h-120">
                 <BindLogic
                     logic={sessionRecordingPlayerLogic}
                     props={{
@@ -157,6 +157,28 @@ export const WithLogsFilterUpsell: Story = {
                 return () => setFeatureFlags([])
             }, [])
             return <Story />
+        },
+    ],
+}
+
+export const NarrowWithLogsFilter: Story = {
+    ...WithLogsFilter,
+    parameters: {
+        ...WithLogsFilter.parameters,
+        layout: 'fullscreen',
+        testOptions: { viewport: { width: 320, height: 720 } },
+    },
+    decorators: [
+        (Story) => {
+            useEffect(() => {
+                setFeatureFlags([FEATURE_FLAGS.SESSION_REPLAY_BACKEND_LOGS])
+                return () => setFeatureFlags([])
+            }, [])
+            return (
+                <div className="w-80 h-screen border">
+                    <Story />
+                </div>
+            )
         },
     ],
 }

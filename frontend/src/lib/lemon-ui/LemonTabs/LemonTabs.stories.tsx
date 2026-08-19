@@ -67,3 +67,22 @@ export const RightSlot: Story = {
         ),
     },
 }
+
+export const Overflow: Story = {
+    args: {
+        tabs: [
+            { key: 'overview', label: 'Overview' },
+            { key: 'inspector', label: 'Inspector' },
+            { key: 'network-waterfall', label: 'Network waterfall' },
+            { key: 'observations', label: 'Observations' },
+            { key: 'sessions', label: 'Sessions' },
+            { key: 'linked-issues', label: 'Linked issues' },
+        ],
+        className: 'w-80',
+    },
+    render: (props) => {
+        const [activeKey, setActiveKey] = useState('linked-issues')
+
+        return <LemonTabsComponent {...props} activeKey={activeKey} onChange={setActiveKey} />
+    },
+}

@@ -2,11 +2,12 @@ import clsx from 'clsx'
 import { useActions, useValues } from 'kea'
 import { useRef } from 'react'
 
-import { IconBottomPanel, IconSidePanel, IconX } from '@posthog/icons'
-import { LemonButton, LemonTabs } from '@posthog/lemon-ui'
+import { IconBottomPanel, IconChevronDown, IconSidePanel, IconX } from '@posthog/icons'
+import { LemonButton, LemonMenu, LemonTabs } from '@posthog/lemon-ui'
 
 import { Resizer } from 'lib/components/Resizer/Resizer'
 import { ResizerLogicProps, resizerLogic } from 'lib/components/Resizer/resizerLogic'
+import { ScrollableShadows } from 'lib/components/ScrollableShadows/ScrollableShadows'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { integrationsLogic } from 'lib/integrations/integrationsLogic'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
@@ -93,22 +94,48 @@ export function PlayerSidebar(): JSX.Element {
                 offset="0.25rem"
             />
             {sidebarOpen && (
-                <div className="SessionRecordingPlayer__sidebar__content">
+                <div className="SessionRecordingPlayer__sidebar__content @container/replay-sidebar">
                     <div className="flex bg-surface-primary pt-[1px]">
-                        <div className="w-2.5 border-b shrink-0" />
-                        <LemonTabs
-                            activeKey={activeTab}
-                            onChange={(tabId) => setTab(tabId)}
-                            tabs={sidebarTabs.map((tabId) => ({
-                                key: tabId,
-                                label: capitalizeFirstLetter(splitKebabCase(tabId)),
-                            }))}
-                            // The root scrolls, not the bar, so the scrollbar cannot collide with the bar's bottom-anchored underline
-                            barClassName="!mb-0 w-max min-w-full !overflow-x-visible"
-                            size="small"
-                            className="overflow-x-auto overflow-y-clip"
-                        />
-                        <div className="flex flex-1 border-b shrink-0" />
+                        <div className="hidden min-w-0 flex-1 @min-[47rem]/replay-sidebar:flex">
+                            <div className="w-2.5 border-b shrink-0" />
+                            <ScrollableShadows
+                                direction="horizontal"
+                                styledScrollbars
+                                className="!h-auto min-w-0 flex-1"
+                                contentClassName="min-w-max"
+                            >
+                                <LemonTabs
+                                    activeKey={activeTab}
+                                    onChange={(tabId) => setTab(tabId)}
+                                    tabs={sidebarTabs.map((tabId) => ({
+                                        key: tabId,
+                                        label: capitalizeFirstLetter(splitKebabCase(tabId)),
+                                    }))}
+                                    barClassName="!mb-0 !overflow-x-visible"
+                                    size="small"
+                                    className="min-w-full w-max"
+                                />
+                            </ScrollableShadows>
+                        </div>
+                        <div className="flex min-w-0 flex-1 items-center border-b p-1 @min-[47rem]/replay-sidebar:hidden">
+                            <LemonMenu
+                                items={sidebarTabs.map((tabId) => ({
+                                    label: capitalizeFirstLetter(splitKebabCase(tabId)),
+                                    active: tabId === activeTab,
+                                    onClick: () => setTab(tabId),
+                                }))}
+                            >
+                                <LemonButton
+                                    data-attr="player-sidebar-navigation-menu"
+                                    fullWidth
+                                    size="small"
+                                    sideIcon={<IconChevronDown />}
+                                    className="min-w-0"
+                                >
+                                    {capitalizeFirstLetter(splitKebabCase(activeTab))}
+                                </LemonButton>
+                            </LemonMenu>
+                        </div>
                         <div className="flex gap-1 border-b end">
                             <LemonButton
                                 size="small"

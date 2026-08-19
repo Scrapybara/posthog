@@ -4,6 +4,7 @@ import { router } from 'kea-router'
 import { AddWidgetModal } from '@posthog/products-dashboards/frontend/widgets/AddWidgetModal'
 
 import { ButtonTileCardModal } from 'lib/components/Cards/ButtonTileCard/ButtonTileCardModal'
+import { parseDashboardSectionHeader } from 'lib/components/Cards/TextCard/sectionHeader'
 import { TextCardModal } from 'lib/components/Cards/TextCard/TextCardModal'
 import { SharingModal } from 'lib/components/Sharing/SharingModal'
 import { TerraformExportModal } from 'lib/components/TerraformExporter/TerraformExportModal'
@@ -20,6 +21,7 @@ import { dashboardLogic } from './dashboardLogic'
 import { DashboardTemplateEditor } from './DashboardTemplateEditor'
 import { DeleteDashboardModal } from './DeleteDashboardModal'
 import { DuplicateDashboardModal } from './DuplicateDashboardModal'
+import { SectionHeaderModal } from './SectionHeaderModal'
 
 export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryBasedInsightModel> }): JSX.Element {
     const {
@@ -39,7 +41,13 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
     const { setTerraformModalOpen, setAddWidgetModalOpen, addWidgetTiles } = useActions(dashboardLogic)
     const { updateDashboardSuccess } = useActions(dashboardsModel)
     const { push } = useActions(router)
+    const { searchParams } = useValues(router)
     const { user } = useValues(userLogic)
+    const selectedTextTile = textTileId === 'new' ? null : dashboard.tiles?.find((tile) => tile.id === textTileId)
+    const isSectionHeaderModal =
+        searchParams.sectionHeader === 'true' ||
+        searchParams.sectionHeader === true ||
+        !!parseDashboardSectionHeader(selectedTextTile?.text?.body || '')
 
     return (
         <>
@@ -59,12 +67,21 @@ export function DashboardModals({ dashboard }: { dashboard: DashboardType<QueryB
             />
             {canEditDashboard && (
                 <>
-                    <TextCardModal
-                        isOpen={showTextTileModal}
-                        onClose={() => push(urls.dashboard(dashboard.id))}
-                        dashboard={dashboard}
-                        textTileId={textTileId}
-                    />
+                    {isSectionHeaderModal ? (
+                        <SectionHeaderModal
+                            isOpen={showTextTileModal}
+                            onClose={() => push(urls.dashboard(dashboard.id))}
+                            dashboard={dashboard}
+                            textTileId={textTileId}
+                        />
+                    ) : (
+                        <TextCardModal
+                            isOpen={showTextTileModal}
+                            onClose={() => push(urls.dashboard(dashboard.id))}
+                            dashboard={dashboard}
+                            textTileId={textTileId}
+                        />
+                    )}
                     <ButtonTileCardModal
                         isOpen={showButtonTileModal}
                         onClose={() => push(urls.dashboard(dashboard.id))}

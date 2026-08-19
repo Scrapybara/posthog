@@ -32,7 +32,7 @@ export function getAddTileMenuItems({
     dashboardId: number
     dashboardWidgetsEnabled: boolean
     onAddInsight: () => void
-    push: (url: string) => void
+    push: (url: string, searchParams?: Record<string, unknown>) => void
     setAddWidgetModalOpen: (open: boolean) => void
     onBeforeSelect?: () => void
 }): LemonMenuItems {
@@ -48,6 +48,11 @@ export function getAddTileMenuItems({
             label: 'Charts',
             onClick: withBeforeSelect(onAddInsight),
             'data-attr': 'dashboard-add-insight',
+        },
+        {
+            label: 'Section header',
+            onClick: withBeforeSelect(() => push(urls.dashboardTextTile(dashboardId, 'new'), { sectionHeader: true })),
+            'data-attr': 'dashboard-add-section-header',
         },
         {
             label: 'Add text',

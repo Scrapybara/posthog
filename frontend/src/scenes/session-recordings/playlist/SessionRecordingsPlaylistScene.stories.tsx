@@ -4,6 +4,7 @@ import { combineUrl, router } from 'kea-router'
 import { HttpResponse } from 'msw'
 import { useEffect } from 'react'
 
+import { FEATURE_FLAGS } from 'lib/constants'
 import { App } from 'scenes/App'
 import recordingEventsJson from 'scenes/session-recordings/__mocks__/recording_events_query'
 import { recordingMetaJson } from 'scenes/session-recordings/__mocks__/recording_meta'
@@ -11,7 +12,8 @@ import { snapshotsAsJSONLines } from 'scenes/session-recordings/__mocks__/record
 import { playerSettingsLogic } from 'scenes/session-recordings/player/playerSettingsLogic'
 import { urls } from 'scenes/urls'
 
-import { mswDecorator } from '~/mocks/browser'
+import { mswDecorator, setFeatureFlags } from '~/mocks/browser'
+import { mockIntegration } from '~/test/mocks'
 import { PropertyFilterType, PropertyOperator, SessionRecordingPlaylistType } from '~/types'
 
 import { recordings } from '../__mocks__/recordings'
@@ -225,6 +227,46 @@ export const PlaylistNarrow: Story = {
         },
     },
     tags: ['test-skip'],
+}
+
+export const PlaylistAllSidebarTabs: Story = {
+    ...PlaylistWide,
+    parameters: {
+        ...PlaylistWide.parameters,
+        featureFlags: [FEATURE_FLAGS.REPLAY_PLAYER_PERSON_SESSIONS_TAB],
+    },
+    decorators: [
+        mswDecorator({
+            get: {
+                '/api/environments/:team_id/integrations': {
+                    results: [{ ...mockIntegration, id: 1, kind: 'github', display_name: 'GitHub' }],
+                },
+                '/api/environments/:team_id/session_recordings/:id': () => [
+                    200,
+                    {
+                        ...recordingMetaJson,
+                        id: recordings[0].id,
+                        external_references: [
+                            {
+                                id: 'storybook-reference',
+                                integration: { id: 1, kind: 'github', display_name: 'GitHub' },
+                                external_url: 'https://example.com/issues/123',
+                                title: 'Example replay issue',
+                                issue_id: '123',
+                            },
+                        ],
+                    },
+                ],
+            },
+        }),
+        (Story) => {
+            useEffect(() => {
+                setFeatureFlags([FEATURE_FLAGS.REPLAY_PLAYER_PERSON_SESSIONS_TAB])
+                return () => setFeatureFlags([])
+            }, [])
+            return <Story />
+        },
+    ],
 }
 
 const PlaylistCollapsedInner = (): JSX.Element => {

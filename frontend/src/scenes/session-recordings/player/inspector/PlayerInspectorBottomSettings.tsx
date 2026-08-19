@@ -2,14 +2,17 @@ import './PlayerInspectorList.scss'
 
 import { useActions, useValues } from 'kea'
 
-import { BaseIcon, IconCheck } from '@posthog/icons'
+import { BaseIcon, IconCheck, IconChevronLeft, IconChevronRight } from '@posthog/icons'
+import { LemonButton } from '@posthog/lemon-ui'
 
 import { SettingsBar, SettingsMenu, SettingsToggle } from 'lib/components/PanelSettings/PanelSettings'
+import { ScrollableShadows } from 'lib/components/ScrollableShadows/ScrollableShadows'
 import { userPreferencesLogic } from 'lib/logic/userPreferencesLogic'
 import { miniFiltersLogic } from 'scenes/session-recordings/player/inspector/miniFiltersLogic'
 
 import { sessionRecordingPlayerLogic } from '../sessionRecordingPlayerLogic'
 import { playerInspectorLogic } from './playerInspectorLogic'
+import { scrollInspectorToolbar } from './scrollInspectorToolbar'
 
 function HideProperties(): JSX.Element {
     const { logicProps } = useValues(sessionRecordingPlayerLogic)
@@ -143,12 +146,37 @@ export function PlayerInspectorBottomSettings(): JSX.Element {
     const { collapseInspectorItems } = useValues(playerInspectorLogic(logicProps))
 
     return (
-        <SettingsBar border="top">
-            <SyncScrolling />
-            <ShowOnlyMatching />
-            {collapseInspectorItems ? <GroupRepeatedItems /> : null}
-            <ShowLineTooltips />
-            <HideProperties />
-        </SettingsBar>
+        <div className="flex min-w-0 shrink-0">
+            <LemonButton
+                data-attr="player-inspector-scroll-settings-left"
+                icon={<IconChevronLeft />}
+                size="xsmall"
+                tooltip="Scroll inspector settings left"
+                onClick={(event) => scrollInspectorToolbar(event, -1)}
+                className="hidden shrink-0 rounded-none border-t @max-[28rem]/replay-sidebar:flex"
+            />
+            <ScrollableShadows
+                direction="horizontal"
+                styledScrollbars
+                className="!h-auto min-w-0"
+                contentClassName="min-w-max"
+            >
+                <SettingsBar border="top" className="w-max min-w-full !overflow-visible">
+                    <SyncScrolling />
+                    <ShowOnlyMatching />
+                    {collapseInspectorItems ? <GroupRepeatedItems /> : null}
+                    <ShowLineTooltips />
+                    <HideProperties />
+                </SettingsBar>
+            </ScrollableShadows>
+            <LemonButton
+                data-attr="player-inspector-scroll-settings-right"
+                icon={<IconChevronRight />}
+                size="xsmall"
+                tooltip="Scroll inspector settings right"
+                onClick={(event) => scrollInspectorToolbar(event, 1)}
+                className="hidden shrink-0 rounded-none border-t @max-[28rem]/replay-sidebar:flex"
+            />
+        </div>
     )
 }

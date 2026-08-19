@@ -561,6 +561,282 @@ class TestTrendsQueryRunner(ClickhouseTestMixin, APIBaseTest):
         )
         return TrendsQueryRunner(team=self.team, query=query).calculate()
 
+    def _create_daily_pageviews(
+        self,
+        counts: dict[str, int],
+        *,
+        distinct_id: str = "daily-user",
+        browser: str = "Chrome",
+    ) -> None:
+        self._create_events(
+            [
+                SeriesFixture(
+                    distinct_id=distinct_id,
+                    events=[
+                        Series(
+                            event="$pageview",
+                            timestamps=[f"{day}T12:00:00Z" for day, count in counts.items() for _ in range(count)],
+                        )
+                    ],
+                    properties={"$browser": browser},
+                )
+            ]
+        )
+
+    def _run_weekday_query(
+        self,
+        date_from: str,
+        date_to: str | None,
+        *,
+        compare: bool = False,
+        breakdown: BreakdownFilter | None = None,
+    ) -> TrendsQueryResponse:
+        return TrendsQueryRunner(
+            team=self.team,
+            query=TrendsQuery(
+                series=[EventsNode(event="$pageview")],
+                dateRange=DateRange(date_from=date_from, date_to=date_to, daysOfWeek=[1, 2, 3, 4, 5]),
+                interval=IntervalType.DAY,
+                compareFilter=CompareFilter(compare=True) if compare else None,
+                breakdownFilter=breakdown,
+            ),
+        ).calculate()
+
+    def test_legacy_hide_weekends_is_ignored(self) -> None:
+        self._create_daily_pageviews(
+            {
+                "2024-06-07": 1,
+                "2024-06-08": 2,
+                "2024-06-09": 2,
+                "2024-06-10": 3,
+                "2024-06-11": 3,
+                "2024-06-12": 3,
+                "2024-06-13": 12,
+            }
+        )
+
+        responses = [
+            self._run_trends_query(
+                "2024-06-07",
+                "2024-06-13",
+                IntervalType.DAY,
+                [EventsNode(event="$pageview")],
+                trends_filters=TrendsFilter(hideWeekends=hide_weekends),
+            )
+            for hide_weekends in (False, True)
+        ]
+
+        visible = responses[0].results[0]
+        legacy_hidden = responses[1].results[0]
+        assert legacy_hidden["days"] == visible["days"]
+        assert legacy_hidden["labels"] == visible["labels"]
+        assert legacy_hidden["data"] == visible["data"]
+        assert legacy_hidden["count"] == visible["count"]
+        assert legacy_hidden["days"] == [
+            "2024-06-07",
+            "2024-06-08",
+            "2024-06-09",
+            "2024-06-10",
+            "2024-06-11",
+            "2024-06-12",
+            "2024-06-13",
+        ]
+        assert legacy_hidden["data"] == [1, 2, 2, 3, 3, 3, 12]
+
+    @parameterized.expand(
+        [
+            ("monday", "2024-06-17", WeekStartDay.SUNDAY),
+            ("tuesday", "2024-06-18", WeekStartDay.MONDAY),
+            ("wednesday", "2024-06-19", WeekStartDay.SUNDAY),
+            ("thursday", "2024-06-20", WeekStartDay.MONDAY),
+            ("friday", "2024-06-21", WeekStartDay.SUNDAY),
+            ("saturday", "2024-06-22", WeekStartDay.MONDAY),
+            ("sunday", "2024-06-23", WeekStartDay.SUNDAY),
+        ]
+    )
+    def test_weekday_filter_preserves_aligned_values_for_every_range_end(
+        self, _name: str, date_to: str, week_start_day: WeekStartDay
+    ) -> None:
+        counts = {
+            day.strftime("%Y-%m-%d"): day.day % 5 + 1
+            for day in (datetime(2024, 6, 1) + timedelta(days=offset) for offset in range(23))
+        }
+        counts["2024-06-17"] = 3
+        counts["2024-06-18"] = 3
+        counts["2024-06-19"] = 3
+        counts["2024-06-20"] = 12
+        self._create_daily_pageviews(counts)
+        self.team.week_start_day = week_start_day
+        self.team.save(update_fields=["week_start_day"])
+
+        unfiltered = self._run_trends_query(
+            "2024-06-01", date_to, IntervalType.DAY, [EventsNode(event="$pageview")]
+        ).results[0]
+        weekdays = self._run_weekday_query("2024-06-01", date_to).results[0]
+        unfiltered_by_day = dict(zip(unfiltered["days"], unfiltered["data"]))
+        expected_days = [day for day in unfiltered["days"] if datetime.fromisoformat(day).isoweekday() <= 5]
+
+        assert weekdays["days"] == expected_days
+        assert weekdays["data"] == [unfiltered_by_day[day] for day in expected_days]
+        assert len(weekdays["days"]) == len(weekdays["labels"]) == len(weekdays["data"])
+        assert all(datetime.fromisoformat(day).isoweekday() <= 5 for day in weekdays["days"])
+
+    @parameterized.expand(
+        [
+            (
+                "us_pacific_dst_start",
+                "US/Pacific",
+                "2024-03-08",
+                "2024-03-11",
+                [
+                    "2024-03-09T07:30:00Z",
+                    "2024-03-10T07:30:00Z",
+                    "2024-03-11T06:30:00Z",
+                    "2024-03-11T07:30:00Z",
+                ],
+                ["2024-03-08", "2024-03-11"],
+                [1, 1],
+            ),
+            (
+                "india_half_hour_offset",
+                "Asia/Kolkata",
+                "2024-06-07",
+                "2024-06-10",
+                [
+                    "2024-06-07T18:00:00Z",
+                    "2024-06-07T18:31:00Z",
+                    "2024-06-09T18:29:00Z",
+                    "2024-06-09T18:31:00Z",
+                ],
+                ["2024-06-07", "2024-06-10"],
+                [1, 1],
+            ),
+        ]
+    )
+    def test_weekday_filter_uses_project_timezone_across_offsets_and_dst(
+        self,
+        _name: str,
+        timezone: str,
+        date_from: str,
+        date_to: str,
+        timestamps: list[str],
+        expected_days: list[str],
+        expected_data: list[int],
+    ) -> None:
+        self.team.timezone = timezone
+        self.team.save(update_fields=["timezone"])
+        self._create_events(
+            [
+                SeriesFixture(
+                    distinct_id="timezone-user",
+                    events=[Series(event="$pageview", timestamps=timestamps)],
+                    properties={},
+                )
+            ]
+        )
+
+        result = self._run_weekday_query(date_from, date_to).results[0]
+
+        assert result["days"] == expected_days
+        assert result["data"] == expected_data
+
+    def test_weekday_filter_preserves_comparison_breakdown_alignment(self) -> None:
+        self._create_events(
+            [
+                SeriesFixture(
+                    distinct_id="chrome-user",
+                    events=[
+                        Series(
+                            event="$pageview",
+                            timestamps=[
+                                "2024-06-03T12:00:00Z",
+                                "2024-06-04T12:00:00Z",
+                                "2024-06-08T12:00:00Z",
+                                "2024-06-10T12:00:00Z",
+                                "2024-06-10T12:00:00Z",
+                                "2024-06-10T12:00:00Z",
+                                "2024-06-11T12:00:00Z",
+                                "2024-06-11T12:00:00Z",
+                                "2024-06-11T12:00:00Z",
+                                "2024-06-13T12:00:00Z",
+                            ],
+                        )
+                    ],
+                    properties={"$browser": "Chrome"},
+                ),
+                SeriesFixture(
+                    distinct_id="firefox-user",
+                    events=[
+                        Series(
+                            event="$pageview",
+                            timestamps=[
+                                "2024-06-05T12:00:00Z",
+                                "2024-06-09T12:00:00Z",
+                                "2024-06-10T12:00:00Z",
+                                "2024-06-12T12:00:00Z",
+                                "2024-06-12T12:00:00Z",
+                                "2024-06-14T12:00:00Z",
+                            ],
+                        )
+                    ],
+                    properties={"$browser": "Firefox"},
+                ),
+            ]
+        )
+        breakdown = BreakdownFilter(breakdown_type=BreakdownType.EVENT, breakdown="$browser")
+        unfiltered = self._run_trends_query(
+            "2024-06-10",
+            "2024-06-16",
+            IntervalType.DAY,
+            [EventsNode(event="$pageview")],
+            breakdown=breakdown,
+            compare_filters=CompareFilter(compare=True),
+        )
+        weekdays = self._run_weekday_query("2024-06-10", "2024-06-16", compare=True, breakdown=breakdown)
+        unfiltered_by_series = {
+            (result["compare_label"], result["breakdown_value"]): result for result in unfiltered.results
+        }
+
+        assert len(weekdays.results) == 4
+        for result in weekdays.results:
+            source = unfiltered_by_series[(result["compare_label"], result["breakdown_value"])]
+            source_by_day = dict(zip(source["days"], source["data"]))
+            assert result["data"] == [source_by_day[day] for day in result["days"]]
+            assert len(result["days"]) == len(result["labels"]) == len(result["data"])
+            assert all(datetime.fromisoformat(day).isoweekday() <= 5 for day in result["days"])
+
+        current_chrome = next(
+            result
+            for result in weekdays.results
+            if result["compare_label"] == "current" and result["breakdown_value"] == "Chrome"
+        )
+        assert current_chrome["days"] == [
+            "2024-06-10",
+            "2024-06-11",
+            "2024-06-12",
+            "2024-06-13",
+            "2024-06-14",
+        ]
+        assert current_chrome["data"] == [3, 3, 0, 1, 0]
+
+    @freeze_time("2024-06-20T15:00:00Z")
+    def test_weekday_filter_preserves_incomplete_current_period(self) -> None:
+        self._create_daily_pageviews(
+            {
+                "2024-06-15": 2,
+                "2024-06-16": 2,
+                "2024-06-17": 3,
+                "2024-06-18": 3,
+                "2024-06-19": 3,
+                "2024-06-20": 12,
+            }
+        )
+
+        result = self._run_weekday_query("2024-06-15", None).results[0]
+
+        assert result["days"] == ["2024-06-17", "2024-06-18", "2024-06-19", "2024-06-20"]
+        assert result["data"] == [3, 3, 3, 12]
+
     def test_days_of_week_filters_events_and_day_buckets(self):
         # 2020-01-06 is a Monday
         self._create_events(

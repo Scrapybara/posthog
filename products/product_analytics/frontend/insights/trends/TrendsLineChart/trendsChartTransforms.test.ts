@@ -426,6 +426,60 @@ describe('trendsChartTransforms', () => {
             expect(config.xAxis?.tickFormatter).toBeUndefined()
         })
 
+        it.each([
+            {
+                name: 'all days',
+                days: [
+                    '2024-06-07',
+                    '2024-06-08',
+                    '2024-06-09',
+                    '2024-06-10',
+                    '2024-06-11',
+                    '2024-06-12',
+                    '2024-06-13',
+                    '2024-06-14',
+                    '2024-06-15',
+                    '2024-06-16',
+                    '2024-06-17',
+                    '2024-06-18',
+                    '2024-06-19',
+                    '2024-06-20',
+                ],
+                data: [1, 5, 6, 3, 3, 0, 2, 1, 4, 4, 3, 3, 3, 12],
+            },
+            {
+                name: 'weekdays only',
+                days: [
+                    '2024-06-07',
+                    '2024-06-10',
+                    '2024-06-11',
+                    '2024-06-12',
+                    '2024-06-13',
+                    '2024-06-14',
+                    '2024-06-17',
+                    '2024-06-18',
+                    '2024-06-19',
+                    '2024-06-20',
+                ],
+                data: [1, 3, 3, 0, 2, 1, 3, 3, 3, 12],
+            },
+        ])('keeps $name response buckets aligned through the chart transform', ({ days, data }) => {
+            const results = [makeResult({ data, days })]
+            const series = buildTrendsSeries(results, { getColor: () => RED })
+            const config = buildTrendsLineTimeSeriesConfig({
+                ...baseOpts,
+                results,
+                interval: 'day',
+                timezone: 'UTC',
+                allDays: days,
+            })
+
+            expect(series[0].data).toEqual(data)
+            expect(config.xAxis?.allDays).toEqual(days)
+            expect(series[0].data.slice(-4)).toEqual([3, 3, 3, 12])
+            expect(series[0].data[days.indexOf('2024-06-12')]).toBe(0)
+        })
+
         describe('valueLabels', () => {
             it('passes through valueLabels: false unchanged', () => {
                 const config = buildTrendsLineTimeSeriesConfig({

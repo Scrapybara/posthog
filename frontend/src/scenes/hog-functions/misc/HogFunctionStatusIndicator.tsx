@@ -1,16 +1,23 @@
-import { LemonDropdown, LemonTag, LemonTagProps } from '@posthog/lemon-ui'
+import { IconCheckCircle, IconPause, IconWarning, IconXCircle } from '@posthog/icons'
+import { LemonDropdown, LemonTag, type LemonTagProps } from '@posthog/lemon-ui'
 
 import { HogFunctionType, HogWatcherState } from '~/types'
 
-type DisplayOptions = { tagType: LemonTagProps['type']; display: string; description: JSX.Element }
+type DisplayOptions = {
+    tagType: LemonTagProps['type']
+    display: string
+    description: JSX.Element
+    icon: JSX.Element
+}
 const displayMap: Record<HogWatcherState, DisplayOptions> = {
     [HogWatcherState.healthy]: {
         tagType: 'success',
         display: 'Active',
         description: <>The function is running as expected.</>,
+        icon: <IconCheckCircle className="text-success" aria-hidden="true" />,
     },
     [HogWatcherState.overflowed]: {
-        tagType: 'caution',
+        tagType: 'warning',
         display: 'Degraded',
         description: (
             <>
@@ -18,6 +25,7 @@ const displayMap: Record<HogWatcherState, DisplayOptions> = {
                 and may be processing slower than usual.
             </>
         ),
+        icon: <IconWarning className="text-warning" aria-hidden="true" />,
     },
     [HogWatcherState.disabled]: {
         tagType: 'danger',
@@ -28,9 +36,10 @@ const displayMap: Record<HogWatcherState, DisplayOptions> = {
                 config. Updating your function will re-enable it.
             </>
         ),
+        icon: <IconXCircle className="text-danger" aria-hidden="true" />,
     },
     [HogWatcherState.forcefully_degraded]: {
-        tagType: 'caution',
+        tagType: 'warning',
         display: 'Degraded',
         description: (
             <>
@@ -38,11 +47,13 @@ const displayMap: Record<HogWatcherState, DisplayOptions> = {
                 separate processing queue and may experience delays or increased failures.
             </>
         ),
+        icon: <IconWarning className="text-warning" aria-hidden="true" />,
     },
     [HogWatcherState.forcefully_disabled]: {
         tagType: 'danger',
         display: 'Disabled',
         description: <>The function has been forcefully disabled by a PostHog admin. Please contact support.</>,
+        icon: <IconXCircle className="text-danger" aria-hidden="true" />,
     },
 }
 
@@ -55,12 +66,14 @@ const DEFAULT_DISPLAY: DisplayOptions = {
             invocations have been performed.
         </>
     ),
+    icon: <IconCheckCircle className="text-success" aria-hidden="true" />,
 }
 
 const DISABLED_MANUALLY_DISPLAY: DisplayOptions = {
     tagType: 'default',
     display: 'Paused',
     description: <>This function is paused</>,
+    icon: <IconPause className="text-secondary" aria-hidden="true" />,
 }
 
 export type HogFunctionStatusIndicatorProps = {
@@ -74,7 +87,7 @@ export function HogFunctionStatusIndicator({ hogFunction }: HogFunctionStatusInd
         return null
     }
 
-    const { tagType, display, description } = !hogFunction.enabled
+    const { tagType, display, description, icon } = !hogFunction.enabled
         ? DISABLED_MANUALLY_DISPLAY
         : hogFunction.status?.state
           ? displayMap[hogFunction.status.state]
@@ -86,7 +99,10 @@ export function HogFunctionStatusIndicator({ hogFunction }: HogFunctionStatusInd
                 <>
                     <div className="p-2 deprecated-space-y-2 max-w-120">
                         <h2 className="flex gap-2 items-center m-0">
-                            Function status - <LemonTag type={tagType}>{display}</LemonTag>
+                            Function status -
+                            <LemonTag type={tagType} icon={icon} className="!text-primary">
+                                {display}
+                            </LemonTag>
                         </h2>
 
                         <p>{description}</p>
@@ -94,7 +110,15 @@ export function HogFunctionStatusIndicator({ hogFunction }: HogFunctionStatusInd
                 </>
             }
         >
-            <LemonTag type={tagType}>{display}</LemonTag>
+            <LemonTag
+                type={tagType}
+                size="small"
+                icon={icon}
+                className="!text-primary"
+                aria-label={`Status: ${display}`}
+            >
+                {display}
+            </LemonTag>
         </LemonDropdown>
     )
 }

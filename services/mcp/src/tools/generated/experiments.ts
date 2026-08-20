@@ -251,11 +251,11 @@ const experimentCreate = (): ToolBase<typeof ExperimentCreateSchema, WithPostHog
             if (params.parameters !== undefined) {
                 body['parameters'] = params.parameters
             }
-            if (params.exposure_criteria !== undefined) {
-                body['exposure_criteria'] = params.exposure_criteria
-            }
             if (params.stats_config !== undefined) {
                 body['stats_config'] = params.stats_config
+            }
+            if (params.exposure_criteria !== undefined) {
+                body['exposure_criteria'] = params.exposure_criteria
             }
             if (params.allow_unknown_events !== undefined) {
                 body['allow_unknown_events'] = params.allow_unknown_events
@@ -370,6 +370,7 @@ const ExperimentDuplicateSchema = ExperimentsDuplicateCreateParams.omit({ projec
             holdout_id: true,
             parameters: true,
             running_time_calculation: true,
+            stats_config: true,
             excluded_variants: true,
             secondary_metrics: true,
             saved_metrics_ids: true,
@@ -380,7 +381,6 @@ const ExperimentDuplicateSchema = ExperimentsDuplicateCreateParams.omit({ projec
             exposure_criteria: true,
             metrics: true,
             metrics_secondary: true,
-            stats_config: true,
             scheduling_config: true,
             allow_unknown_events: true,
             _create_in_folder: true,
@@ -1208,6 +1208,9 @@ const experimentUpdate = (): ToolBase<typeof ExperimentUpdateSchema, WithPostHog
             if (params.running_time_calculation !== undefined) {
                 body['running_time_calculation'] = params.running_time_calculation
             }
+            if (params.stats_config !== undefined) {
+                body['stats_config'] = params.stats_config
+            }
             if (params.excluded_variants !== undefined) {
                 body['excluded_variants'] = params.excluded_variants
             }
@@ -1225,9 +1228,6 @@ const experimentUpdate = (): ToolBase<typeof ExperimentUpdateSchema, WithPostHog
             }
             if (params.metrics_secondary !== undefined) {
                 body['metrics_secondary'] = params.metrics_secondary
-            }
-            if (params.stats_config !== undefined) {
-                body['stats_config'] = params.stats_config
             }
             if (params.allow_unknown_events !== undefined) {
                 body['allow_unknown_events'] = params.allow_unknown_events

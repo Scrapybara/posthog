@@ -326,7 +326,7 @@ export function ExperimentMetricForm({
                                 <div className="space-y-2">
                                     <p>
                                         Metrics are only counted for users who have been exposed to the experiment. This
-                                        ensures fair comparison between control and test groups.
+                                        ensures a fair comparison between baseline and comparison groups.
                                     </p>
                                     <p>
                                         {exposureCriteria

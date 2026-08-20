@@ -32,6 +32,7 @@ import { visionScannersCreate } from 'products/replay_vision/frontend/generated/
 import type { ProductCrossSellProperties, ProductIntentProperties } from '../../../lib/utils/product-intents'
 import type { ExperimentMetricUnion } from '../../../queries/schema/schema-general'
 import type { FeatureFlagType } from '../../../types'
+import type { ExperimentStatsMethod } from '../../../types'
 import { NEW_EXPERIMENT } from '../constants'
 import { FORM_MODES, experimentLogic } from '../experimentLogic'
 import { experimentSceneLogic } from '../experimentSceneLogic'
@@ -211,12 +212,38 @@ export interface createExperimentLogicActions {
         ensure_experience_continuity?: boolean
         feature_flag_key?: string
         rollout_percentage?: number
+        stats_config?: Experiment['stats_config']
         variants?: MultivariateFlagVariant[]
     }) => {
         config: {
             ensure_experience_continuity?: boolean | undefined
             feature_flag_key?: string | undefined
             rollout_percentage?: number | undefined
+            stats_config?:
+                | {
+                      baseline_variant_key?: string | undefined
+                      bayesian?:
+                          | {
+                                ci_level?: number | undefined
+                            }
+                          | undefined
+                      cuped?:
+                          | {
+                                enabled?: boolean | undefined
+                                lookback_days?: number | undefined
+                            }
+                          | undefined
+                      frequentist?:
+                          | {
+                                alpha?: number | undefined
+                                sequential_testing_enabled?: boolean | undefined
+                                sequential_tuning_parameter?: number | undefined
+                            }
+                          | undefined
+                      method?: ExperimentStatsMethod | undefined
+                      version?: number | undefined
+                  }
+                | undefined
             variants?: MultivariateFlagVariant[] | undefined
         }
     }
@@ -297,6 +324,7 @@ export const createExperimentLogic = kea<createExperimentLogicType>([
             feature_flag_key?: string
             variants?: MultivariateFlagVariant[]
             rollout_percentage?: number
+            stats_config?: Experiment['stats_config']
             ensure_experience_continuity?: boolean
         }) => ({ config }),
         saveExperiment: true,
@@ -337,6 +365,7 @@ export const createExperimentLogic = kea<createExperimentLogicType>([
                         ...(config.feature_flag_key !== undefined && {
                             feature_flag_key: config.feature_flag_key,
                         }),
+                        ...(config.stats_config !== undefined && { stats_config: config.stats_config }),
                         feature_flag_config: {
                             ...currentConfig,
                             filters,

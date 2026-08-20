@@ -9,7 +9,7 @@ import { urls } from 'scenes/urls'
 
 import { NodeKind } from '~/queries/schema/schema-general'
 import { getInsightType, legacyExperimentLogic } from '~/scenes/experiments/legacy'
-import { getExperimentVariants } from '~/scenes/experiments/utils'
+import { getBaselineVariantKey, getExperimentVariants } from '~/scenes/experiments/utils'
 import { ActivityTab, InsightType } from '~/types'
 
 export enum ResultErrorCode {
@@ -37,19 +37,20 @@ function ChecklistItem({
     metric: any
 }): JSX.Element {
     const failureText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant not received',
-        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant not received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the baseline variant not received',
+        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one comparison variant not received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events not received',
     }
 
     const successText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant received',
-        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the baseline variant received',
+        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one comparison variant received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events have been received',
     }
 
     const insightType = getInsightType(metric)
     const hasMissingExposure = errorCode === ResultErrorCode.NO_EXPOSURES
+    const baselineVariantKey = getBaselineVariantKey(experiment)
 
     const requiredEvent =
         insightType === InsightType.TRENDS
@@ -73,8 +74,8 @@ function ChecklistItem({
                     value: hasMissingExposure
                         ? variants.map((variant: any) => variant.key)
                         : errorCode === ResultErrorCode.NO_CONTROL_VARIANT
-                          ? ['control']
-                          : variants.slice(1).map((variant: any) => variant.key),
+                          ? [baselineVariantKey]
+                          : variants.filter(({ key }) => key !== baselineVariantKey).map(({ key }) => key),
                     operator: 'exact',
                     type: 'event',
                 },

@@ -13,7 +13,7 @@ import type { FeatureFlagType } from '~/types'
 import { SelectExistingFeatureFlagModal } from '../../ExperimentForm/SelectExistingFeatureFlagModal'
 import { selectExistingFeatureFlagModalLogic } from '../../ExperimentForm/selectExistingFeatureFlagModalLogic'
 import { VariantsPanelLinkFeatureFlag } from '../../ExperimentForm/VariantsPanelLinkFeatureFlag'
-import { getFlagVariants } from '../../utils'
+import { getBaselineVariantKey, getDefaultBaselineVariantKey, getFlagVariants } from '../../utils'
 import { experimentWizardLogic } from '../experimentWizardLogic'
 
 export function AboutStep(): JSX.Element {
@@ -49,11 +49,16 @@ export function AboutStep(): JSX.Element {
         (isDeparted && !experiment.feature_flag_key?.trim() ? 'Feature flag key is required' : undefined)
 
     const linkExistingFlag = (flag: FeatureFlagType): void => {
+        const variants = getFlagVariants(flag)
         setLinkedFeatureFlag(flag)
         clearFeatureFlagKeyValidation()
         setFeatureFlagConfig({
             feature_flag_key: flag.key,
-            variants: getFlagVariants(flag),
+            variants,
+            stats_config: {
+                ...experiment.stats_config,
+                baseline_variant_key: getDefaultBaselineVariantKey(variants),
+            },
         })
     }
 
@@ -96,6 +101,7 @@ export function AboutStep(): JSX.Element {
                 <VariantsPanelLinkFeatureFlag
                     linkedFeatureFlag={linkedFeatureFlag}
                     setShowFeatureFlagSelector={openSelectExistingFeatureFlagModal}
+                    baselineVariantKey={getBaselineVariantKey(experiment)}
                     onRemove={() => {
                         setLinkedFeatureFlag(null)
                         setExperimentValue('feature_flag_key', '')

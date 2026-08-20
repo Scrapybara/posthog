@@ -46,6 +46,7 @@ type AllowedExperimentFields = Pick<
     | 'parameters'
     | 'running_time_calculation'
     | 'excluded_variants'
+    | 'stats_config'
     | 'primary_metrics_ordered_uuids'
     | 'secondary_metrics_ordered_uuids'
 > & {
@@ -89,6 +90,18 @@ function describeExcludedVariantsChange(before: string[] | undefined, after: str
         parts.push(`re-included variants ${removed.join(', ')} in analysis`)
     }
     return parts.join(' and ')
+}
+
+function describeBaselineVariantChange(
+    before: { baseline_variant_key?: string } | null,
+    after: { baseline_variant_key?: string } | null
+): string | null {
+    if (before?.baseline_variant_key === after?.baseline_variant_key) {
+        return null
+    }
+    return after?.baseline_variant_key
+        ? `changed the baseline variant to ${after.baseline_variant_key}`
+        : 'cleared the baseline variant'
 }
 
 /**
@@ -290,6 +303,14 @@ export const getExperimentChangeDescription = (
             // The change is described by the `parameters` matcher, which the backend keeps
             // mirrored while `parameters` is deprecated — avoid a duplicate line.
             return null
+        })
+        .with({ field: 'stats_config' }, ({ before, after }) => {
+            return (
+                describeBaselineVariantChange(
+                    before as { baseline_variant_key?: string } | null,
+                    after as { baseline_variant_key?: string } | null
+                ) ?? 'updated statistics settings'
+            )
         })
         .otherwise(({ field, action }) => {
             // Fallback for unhandled fields - ensures all activity is visible

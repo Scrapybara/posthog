@@ -44,3 +44,20 @@ export function stripUuidFormat(obj) {
         stripUuidFormat(value)
     }
 }
+
+/**
+ * Orval ignores additionalProperties on objects with named fields. Intersecting
+ * the named object with an open record preserves unknown keys during Zod parsing.
+ */
+export function preserveAdditionalPropertiesForOrval(obj) {
+    if (!obj || typeof obj !== 'object') {
+        return
+    }
+    if (obj.additionalProperties === true && obj.properties) {
+        obj.allOf = [...(obj.allOf ?? []), { type: 'object', additionalProperties: {} }]
+        delete obj.additionalProperties
+    }
+    for (const value of Object.values(obj)) {
+        preserveAdditionalPropertiesForOrval(value)
+    }
+}

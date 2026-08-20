@@ -2488,6 +2488,7 @@ class TestExperimentService(APIBaseTest):
             feature_flag_key="dup-source",
             description="Original desc",
             start_date=timezone.now(),
+            stats_config={"method": "bayesian", "baseline_variant_key": "test"},
         )
 
         dup = service.duplicate_experiment(source)
@@ -2499,6 +2500,8 @@ class TestExperimentService(APIBaseTest):
         assert dup.end_date is None
         assert dup.archived is False
         assert dup.deleted is False
+        assert dup.stats_config is not None
+        assert dup.stats_config["baseline_variant_key"] == "test"
         assert dup.id != source.id
         # Same flag key → reuses the existing flag
         assert dup.feature_flag.id == source.feature_flag.id
@@ -6875,6 +6878,42 @@ class TestExperimentService(APIBaseTest):
                 feature_flag_key="baseline-existing-flag",
                 stats_config={"baseline_variant_key": "test"},
             )
+
+    @parameterized.expand(
+        [
+            ("draft", None, None, True),
+            ("running", "2026-01-01T00:00:00+00:00", None, True),
+            ("paused", "2026-01-01T00:00:00+00:00", None, False),
+            ("completed", "2026-01-01T00:00:00+00:00", "2026-01-08T00:00:00+00:00", False),
+        ]
+    )
+    def test_update_experiment_allows_baseline_change_in_any_lifecycle_state(
+        self, _name: str, start_date: str | None, end_date: str | None, flag_active: bool
+    ) -> None:
+        flag = self._create_flag(
+            key=f"baseline-lifecycle-{_name}",
+            variants=[
+                {"key": "control", "name": "Control", "rollout_percentage": 50},
+                {"key": "test", "name": "Test", "rollout_percentage": 50},
+            ],
+        )
+        experiment = self._service().create_experiment(
+            name=f"Baseline lifecycle {_name}",
+            feature_flag_key=flag.key,
+        )
+        experiment.start_date = datetime.fromisoformat(start_date) if start_date else None
+        experiment.end_date = datetime.fromisoformat(end_date) if end_date else None
+        experiment.save(update_fields=["start_date", "end_date"])
+        flag.active = flag_active
+        flag.save(update_fields=["active"])
+
+        updated = self._service().update_experiment(
+            experiment,
+            {"stats_config": {"baseline_variant_key": "test"}},
+        )
+
+        assert updated.stats_config is not None
+        assert updated.stats_config["baseline_variant_key"] == "test"
 
     def test_update_experiment_revalidates_baseline_when_variants_change(self) -> None:
         self._create_flag(

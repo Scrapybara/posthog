@@ -79,7 +79,7 @@ export function TableHeader({
                     ) : (
                         <span className="inline-flex items-center gap-1">
                             Win %
-                            <Tooltip title="Probability of outperforming control, not a percentage lift.">
+                            <Tooltip title="Probability of outperforming the baseline, not a percentage lift.">
                                 <IconInfo className="text-secondary text-base" />
                             </Tooltip>
                         </span>

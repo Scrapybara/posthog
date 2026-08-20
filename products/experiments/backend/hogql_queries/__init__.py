@@ -1,3 +1,9 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from products.experiments.backend.models.experiment import Experiment
+
+
 # The FF variant name for control
 CONTROL_VARIANT_KEY = "control"
 
@@ -14,6 +20,12 @@ def get_baseline_variant_key(stats_config: dict | None, variant_keys: list[str])
     if not variant_keys or CONTROL_VARIANT_KEY in variant_keys:
         return CONTROL_VARIANT_KEY
     return variant_keys[0]
+
+
+def get_experiment_baseline_variant_key(experiment: "Experiment") -> str:
+    variants = experiment.feature_flag.variants or []
+    variant_keys = [variant["key"] for variant in variants if variant.get("key")]
+    return get_baseline_variant_key(experiment.stats_config, variant_keys)
 
 
 # The FF variant name for multiple variants

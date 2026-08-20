@@ -1318,6 +1318,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
+                    baseline_variant_key=(stats_config or {}).get("baseline_variant_key"),
                 )
         if metrics_secondary is not None:
             for metric in metrics_secondary:
@@ -1328,6 +1329,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
+                    baseline_variant_key=(stats_config or {}).get("baseline_variant_key"),
                 )
 
         self.validate_no_duplicate_metric_uuids(metrics, metrics_secondary)
@@ -1700,6 +1702,7 @@ class ExperimentService:
         exposure_criteria: dict | None,
         only_count_matured_users: bool = False,
         excluded_variants: list[str] | None = None,
+        variant_keys: list[str] | None = None,
     ) -> list[dict]:
         """Recompute fingerprints for a list of metrics. Returns a new list with updated fingerprints."""
         stats_method = "bayesian" if stats_config is None else stats_config.get("method", "bayesian")
@@ -1713,6 +1716,7 @@ class ExperimentService:
                 exposure_criteria,
                 only_count_matured_users=only_count_matured_users,
                 excluded_variants=excluded_variants,
+                baseline_variant_key=get_baseline_variant_key(stats_config, variant_keys or []),
             )
             updated.append(metric_copy)
         return updated
@@ -1945,6 +1949,7 @@ class ExperimentService:
                             experiment.stats_config,
                             experiment.exposure_criteria,
                             excluded_variants=experiment.excluded_variants or [],
+                            variant_keys=flag_variant_keys,
                         ),
                     )
 
@@ -2736,7 +2741,12 @@ class ExperimentService:
                 experiment.repository = picked_repository
                 experiment.save(update_fields=["repository"])
 
-            plan = cleanup_plan(conclusion, experiment.feature_flag.variants or [])
+            variants = experiment.feature_flag.variants or []
+            plan = cleanup_plan(
+                conclusion,
+                variants,
+                get_baseline_variant_key(experiment.stats_config, self._variant_keys(variants)),
+            )
             title, description = build_cleanup_prompt(experiment, flag_key, plan)
             team = experiment.team
             user_id = self.user.id
@@ -3740,6 +3750,7 @@ class ExperimentService:
                         exposure_criteria,
                         only_count_matured_users=only_count_matured_users,
                         excluded_variants=excluded_variants,
+                        variant_keys=self._resolved_variant_keys(experiment, feature_flag_config),
                     )
 
             # --- metric ordering sync + validation -----------------------------

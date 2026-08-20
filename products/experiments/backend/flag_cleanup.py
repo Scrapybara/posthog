@@ -47,17 +47,20 @@ def _fully_rolled_out_variant(variants: list[dict]) -> str | None:
     return at_100[0] if len(at_100) == 1 else None
 
 
-def cleanup_plan(conclusion: str, variants: list[dict]) -> CleanupPlan:
+def cleanup_plan(conclusion: str, variants: list[dict], baseline_variant_key: str | None = None) -> CleanupPlan:
     """Decide which variant's code path to keep, from the outcome and the flag's variants.
 
     "won" keeps the shipped variant (the one rolled out to 100%); a plain win with nothing
-    shipped falls back to the single non-control variant as a best guess. Every other
-    outcome rolls back to the baseline ("control"). Anything uncertain is marked so the
+    shipped falls back to the single comparison variant as a best guess. Every other
+    outcome rolls back to the configured baseline. Anything uncertain is marked so the
     operator (and the PR) flag it for human review rather than guessing silently.
     """
     keys = variant_keys(variants)
-    non_control = [k for k in keys if k != "control"]
-    has_control = "control" in keys
+    configured_baseline_key = baseline_variant_key
+    is_configured_baseline_missing = configured_baseline_key is not None and configured_baseline_key not in keys
+    if baseline_variant_key not in keys:
+        baseline_variant_key = "control" if "control" in keys else (keys[0] if keys else None)
+    comparison_variants = [key for key in keys if key != baseline_variant_key]
 
     def plan(keep: str | None, rationale: str, confident: bool) -> CleanupPlan:
         return CleanupPlan(
@@ -75,20 +78,26 @@ def cleanup_plan(conclusion: str, variants: list[dict]) -> CleanupPlan:
                 f'The experiment won and variant "{shipped}" was shipped (100% rollout). Keep it as the new default.',
                 True,
             )
-        if len(non_control) == 1:
+        if len(comparison_variants) == 1:
             return plan(
-                non_control[0],
-                f'The experiment won but no variant is at 100% rollout. Best guess: keep the winning variant "{non_control[0]}". Confirm which variant you kept in the PR.',
+                comparison_variants[0],
+                f'The experiment won but no variant is at 100% rollout. Best guess: keep the winning variant "{comparison_variants[0]}". Confirm which variant you kept in the PR.',
                 False,
             )
         return plan(
             None,
-            "The experiment won, but the winning variant can't be determined automatically (more than one non-control variant). Decide per code site and explain your choice in the PR.",
+            "The experiment won, but the winning variant can't be determined automatically (more than one comparison variant). Decide per code site and explain your choice in the PR.",
             False,
         )
 
-    keep = "control" if has_control else (keys[0] if keys else None)
+    keep = baseline_variant_key
     if conclusion in ("lost", "invalid"):
+        if is_configured_baseline_missing:
+            return plan(
+                keep,
+                f'The configured baseline "{configured_baseline_key}" no longer exists. Best guess: keep "{keep}" and confirm the rollback in the PR.',
+                False,
+            )
         return plan(
             keep,
             f'The experiment {CONCLUSION_LABELS.get(conclusion, conclusion)}. Roll back to the baseline: keep "{keep}" and remove the feature.',

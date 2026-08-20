@@ -25,6 +25,7 @@ from posthog.temporal.experiments.models import (
 from posthog.temporal.experiments.utils import DEFAULT_EXPERIMENT_RECALCULATION_HOUR, check_significance_transition
 
 from products.experiments.backend.facade.timeseries import backfill_experiment_timeseries
+from products.experiments.backend.hogql_queries import get_experiment_baseline_variant_key
 from products.experiments.backend.hogql_queries.base_query_utils import experiment_window_end
 from products.experiments.backend.hogql_queries.error_handling import capture_experiment_metric_error_event
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
@@ -86,6 +87,8 @@ def _get_experiment_regular_metrics_for_hour_sync(hour: int) -> list[ExperimentR
                 get_experiment_stats_method(experiment),
                 experiment.exposure_criteria,
                 only_count_matured_users=experiment.only_count_matured_users,
+                excluded_variants=experiment.excluded_variants,
+                baseline_variant_key=get_experiment_baseline_variant_key(experiment),
             )
 
             experiment_metrics.append(
@@ -377,6 +380,8 @@ def _get_experiment_saved_metrics_for_hour_sync(hour: int) -> list[ExperimentSav
                 get_experiment_stats_method(experiment),
                 experiment.exposure_criteria,
                 only_count_matured_users=experiment.only_count_matured_users,
+                excluded_variants=experiment.excluded_variants,
+                baseline_variant_key=get_experiment_baseline_variant_key(experiment),
             )
 
             experiment_metrics.append(

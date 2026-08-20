@@ -125,7 +125,10 @@ export function getBaselineVariantKey(experiment: Partial<Experiment> | null | u
     if (configured) {
         return configured
     }
-    const variants = getExperimentVariants(experiment)
+    return getDefaultBaselineVariantKey(getExperimentVariants(experiment))
+}
+
+export function getDefaultBaselineVariantKey(variants: Array<{ key: string }>): string {
     if (variants.length === 0 || variants.some((variant) => variant.key === 'control')) {
         return 'control'
     }

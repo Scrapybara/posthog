@@ -776,7 +776,7 @@ class ExperimentQueryRunner(QueryRunner):
         variants_present = {v.key for v in breakdown_variants}
         for expected_variant in self.variants:
             if expected_variant not in variants_present:
-                # Add missing variant with zero stats to avoid "No control variant found" error
+                # Add a missing variant with zero stats so baseline selection still succeeds.
                 breakdown_variants.append(
                     ExperimentStatsBase(
                         key=expected_variant,
@@ -988,6 +988,7 @@ class ExperimentQueryRunner(QueryRunner):
         payload = super().get_cache_payload()
         payload["experiment_response_version"] = 2
         payload["stats_method"] = self.stats_method
+        payload["baseline_variant_key"] = self.baseline_variant_key
         return payload
 
     def _is_stale(self, last_refresh: Optional[datetime], lazy: bool = False) -> bool:

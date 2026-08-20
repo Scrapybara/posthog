@@ -53,6 +53,7 @@ import {
     isSignificant,
     isWinning,
 } from '~/scenes/experiments/MetricsView/shared/utils'
+import { getBaselineVariantKey } from '~/scenes/experiments/utils'
 import { Experiment, InsightType } from '~/types'
 
 import { ChartCell } from './ChartCell'
@@ -760,7 +761,13 @@ export function MetricRowGroup({
      * its result, dimmed while recalculating, so a refresh never flashes the skeleton over real data.
      */
     if (!result && !error && (isLoading || exposuresLoading)) {
-        const skeletonVariantKeys = variants.length > 0 ? variants.map((variant) => variant.key) : ['control']
+        const baselineVariantKey = getBaselineVariantKey(experiment)
+        const variantKeys = variants.map(({ key }) => key)
+        const skeletonVariantKeys = variantKeys.includes(baselineVariantKey)
+            ? [baselineVariantKey, ...variantKeys.filter((key) => key !== baselineVariantKey)]
+            : variantKeys.length > 0
+              ? variantKeys
+              : [baselineVariantKey]
         const bg = isAlternatingRow ? 'bg-bg-table' : 'bg-bg-light'
         // Between failed attempts the chart column (and only it) explains the wait; every other cell keeps
         // its skeleton. One cell spans the variant rows, so subsequent rows omit theirs.

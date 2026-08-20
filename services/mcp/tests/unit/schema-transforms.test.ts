@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { stripEnumMinLength, stripUuidFormat } from '../../scripts/lib/schema-transforms.mjs'
+import {
+    preserveAdditionalPropertiesForOrval,
+    stripEnumMinLength,
+    stripUuidFormat,
+} from '../../scripts/lib/schema-transforms.mjs'
 
 describe('stripEnumMinLength', () => {
     it('removes minLength from a schema with enum', () => {
@@ -199,5 +203,38 @@ describe('stripUuidFormat', () => {
     it('is a no-op for null and undefined', () => {
         expect(() => stripUuidFormat(null)).not.toThrow()
         expect(() => stripUuidFormat(undefined)).not.toThrow()
+    })
+})
+
+describe('preserveAdditionalPropertiesForOrval', () => {
+    it('converts permissive named objects to the equivalent schema form', () => {
+        const statsConfigSchema: Record<string, unknown> = {
+            type: 'object',
+            properties: { method: { type: 'string' } },
+            additionalProperties: true,
+        }
+        const schema = {
+            type: 'object',
+            properties: {
+                stats_config: statsConfigSchema,
+            },
+        }
+
+        preserveAdditionalPropertiesForOrval(schema)
+
+        expect(statsConfigSchema).not.toHaveProperty('additionalProperties')
+        expect(statsConfigSchema.allOf).toEqual([{ type: 'object', additionalProperties: {} }])
+    })
+
+    it('leaves pure records and closed objects unchanged', () => {
+        const schema = {
+            records: { type: 'object', additionalProperties: true },
+            closed: { type: 'object', properties: {}, additionalProperties: false },
+        }
+
+        preserveAdditionalPropertiesForOrval(schema)
+
+        expect(schema.records.additionalProperties).toBe(true)
+        expect(schema.closed.additionalProperties).toBe(false)
     })
 })

@@ -22,6 +22,7 @@ from posthog.schema import (
     ExperimentApiMetric,
     ExperimentParameters,
     ExperimentRunningTimeCalculation,
+    ExperimentStatsConfig,
     MultipleVariantHandling,
 )
 
@@ -34,6 +35,7 @@ from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from products.ai_observability.backend.models.llm_prompt import LLMPrompt
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.facade.contracts import CreateExperimentInput
+from products.experiments.backend.hogql_queries import get_experiment_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.exposure_query_logic import resolve_default_exposure_event
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -90,21 +92,6 @@ def _with_split_percent(variants: list) -> list:
 def _normalized_flag_variants(variants: list) -> list:
     """Returns a new list, leaving the caller's input (e.g. request.data) untouched."""
     variants = deepcopy(variants)
-    # Normalize a case-insensitive 'control' key (e.g. 'Control', 'CONTROL') down
-    # to lowercase 'control'. 'control' is the conventional baseline key (the default
-    # baseline when present), and a typo in casing was the leading cause of the
-    # "Feature flag variants must contain a control variant" error in MCP traces —
-    # most often from LLM-generated payloads. Only rewrite when no exact 'control'
-    # match already exists, so we never collapse two distinct keys into a duplicate.
-    existing_keys = {v.get("key") for v in variants if isinstance(v, dict)}
-    if "control" not in existing_keys:
-        for variant in variants:
-            if not isinstance(variant, dict):
-                continue
-            key = variant.get("key")
-            if isinstance(key, str) and key != "control" and key.lower() == "control":
-                variant["key"] = "control"
-                break
     for variant in variants:
         if isinstance(variant, dict) and "split_percent" in variant:
             # split_percent wins in case both keys present, as rollout_percentage deprecated
@@ -129,6 +116,11 @@ class ExperimentExposureCriteriaField(serializers.JSONField):
 
 @extend_schema_field(ExperimentRunningTimeCalculation)  # type: ignore[arg-type]
 class ExperimentRunningTimeCalculationField(serializers.JSONField):
+    pass
+
+
+@extend_schema_field(ExperimentStatsConfig)  # type: ignore[arg-type]
+class ExperimentStatsConfigField(serializers.JSONField):
     pass
 
 
@@ -185,6 +177,14 @@ class ExperimentBaseSerializer(UserAccessControlSerializerMixin, serializers.Mod
             "Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, "
             "`recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, "
             "which historically lived in `parameters`."
+        ),
+    )
+    stats_config = ExperimentStatsConfigField(
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are "
+            "compared against. When omitted, analysis uses `control` if present, otherwise the first variant."
         ),
     )
     excluded_variants = serializers.ListField(
@@ -460,6 +460,7 @@ class ExperimentSerializer(ExperimentBaseSerializer):
             "exposure_cohort",
             "parameters",
             "running_time_calculation",
+            "stats_config",
             "excluded_variants",
             "secondary_metrics",
             "saved_metrics",
@@ -474,7 +475,6 @@ class ExperimentSerializer(ExperimentBaseSerializer):
             "exposure_criteria",
             "metrics",
             "metrics_secondary",
-            "stats_config",
             "scheduling_config",
             "allow_unknown_events",
             "_create_in_folder",
@@ -577,6 +577,7 @@ class ExperimentSerializer(ExperimentBaseSerializer):
                         instance.exposure_criteria,
                         only_count_matured_users=instance.only_count_matured_users,
                         excluded_variants=instance.excluded_variants or [],
+                        baseline_variant_key=get_experiment_baseline_variant_key(instance),
                     )
 
         return data

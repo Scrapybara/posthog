@@ -258,4 +258,45 @@ describe('experimentActivityDescriber', () => {
             expect(textOf(result)).not.toContain('updated parameters')
         })
     })
+
+    describe('baseline variant rows', () => {
+        it.each([
+            {
+                before: { baseline_variant_key: 'control' },
+                after: { baseline_variant_key: 'variant-b' },
+                expected: 'changed the baseline variant to variant-b',
+            },
+            {
+                before: { baseline_variant_key: 'variant-b' },
+                after: {},
+                expected: 'cleared the baseline variant',
+            },
+            {
+                before: { method: 'bayesian', baseline_variant_key: 'control' },
+                after: { method: 'frequentist', baseline_variant_key: 'control' },
+                expected: 'updated statistics settings',
+            },
+        ])('$expected', ({ before, after, expected }) => {
+            const result = experimentActivityDescriber(
+                baseLogItem({
+                    detail: {
+                        name: 'Checkout funnel',
+                        changes: [
+                            {
+                                type: ActivityScope.EXPERIMENT,
+                                action: 'changed',
+                                field: 'stats_config',
+                                before,
+                                after,
+                            },
+                        ],
+                        merge: null,
+                        trigger: null,
+                    },
+                })
+            )
+
+            expect(textOf(result)).toContain(expected)
+        })
+    })
 })

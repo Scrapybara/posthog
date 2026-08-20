@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from freezegun import freeze_time
@@ -117,6 +118,41 @@ class TestExperimentFunnelsQueryRunner(ClickhouseTestMixin, APIBaseTest):
             query_runner.prepared_funnels_query.breakdownFilter.breakdown,
             f"$feature/{original_key}",
         )
+
+    def test_uses_configured_baseline_for_statistics_and_cache(self):
+        experiment = self.create_experiment()
+        experiment.stats_config = {"baseline_variant_key": "test"}
+        experiment.save(update_fields=["stats_config"])
+        query_runner = ExperimentFunnelsQueryRunner(
+            query=ExperimentFunnelsQuery(
+                experiment_id=experiment.id,
+                kind="ExperimentFunnelsQuery",
+                funnels_query=FunnelsQuery(series=[EventsNode(event="$pageview"), EventsNode(event="purchase")]),
+            ),
+            team=self.team,
+        )
+        result = cast(
+            Any,
+            SimpleNamespace(
+                results=[
+                    [
+                        {"order": 0, "count": 10, "breakdown_value": ["control"]},
+                        {"order": 1, "count": 5, "breakdown_value": ["control"]},
+                    ],
+                    [
+                        {"order": 0, "count": 12, "breakdown_value": ["test"]},
+                        {"order": 1, "count": 8, "breakdown_value": ["test"]},
+                    ],
+                ]
+            ),
+        )
+
+        baseline, comparisons = query_runner._get_variants_with_base_stats(result)
+        query_runner._validate_event_variants(result)
+
+        self.assertEqual(baseline.key, "test")
+        self.assertEqual([variant.key for variant in comparisons], ["control"])
+        self.assertEqual(query_runner.get_cache_payload()["baseline_variant_key"], "test")
 
     @freeze_time("2020-01-01T12:00:00Z")
     def test_query_runner(self):

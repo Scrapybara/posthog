@@ -366,6 +366,7 @@ class TestStatsConfig(APIBaseTest):
             ("stats_config_custom_baseline", {"baseline_variant_key": "test"}, ["control", "test"], "test"),
             ("no_control_falls_back_to_first_variant", None, ["variant_a", "variant_b"], "variant_a"),
             ("control_not_first_still_baseline", None, ["test", "control"], "control"),
+            ("capitalized_control_is_not_legacy_default", None, ["variant_a", "Control"], "variant_a"),
         ]
     )
     def test_experiment_query_runner_reads_baseline_from_stats_config(

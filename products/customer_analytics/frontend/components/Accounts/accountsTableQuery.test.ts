@@ -1,6 +1,7 @@
 import {
     AccountsTableAccountField,
     AccountsTableCustomPropertyOperator,
+    type AccountsTableRow,
     AccountsTableSortDirection,
     NodeKind,
 } from '~/queries/schema/schema-general'
@@ -223,7 +224,7 @@ describe('accountsTableQuery', () => {
 
     it('reads cells directly from keyed rows', () => {
         const plan = buildAccountsTableQueryPlan(queryInput()) as AccountsTableQueryPlan
-        const row = {
+        const row: AccountsTableRow = {
             id: 'account-id',
             name: 'Acme',
             externalId: 'acme-1',
@@ -233,6 +234,16 @@ describe('accountsTableQuery', () => {
             relationships: { [RELATIONSHIP_ID]: [42] },
             customProperties: {},
             customPropertyHistory: {},
+            health: {
+                score: 80,
+                status: 'healthy',
+                factors: [],
+                lookbackDays: 30,
+                previousPeriodStart: '2026-03-22T00:00:00Z',
+                currentPeriodStart: '2026-04-21T00:00:00Z',
+                computedAt: '2026-05-21T00:00:00Z',
+                isLimited: false,
+            },
         }
 
         expect(plan.columns.map((column) => accountsTableCell(row, column.visibleName, plan))).toEqual([

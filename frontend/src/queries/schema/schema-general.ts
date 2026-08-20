@@ -3003,6 +3003,45 @@ export interface AccountsTableCustomPropertyHistoryPoint {
     value: number
 }
 
+/** Health bucket for an account. */
+export type AccountHealthStatus = 'healthy' | 'neutral' | 'at_risk' | 'no_data'
+
+/** Why an account could not be scored. */
+export type AccountHealthNoDataReason =
+    | 'missing_external_id'
+    | 'missing_group_type'
+    | 'no_metrics'
+    | 'no_activity'
+    | 'calculation_error'
+
+/** One usage metric's contribution to an account health score. */
+export interface AccountHealthFactor {
+    metricId: string
+    metricName: string
+    current: number
+    previous: number
+    /** Current usage retained from the previous period, capped at 100. */
+    normalizedScore: integer | null
+    /** Points this factor adds to the overall score after equal weighting. */
+    contribution: number | null
+}
+
+/** An explainable account health score calculated from usage metrics. */
+export interface AccountHealthScore {
+    score: integer | null
+    status: AccountHealthStatus
+    factors: AccountHealthFactor[]
+    lookbackDays: integer
+    /** @format date-time */
+    previousPeriodStart: string
+    /** @format date-time */
+    currentPeriodStart: string
+    /** @format date-time */
+    computedAt: string
+    isLimited: boolean
+    noDataReason?: AccountHealthNoDataReason | null
+}
+
 export interface AccountsTableRow {
     id: string
     name: string
@@ -3019,6 +3058,8 @@ export interface AccountsTableRow {
     customProperties: Record<string, AccountsTableCustomPropertyValue>
     /** Numeric write history keyed by requested custom property definition ID. */
     customPropertyHistory: Record<string, AccountsTableCustomPropertyHistoryPoint[]>
+    /** Query-time account health result derived from configured usage metrics. */
+    health: AccountHealthScore
 }
 
 export type CachedAccountsTableQueryResponse = CachedQueryResponse<AccountsTableQueryResponse>

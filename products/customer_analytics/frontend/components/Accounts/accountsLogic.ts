@@ -39,6 +39,7 @@ import {
 } from '../../constants'
 import { customerAnalyticsSceneLogic } from '../../customerAnalyticsSceneLogic'
 import type { AccountRelationshipDefinitionApi, CustomPropertyDefinitionApi } from '../../generated/api.schemas'
+import { ACCOUNT_HEALTH_COLUMN } from './accountHealth'
 import { accountsColumnConfigLogic, isLegacyRoleColumn } from './accountsColumnConfigLogic'
 import type { AccountColumnDisplayState } from './accountsColumnConfigLogic'
 import {
@@ -830,7 +831,9 @@ export const accountsLogic = kea<accountsLogicType>([
                 accountsQuerySource: AccountsTableQuery | null
             ): DataTableNode => ({
                 kind: NodeKind.DataTableNode,
-                columns: accountsTableQueryPlan.columns.map((column) => column.visibleName),
+                columns: accountsTableQueryPlan.columns.flatMap((column, index) =>
+                    index === 0 ? [column.visibleName, ACCOUNT_HEALTH_COLUMN] : [column.visibleName]
+                ),
                 source: accountsQuerySource ?? accountsTableQueryPlan.query,
                 full: true,
                 allowSorting: true,

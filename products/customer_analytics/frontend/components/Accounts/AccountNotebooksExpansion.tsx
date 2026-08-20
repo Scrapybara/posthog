@@ -32,6 +32,8 @@ import { fullName } from 'lib/utils/strings'
 import { notebookPanelLogic } from 'scenes/notebooks/NotebookPanel/notebookPanelLogic'
 import { urls } from 'scenes/urls'
 
+import type { AccountHealthScore } from '~/queries/schema/schema-general'
+
 import type { AccountNotebookApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import { AccountEventStreamToggle } from '../EventStream/AccountEventStreamToggle'
@@ -39,6 +41,7 @@ import { AccountBillingExpansion } from './AccountBillingExpansion'
 import { accountBillingLogic } from './accountBillingLogic'
 import { AccountEmailThreadsExpansion } from './AccountEmailThreadsExpansion'
 import { accountEmailThreadsLogic } from './accountEmailThreadsLogic'
+import { AccountHealthDetails } from './AccountHealthDetails'
 import { accountLinksLogic } from './accountLinksLogic'
 import { AccountMeetingsExpansion } from './AccountMeetingsExpansion'
 import { accountMeetingsLogic } from './accountMeetingsLogic'
@@ -166,9 +169,11 @@ function UsefulLinks({ accountId }: { accountId: string }): JSX.Element {
 export function AccountNotebooksExpansion({
     accountId,
     externalId,
+    health,
 }: {
     accountId: string
     externalId: string
+    health: AccountHealthScore
 }): JSX.Element {
     const logic = accountNotebooksLogic({ accountId })
     const { notebooks, notebooksResponseLoading, createdNoteLoading, searchTerm, sorting, pagination } =
@@ -268,6 +273,11 @@ export function AccountNotebooksExpansion({
                         onChange={(tab) => setActiveTab(accountId, tab)}
                         size="small"
                         tabs={[
+                            {
+                                key: 'health',
+                                label: 'Health',
+                                content: <AccountHealthDetails health={health} />,
+                            },
                             {
                                 key: 'notes',
                                 label: 'Notes',

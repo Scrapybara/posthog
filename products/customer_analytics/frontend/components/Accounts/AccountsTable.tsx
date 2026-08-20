@@ -33,6 +33,8 @@ import type {
 
 import { ACCOUNTS_TABLE_DATA_NODE_KEY } from '../../constants'
 import { formatCustomPropertyValue } from '../../scenes/CustomerAnalyticsConfigurationScene/account/customPropertyTypes'
+import { ACCOUNT_HEALTH_COLUMN } from './accountHealth'
+import { AccountHealthCell } from './AccountHealthCell'
 import { AccountNotebooksExpansion } from './AccountNotebooksExpansion'
 import { AccountColumnDisplayConfig, LEGACY_ROLE_COLUMNS, accountsColumnConfigLogic } from './accountsColumnConfigLogic'
 import { AccountExpansionTab, accountsExpansionLogic } from './accountsExpansionLogic'
@@ -45,6 +47,7 @@ type AccountNameCell = { name: string; external_id: string | null; id: string }
 
 const COLUMN_WIDTHS = {
     name: '240px',
+    health: '180px',
     tag_names: '280px',
     notebook_count: '80px',
     relationship: '220px',
@@ -470,6 +473,14 @@ const KNOWN_COLUMN_TEMPLATES: Record<string, KnownColumnTemplate> = {
         width: COLUMN_WIDTHS.notebook_count,
         render: ({ record }) => <NotebookCountCell record={record} />,
     },
+    health: {
+        label: 'Health',
+        width: COLUMN_WIDTHS.health,
+        render: ({ record }) => {
+            const row = isAccountsTableRow(record) ? record : null
+            return row ? <AccountHealthCell accountId={row.id} health={row.health} /> : null
+        },
+    },
 }
 
 function useContextColumns(): Record<string, QueryContextColumn> {
@@ -477,6 +488,12 @@ function useContextColumns(): Record<string, QueryContextColumn> {
         useValues(accountsColumnConfigLogic)
     return useMemo(() => {
         const columns: Record<string, QueryContextColumn> = {}
+        const healthTemplate = KNOWN_COLUMN_TEMPLATES[ACCOUNT_HEALTH_COLUMN]
+        columns[ACCOUNT_HEALTH_COLUMN] = {
+            renderTitle: () => <span>{healthTemplate.label}</span>,
+            width: healthTemplate.width,
+            render: healthTemplate.render,
+        }
         for (const key of visibleColumnNames) {
             const definition = aliasToDefinition[key]
             if (definition) {
@@ -536,9 +553,14 @@ function useExpandable(): QueryContext<DataTableNode>['expandable'] {
                 }
             },
             expandedRowRender: ({ result }) => {
-                const cell = getNameCell(result)
-                return cell ? (
-                    <AccountNotebooksExpansion accountId={cell.id} externalId={cell.external_id ?? ''} />
+                const row = isAccountsTableRow(result) ? result : null
+                const cell = getNameCell(row)
+                return cell && row ? (
+                    <AccountNotebooksExpansion
+                        accountId={cell.id}
+                        externalId={cell.external_id ?? ''}
+                        health={row.health}
+                    />
                 ) : null
             },
         }),
@@ -558,6 +580,11 @@ const SKELETON_COLUMNS: LemonTableColumns<{ key: number }> = [
                 <LemonSkeleton className="h-3 w-24" />
             </div>
         ),
+    },
+    {
+        title: 'Health',
+        width: COLUMN_WIDTHS.health,
+        render: () => <LemonSkeleton className="h-5 w-24" />,
     },
     {
         title: 'Tags',

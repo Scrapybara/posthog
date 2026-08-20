@@ -1,12 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 
 import pytest
 from posthog.test.base import BaseTest
+from unittest.mock import Mock, patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
-from posthog.models import OrganizationMembership, User
+from posthog.models import GroupUsageMetric, OrganizationMembership, User
 from posthog.persons_db import persons_db_connection
 from posthog.persons_seed import insert_seed_group
 
@@ -100,6 +102,55 @@ class TestSeedCustomerAnalyticsAccounts(BaseTest):
             == 3
         )
         assert ResourceNotebook.objects.filter(account__team_id=self.team.pk).count() == 2
+
+    @patch(
+        "products.customer_analytics.backend.management.commands.seed_customer_analytics_accounts.capture_batch_internal"
+    )
+    @patch(
+        "products.customer_analytics.backend.management.commands.seed_customer_analytics_accounts.get_group_types_for_project",
+        return_value=[{"group_type": "organization", "group_type_index": 0}],
+    )
+    def test_seeds_deterministic_health_examples(
+        self, get_group_types_for_project_mock: Mock, capture_batch_internal_mock: Mock
+    ) -> None:
+        capture_batch_internal_mock.return_value.raise_for_status.return_value = None
+        self._make_group("acme-id", "Acme")
+
+        self._run(users=1, accounts_with_notes=0, health_fixtures=True)
+
+        accounts = self._accounts()
+        assert {
+            "health-example-healthy",
+            "health-example-neutral",
+            "health-example-at-risk",
+            "health-example-no-data",
+        }.issubset(accounts)
+        metric = GroupUsageMetric.objects.get(team=self.team, name="Account health fixture")
+        assert metric.filters == {"events": [{"id": "customer analytics health fixture", "type": "events", "order": 0}]}
+        events = capture_batch_internal_mock.call_args.kwargs["events"]
+        current_counts: dict[str, int] = {}
+        previous_counts: dict[str, int] = {}
+        current_period_start = datetime.now(UTC) - timedelta(days=30)
+        for event in events:
+            account_id = event["properties"]["$groups"]["organization"]
+            period_counts = current_counts if event["timestamp"] >= current_period_start else previous_counts
+            period_counts[account_id] = period_counts.get(account_id, 0) + 1
+        assert current_counts == {
+            "health-example-healthy": 9,
+            "health-example-neutral": 6,
+            "health-example-at-risk": 3,
+        }
+        assert previous_counts == {
+            "health-example-healthy": 10,
+            "health-example-neutral": 10,
+            "health-example-at-risk": 10,
+        }
+        assert len(events) == 48
+        assert len({event["event_uuid"] for event in events}) == 48
+        assert capture_batch_internal_mock.call_args.kwargs["process_person_profile"] is True
+        get_group_types_for_project_mock.assert_called_once_with(
+            self.team.project_id, caller_tag="seed_customer_analytics_accounts"
+        )
 
     def test_dry_run_writes_nothing(self):
         self._make_group("acme-id", "Acme")

@@ -69,6 +69,115 @@
             "required": ["key", "operator", "type"],
             "type": "object"
         },
+        "AccountHealthFactor": {
+            "additionalProperties": false,
+            "description": "One usage metric's contribution to an account health score.",
+            "properties": {
+                "contribution": {
+                    "description": "Points this factor adds to the overall score after equal weighting.",
+                    "type": ["number", "null"]
+                },
+                "current": {
+                    "type": "number"
+                },
+                "metricId": {
+                    "type": "string"
+                },
+                "metricName": {
+                    "type": "string"
+                },
+                "normalizedScore": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Current usage retained from the previous period, capped at 100."
+                },
+                "previous": {
+                    "type": "number"
+                }
+            },
+            "required": ["metricId", "metricName", "current", "previous", "normalizedScore", "contribution"],
+            "type": "object"
+        },
+        "AccountHealthNoDataReason": {
+            "description": "Why an account could not be scored.",
+            "enum": ["missing_external_id", "missing_group_type", "no_metrics", "no_activity", "calculation_error"],
+            "type": "string"
+        },
+        "AccountHealthScore": {
+            "additionalProperties": false,
+            "description": "An explainable account health score calculated from usage metrics.",
+            "properties": {
+                "computedAt": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "currentPeriodStart": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "factors": {
+                    "items": {
+                        "$ref": "#/definitions/AccountHealthFactor"
+                    },
+                    "type": "array"
+                },
+                "isLimited": {
+                    "type": "boolean"
+                },
+                "lookbackDays": {
+                    "$ref": "#/definitions/integer"
+                },
+                "noDataReason": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/AccountHealthNoDataReason"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "previousPeriodStart": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "score": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "status": {
+                    "$ref": "#/definitions/AccountHealthStatus"
+                }
+            },
+            "required": [
+                "score",
+                "status",
+                "factors",
+                "lookbackDays",
+                "previousPeriodStart",
+                "currentPeriodStart",
+                "computedAt",
+                "isLimited"
+            ],
+            "type": "object"
+        },
+        "AccountHealthStatus": {
+            "description": "Health bucket for an account.",
+            "enum": ["healthy", "neutral", "at_risk", "no_data"],
+            "type": "string"
+        },
         "AccountsQuery": {
             "additionalProperties": false,
             "properties": {
@@ -726,6 +835,10 @@
                 "externalId": {
                     "type": ["string", "null"]
                 },
+                "health": {
+                    "$ref": "#/definitions/AccountHealthScore",
+                    "description": "Query-time account health result derived from configured usage metrics."
+                },
                 "id": {
                     "type": "string"
                 },
@@ -754,7 +867,15 @@
                     "type": "array"
                 }
             },
-            "required": ["id", "name", "accountFields", "relationships", "customProperties", "customPropertyHistory"],
+            "required": [
+                "id",
+                "name",
+                "accountFields",
+                "relationships",
+                "customProperties",
+                "customPropertyHistory",
+                "health"
+            ],
             "type": "object"
         },
         "AccountsTableSearchFilter": {

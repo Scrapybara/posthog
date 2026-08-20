@@ -23,6 +23,7 @@ import type { CustomPropertyDefinitionApi } from 'products/customer_analytics/fr
 
 import { CUSTOMER_ANALYTICS_DEFAULT_QUERY_TAGS } from '../../constants'
 import { isNumericDisplayType } from '../../scenes/CustomerAnalyticsConfigurationScene/account/customPropertyTypes'
+import { ACCOUNT_HEALTH_COLUMN } from './accountHealth'
 import type { AccountColumnDisplayState } from './accountsColumnConfigLogic'
 import type { AccountSortOrder, RoleFilterValue } from './accountsLogic'
 import type { TileFilter } from './accountsOverviewTilesLogic'
@@ -285,6 +286,9 @@ function accountFieldValue(row: AccountsTableRow, field: AccountsTableAccountFie
 }
 
 export function accountsTableCell(row: AccountsTableRow, visibleName: string, plan: AccountsTableQueryPlan): unknown {
+    if (visibleName === ACCOUNT_HEALTH_COLUMN) {
+        return row.health
+    }
     const column = plan.columns.find((candidate) => candidate.visibleName === visibleName)?.column
     if (!column) {
         return undefined
@@ -316,6 +320,7 @@ export function isAccountsTableRow(value: unknown): value is AccountsTableRow {
         !!row.accountFields &&
         !!row.relationships &&
         !!row.customProperties &&
-        !!row.customPropertyHistory
+        !!row.customPropertyHistory &&
+        !!row.health
     )
 }

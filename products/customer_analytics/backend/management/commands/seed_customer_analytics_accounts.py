@@ -9,26 +9,35 @@ so it has no dependency on ClickHouse->Postgres sync timing. For the given team 
   CSM / account executive / account owner,
 - adds a few notes (internal notebooks) to a handful of accounts,
 - points the team's customer-analytics config at group type index 0.
+- optionally adds deterministic healthy, neutral, at-risk, and no-data examples.
 
 Re-running is safe: existing accounts, pool users, and notes are left alone.
 
 Usage:
     python manage.py seed_customer_analytics_accounts --team-id 1
     python manage.py seed_customer_analytics_accounts --team-id 1 --users 5 --accounts-with-notes 5
+    python manage.py seed_customer_analytics_accounts --team-id 1 --health-fixtures
     python manage.py seed_customer_analytics_accounts --team-id 1 --dry-run
 """
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from posthog.hogql.timings import HogQLTimings
+
+from posthog.api.capture import capture_batch_internal
 from posthog.models import OrganizationMembership, Team, User
+from posthog.models.group_type_mapping import get_group_types_for_project
+from posthog.models.group_usage_metric import GroupUsageMetric
 from posthog.models.scoping import team_scope
 from posthog.persons_db import persons_db_connection
 
 from products.customer_analytics.backend.facade.api import create_account
+from products.customer_analytics.backend.hogql_queries.account_health import AccountHealthScorer
 from products.customer_analytics.backend.logic import relationships as relationships_logic
 from products.customer_analytics.backend.models.account import Account, AccountProperties
 from products.customer_analytics.backend.models.relationship import AccountRelationshipDefinition
@@ -36,6 +45,14 @@ from products.customer_analytics.backend.models.team_customer_analytics_config i
 from products.notebooks.backend.facade import api as notebooks
 
 ACCOUNT_GROUP_TYPE_INDEX = 0
+HEALTH_FIXTURE_EVENT = "customer analytics health fixture"
+HEALTH_FIXTURE_METRIC = "Account health fixture"
+HEALTH_FIXTURE_ACCOUNTS = (
+    ("health-example-healthy", "Health example: Healthy", 9, 10),
+    ("health-example-neutral", "Health example: Neutral", 6, 10),
+    ("health-example-at-risk", "Health example: At risk", 3, 10),
+    ("health-example-no-data", "Health example: No data", 0, 0),
+)
 
 NOTE_TEMPLATES: list[tuple[str, str]] = [
     ("Kickoff call", "Walked the team through onboarding. Main goal is consolidating file storage across departments."),
@@ -46,7 +63,7 @@ NOTE_TEMPLATES: list[tuple[str, str]] = [
 
 
 class Command(BaseCommand):
-    help = "Seed Customer analytics accounts (with users and notes) from existing group-analytics groups."
+    help = "Seed Customer analytics accounts from existing group-analytics groups."
 
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument("--team-id", type=int, required=True, help="Team whose groups to read and seed into.")
@@ -64,6 +81,11 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--limit", type=int, default=None, help="Cap how many groups become accounts (default: all)."
+        )
+        parser.add_argument(
+            "--health-fixtures",
+            action="store_true",
+            help="Add healthy, neutral, at-risk, and no-data account health examples.",
         )
         parser.add_argument("--dry-run", action="store_true", help="Report what would be created without writing.")
 
@@ -86,12 +108,17 @@ class Command(BaseCommand):
                 f"and add up to {note_account_count * options['notes_per_account']} note(s) "
                 f"across {note_account_count} account(s)."
             )
+            if options["health_fixtures"]:
+                self.stdout.write("Would also add four deterministic account health examples.")
             return
 
         self._set_config(team)
         user_pool = self._ensure_user_pool(team, options["users"])
         accounts = self._create_accounts(team, groups, user_pool)
         self._create_notes(team, accounts, user_pool, options["accounts_with_notes"], options["notes_per_account"])
+        if options["health_fixtures"]:
+            health_accounts = self._create_health_fixture_accounts(team, user_pool)
+            self._create_health_fixture_events(team, health_accounts, self._account_group_type(team))
         self.stdout.write(self.style.SUCCESS("Done."))
 
     def _get_team(self, team_id: int) -> Team:
@@ -239,6 +266,111 @@ class Command(BaseCommand):
                 )
                 created += 1
         self.stdout.write(f"Created {created} note(s) across up to {len(selected)} account(s).")
+
+    @transaction.atomic
+    def _create_health_fixture_accounts(self, team: Team, user_pool: list[User]) -> list[Account]:
+        creator = team.organization.members.first()
+        definitions = self._ensure_role_definitions(team, creator)
+        accounts: list[Account] = []
+        created = 0
+        with team_scope(team.pk):
+            for index, (external_id, name, _, _) in enumerate(HEALTH_FIXTURE_ACCOUNTS):
+                account = Account.objects.filter(external_id=external_id).first()
+                if account is None:
+                    account = create_account(
+                        team=team,
+                        name=name,
+                        external_id=external_id,
+                        created_by=creator,
+                        properties=AccountProperties(),
+                    )
+                    self._assign_roles(team, account, definitions, user_pool, index, creator)
+                    created += 1
+                accounts.append(account)
+        self.stdout.write(f"Ensured four account health examples ({created} created).")
+        return accounts
+
+    @staticmethod
+    def _account_group_type(team: Team) -> str:
+        group_type = next(
+            (
+                mapping["group_type"]
+                for mapping in get_group_types_for_project(
+                    team.project_id, caller_tag="seed_customer_analytics_accounts"
+                )
+                if mapping["group_type_index"] == ACCOUNT_GROUP_TYPE_INDEX
+            ),
+            None,
+        )
+        if not group_type:
+            raise CommandError("The account group type could not be resolved. Configure group analytics, then rerun.")
+        return group_type
+
+    def _create_health_fixture_events(self, team: Team, accounts: list[Account], group_type: str) -> None:
+        metric, _ = GroupUsageMetric.objects.update_or_create(
+            team=team,
+            group_type_index=ACCOUNT_GROUP_TYPE_INDEX,
+            name=HEALTH_FIXTURE_METRIC,
+            defaults={
+                "format": GroupUsageMetric.Format.NUMERIC,
+                "interval": 30,
+                "display": GroupUsageMetric.Display.NUMBER,
+                "filters": {"events": [{"id": HEALTH_FIXTURE_EVENT, "type": "events", "order": 0}]},
+                "math": GroupUsageMetric.Math.COUNT,
+                "math_property": None,
+            },
+        )
+        selected_metric_ids = [
+            selected_metric.id
+            for selected_metric, _ in AccountHealthScorer(
+                team=team,
+                timings=HogQLTimings(),
+                modifiers=None,
+                user=None,
+            ).eligible_metrics
+        ]
+        if metric.id not in selected_metric_ids:
+            raise CommandError(
+                "The health fixture metric is outside the first five usage metrics. Remove or rename earlier metrics, then rerun."
+            )
+
+        now = datetime.now(UTC)
+        events: list[dict[str, Any]] = []
+        counts_by_external_id = {
+            external_id: (current_count, previous_count)
+            for external_id, _, current_count, previous_count in HEALTH_FIXTURE_ACCOUNTS
+        }
+        for account in accounts:
+            current_count, previous_count = counts_by_external_id[account.external_id or ""]
+            for period, count, timestamp in (
+                ("current", current_count, now - timedelta(days=15)),
+                ("previous", previous_count, now - timedelta(days=45)),
+            ):
+                for index in range(count):
+                    events.append(
+                        {
+                            "event": HEALTH_FIXTURE_EVENT,
+                            "distinct_id": f"health-fixture-{account.external_id}",
+                            "timestamp": timestamp + timedelta(seconds=index),
+                            "properties": {"$groups": {group_type: account.external_id}},
+                            "event_uuid": str(
+                                uuid5(
+                                    NAMESPACE_URL,
+                                    f"posthog:health-fixture:v2:{team.id}:{account.external_id}:{period}:{index}",
+                                )
+                            ),
+                        }
+                    )
+        capture_batch_internal(
+            events=events,
+            token=team.api_token,
+            event_source="seed_customer_analytics_accounts",
+            historical_migration=True,
+            process_person_profile=True,
+        ).raise_for_status()
+        self.stdout.write(
+            f"Sent {len(events)} health fixture events. Scores appear after historical ingestion catches up."
+        )
 
 
 def _paragraph_doc(text: str) -> dict[str, Any]:

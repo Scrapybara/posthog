@@ -865,6 +865,8 @@ class ExperimentService:
         "-duration",
         "status",
         "-status",
+        "conclusion",
+        "-conclusion",
     }
 
     @classmethod
@@ -4460,11 +4462,27 @@ class ExperimentService:
                     created_by_display=Coalesce(
                         NullIf(F("created_by__first_name"), Value("")),
                         F("created_by__email"),
+                        Value(""),
                         # first_name is a CharField and email an EmailField; Django refuses to
                         # infer a type across the two, so set it explicitly.
                         output_field=CharField(),
                     )
                 ).order_by(f"{prefix}created_by_display")
+            elif order_value in ["conclusion", "-conclusion"]:
+                queryset = queryset.annotate(
+                    conclusion_sort_key=Case(
+                        When(conclusion="won", then=Value(1)),
+                        When(conclusion="lost", then=Value(2)),
+                        When(conclusion="inconclusive", then=Value(3)),
+                        When(conclusion="stopped_early", then=Value(4)),
+                        When(conclusion="invalid", then=Value(5)),
+                        default=Value(6),
+                    )
+                )
+                if order_value.startswith("-"):
+                    queryset = queryset.order_by(F("conclusion_sort_key").desc())
+                else:
+                    queryset = queryset.order_by(F("conclusion_sort_key").asc())
             else:
                 queryset = queryset.order_by(order_value)
         else:

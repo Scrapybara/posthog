@@ -320,6 +320,38 @@ describe('experimentsLogic', () => {
                 archived: false,
             })
         })
+
+        it.each(['conclusion', '-conclusion', 'created_by', '-created_by', 'name', '-name'])(
+            'sends %s ordering globally and writes it to the URL',
+            (order) => {
+                const replace = jest.fn()
+                router.actions.replace = replace
+
+                logic.actions.setExperimentsFilters({ order, page: 1 })
+
+                expect(logic.values.filters).toEqual(expect.objectContaining({ order, page: 1 }))
+                expect(logic.values.paramsFromFilters).toEqual(expect.objectContaining({ order, page: 1, offset: 0 }))
+                expect(replace).toHaveBeenLastCalledWith(expect.stringContaining(`order=${encodeURIComponent(order)}`))
+            }
+        )
+
+        it('restores ordering and pagination from the URL', async () => {
+            router.actions.push(urls.experiments(), { order: '-conclusion', page: '3' })
+
+            await expectLogic(logic)
+                .toMatchValues({
+                    filters: expect.objectContaining({
+                        order: '-conclusion',
+                        page: 3,
+                    }),
+                    paramsFromFilters: expect.objectContaining({
+                        order: '-conclusion',
+                        page: 3,
+                        offset: 200,
+                    }),
+                })
+                .toFinishAllListeners()
+        })
     })
 
     describe('experiment CRUD operations', () => {

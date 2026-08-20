@@ -5233,6 +5233,133 @@ class TestExperimentService(APIBaseTest):
 
     @parameterized.expand(
         [
+            (
+                "ascending",
+                "conclusion",
+                ["Won", "Lost", "Inconclusive", "Stopped early", "Invalid", "No conclusion"],
+            ),
+            (
+                "descending",
+                "-conclusion",
+                ["No conclusion", "Invalid", "Stopped early", "Inconclusive", "Lost", "Won"],
+            ),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_conclusion(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        conclusions = [
+            ("No conclusion", None),
+            ("Invalid", "invalid"),
+            ("Won", "won"),
+            ("Stopped early", "stopped_early"),
+            ("Lost", "lost"),
+            ("Inconclusive", "inconclusive"),
+        ]
+        for index, (name, conclusion) in enumerate(conclusions):
+            service.create_experiment(
+                name=name,
+                feature_flag_key=f"order-conclusion-{index}",
+                conclusion=conclusion,
+            )
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    @parameterized.expand(
+        [
+            ("ascending", "created_by", ["Email fallback", "Named creator"]),
+            ("descending", "-created_by", ["Named creator", "Email fallback"]),
+        ]
+    )
+    def test_filter_experiments_queryset_orders_by_creator_display_name(
+        self, _: str, order: str, expected_named_order: list[str]
+    ) -> None:
+        service = self._service()
+        email_user = self._create_user("alpha@example.com")
+        email_user.first_name = ""
+        email_user.save(update_fields=["first_name"])
+        named_user = self._create_user("zulu@example.com")
+        named_user.first_name = "bravo"
+        named_user.save(update_fields=["first_name"])
+        empty_user = self._create_user("empty@example.com")
+        empty_user.email = ""
+        empty_user.save(update_fields=["email"])
+
+        without_creator = service.create_experiment(name="No creator", feature_flag_key="order-no-creator")
+        without_creator.created_by = None
+        without_creator.save(update_fields=["created_by"])
+        ExperimentService(team=self.team, user=empty_user).create_experiment(
+            name="Empty creator", feature_flag_key="order-empty-creator"
+        )
+        ExperimentService(team=self.team, user=email_user).create_experiment(
+            name="Email fallback", feature_flag_key="order-email-creator"
+        )
+        ExperimentService(team=self.team, user=named_user).create_experiment(
+            name="Named creator", feature_flag_key="order-named-creator"
+        )
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+        ordered_names = list(queryset.values_list("name", flat=True))
+
+        if order == "created_by":
+            assert set(ordered_names[:2]) == {"No creator", "Empty creator"}
+            assert ordered_names[2:] == expected_named_order
+        else:
+            assert ordered_names[:2] == expected_named_order
+            assert set(ordered_names[2:]) == {"No creator", "Empty creator"}
+
+    def test_filter_experiments_queryset_orders_before_pagination(self) -> None:
+        service = self._service()
+        conclusions = ["invalid", "won", None, "stopped_early", "lost", "inconclusive"]
+        for index, conclusion in enumerate(conclusions):
+            service.create_experiment(
+                name=f"Experiment {conclusion}",
+                feature_flag_key=f"order-pagination-{index}",
+                conclusion=conclusion,
+            )
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": "conclusion"},
+        )
+
+        assert list(queryset.values_list("conclusion", flat=True)[2:4]) == ["inconclusive", "stopped_early"]
+
+    @parameterized.expand(
+        [
+            ("ascending", "name", ["Alpha", "Zulu"]),
+            ("descending", "-name", ["Zulu", "Alpha"]),
+        ]
+    )
+    def test_filter_experiments_queryset_keeps_ordering_by_name(
+        self, _: str, order: str, expected_order: list[str]
+    ) -> None:
+        service = self._service()
+        service.create_experiment(name="Zulu", feature_flag_key="order-name-zulu")
+        service.create_experiment(name="Alpha", feature_flag_key="order-name-alpha")
+
+        queryset = service.filter_experiments_queryset(
+            Experiment.objects.filter(team=self.team),
+            action="list",
+            query_params={"order": order},
+        )
+
+        assert list(queryset.values_list("name", flat=True)) == expected_order
+
+    @parameterized.expand(
+        [
             ("ascending", "duration", ["Short", "Long"]),
             ("descending", "-duration", ["Long", "Short"]),
         ]
@@ -6041,12 +6168,14 @@ class TestExperimentService(APIBaseTest):
             ("-duration",),
             ("status",),
             ("-status",),
+            ("conclusion",),
+            ("-conclusion",),
         ]
     )
     def test_order_by_valid_fields_works(self, order: str):
         service = self._service()
         qs = service.filter_experiments_queryset(self._base_queryset(), action="list", query_params={"order": order})
-        assert qs is not None
+        assert list(qs[:1]) == []
 
     def test_launch_with_deleted_flag_raises(self):
         """Launching an experiment whose flag is soft-deleted should fail."""

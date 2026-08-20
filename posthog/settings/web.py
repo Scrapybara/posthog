@@ -639,6 +639,7 @@ SPECTACULAR_SETTINGS = {
         "NotebookSQLV2NodeTypeEnum": ["hogql", "python"],
         "NotebookSQLV2RefKindEnum": ["hogql", "local"],
         "TaskRunStatusEnum": "products.tasks.backend.models.TaskRun.Status",
+        "AssistantAttachmentContentTypeEnum": ["image/png", "image/jpeg"],
         # Inline-choices variant of TaskRun.Status (labels == values), shared by
         # TaskRunUpdate.status and ExperimentFlagCleanupTask.run_status.
         "RunStatusEnum": ["not_started", "queued", "in_progress", "completed", "failed", "cancelled"],

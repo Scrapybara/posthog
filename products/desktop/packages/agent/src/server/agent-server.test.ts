@@ -38,7 +38,7 @@ import {
   type TestRepo,
 } from "../test/fixtures/api";
 import { createPostHogHandlers } from "../test/mocks/msw-handlers";
-import type { StoredEntry, TaskRun } from "../types";
+import type { StoredEntry, TaskRun, TaskRunArtifact } from "../types";
 import {
   AgentServer,
   isTurnCompleteNotification,
@@ -2585,6 +2585,21 @@ describe("AgentServer HTTP Mode", () => {
       const checksum = createHash("sha256")
         .update(Buffer.from(bundle))
         .digest("hex");
+      const skillArtifact = {
+        id: "skill-artifact-1",
+        name: "local-test-skill.zip",
+        type: "skill_bundle",
+        source: "posthog_code_skill",
+        storage_path: "tasks/artifacts/local-test-skill.zip",
+        content_type: "application/zip",
+        metadata: {
+          skill_name: "local-test-skill",
+          skill_source: "user",
+          content_sha256: checksum,
+          bundle_format: "zip",
+          schema_version: 1,
+        },
+      } as TaskRunArtifact;
 
       const s = createServer();
       await s.start();
@@ -2597,10 +2612,16 @@ describe("AgentServer HTTP Mode", () => {
       const downloadArtifact = vi.fn(async () => exactArrayBuffer(bundle));
       const serverInternals = s as unknown as {
         session: { clientConnection: { prompt: typeof prompt } };
-        posthogAPI: { downloadArtifact: typeof downloadArtifact };
+        posthogAPI: {
+          downloadArtifact: typeof downloadArtifact;
+          getTaskRun: ReturnType<typeof vi.fn>;
+        };
       };
       serverInternals.session.clientConnection.prompt = prompt;
       serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
+      serverInternals.posthogAPI.getTaskRun = vi.fn(async () =>
+        createTaskRun({ artifacts: [skillArtifact] }),
+      );
 
       const token = createToken();
       const response = await fetch(`http://localhost:${port}/command`, {
@@ -2615,23 +2636,7 @@ describe("AgentServer HTTP Mode", () => {
           method: "user_message",
           params: {
             content: "/local-test-skill with context",
-            artifacts: [
-              {
-                id: "skill-artifact-1",
-                name: "local-test-skill.zip",
-                type: "skill_bundle",
-                source: "posthog_code_skill",
-                storage_path: "tasks/artifacts/local-test-skill.zip",
-                content_type: "application/zip",
-                metadata: {
-                  skill_name: "local-test-skill",
-                  skill_source: "user",
-                  content_sha256: checksum,
-                  bundle_format: "zip",
-                  schema_version: 1,
-                },
-              },
-            ],
+            artifacts: [skillArtifact],
           },
         }),
       });
@@ -2685,33 +2690,11 @@ describe("AgentServer HTTP Mode", () => {
       const depBundle = makeBundle("dep-skill", "Dependency instructions.");
       const checksumOf = (bundle: Uint8Array) =>
         createHash("sha256").update(Buffer.from(bundle)).digest("hex");
-
-      const s = createServer();
-      await s.start();
-      const prompt = vi.fn(
-        async (_params: {
-          prompt: ContentBlock[];
-          _meta?: Record<string, unknown>;
-        }) => ({ stopReason: "cancelled" }) as { stopReason: string },
-      );
-      const downloadArtifact = vi.fn(
-        async (_taskId: string, _runId: string, storagePath: string) =>
-          exactArrayBuffer(
-            storagePath.includes("dep-skill") ? depBundle : invokedBundle,
-          ),
-      );
-      const serverInternals = s as unknown as {
-        session: { clientConnection: { prompt: typeof prompt } };
-        posthogAPI: { downloadArtifact: typeof downloadArtifact };
-      };
-      serverInternals.session.clientConnection.prompt = prompt;
-      serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
-
       const makeArtifact = (
         id: string,
         name: string,
         bundle: Uint8Array,
-      ): Record<string, unknown> => ({
+      ): TaskRunArtifact => ({
         id,
         name: `${name}.zip`,
         type: "skill_bundle",
@@ -2727,6 +2710,37 @@ describe("AgentServer HTTP Mode", () => {
         },
       });
 
+      const s = createServer();
+      await s.start();
+      const prompt = vi.fn(
+        async (_params: {
+          prompt: ContentBlock[];
+          _meta?: Record<string, unknown>;
+        }) => ({ stopReason: "cancelled" }) as { stopReason: string },
+      );
+      const downloadArtifact = vi.fn(
+        async (_taskId: string, _runId: string, storagePath: string) =>
+          exactArrayBuffer(
+            storagePath.includes("dep-skill") ? depBundle : invokedBundle,
+          ),
+      );
+      const artifacts = [
+        makeArtifact("skill-artifact-parent", "parent-skill", invokedBundle),
+        makeArtifact("skill-artifact-dep", "dep-skill", depBundle),
+      ];
+      const serverInternals = s as unknown as {
+        session: { clientConnection: { prompt: typeof prompt } };
+        posthogAPI: {
+          downloadArtifact: typeof downloadArtifact;
+          getTaskRun: ReturnType<typeof vi.fn>;
+        };
+      };
+      serverInternals.session.clientConnection.prompt = prompt;
+      serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
+      serverInternals.posthogAPI.getTaskRun = vi.fn(async () =>
+        createTaskRun({ artifacts }),
+      );
+
       const token = createToken();
       const response = await fetch(`http://localhost:${port}/command`, {
         method: "POST",
@@ -2740,14 +2754,7 @@ describe("AgentServer HTTP Mode", () => {
           method: "user_message",
           params: {
             content: "/parent-skill run it",
-            artifacts: [
-              makeArtifact(
-                "skill-artifact-parent",
-                "parent-skill",
-                invokedBundle,
-              ),
-              makeArtifact("skill-artifact-dep", "dep-skill", depBundle),
-            ],
+            artifacts,
           },
         }),
       });
@@ -2784,6 +2791,25 @@ describe("AgentServer HTTP Mode", () => {
       const prefixBundle = makeBundle("mentioned", "PREFIX_SKILL_MARKER body.");
       const checksumOf = (bundle: Uint8Array) =>
         createHash("sha256").update(Buffer.from(bundle)).digest("hex");
+      const makeArtifact = (
+        id: string,
+        name: string,
+        bundle: Uint8Array,
+      ): TaskRunArtifact => ({
+        id,
+        name: `${name}.zip`,
+        type: "skill_bundle",
+        source: "posthog_code_skill",
+        storage_path: `tasks/artifacts/${name}.zip`,
+        content_type: "application/zip",
+        metadata: {
+          skill_name: name,
+          skill_source: "user",
+          content_sha256: checksumOf(bundle),
+          bundle_format: "zip",
+          schema_version: 1,
+        },
+      });
 
       const s = createServer();
       await s.start();
@@ -2801,32 +2827,26 @@ describe("AgentServer HTTP Mode", () => {
               : prefixBundle,
           ),
       );
+      const artifacts = [
+        makeArtifact(
+          "skill-artifact-mentioned",
+          "mentioned-skill",
+          mentionedBundle,
+        ),
+        makeArtifact("skill-artifact-prefix", "mentioned", prefixBundle),
+      ];
       const serverInternals = s as unknown as {
         session: { clientConnection: { prompt: typeof prompt } };
-        posthogAPI: { downloadArtifact: typeof downloadArtifact };
+        posthogAPI: {
+          downloadArtifact: typeof downloadArtifact;
+          getTaskRun: ReturnType<typeof vi.fn>;
+        };
       };
       serverInternals.session.clientConnection.prompt = prompt;
       serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
-
-      const makeArtifact = (
-        id: string,
-        name: string,
-        bundle: Uint8Array,
-      ): Record<string, unknown> => ({
-        id,
-        name: `${name}.zip`,
-        type: "skill_bundle",
-        source: "posthog_code_skill",
-        storage_path: `tasks/artifacts/${name}.zip`,
-        content_type: "application/zip",
-        metadata: {
-          skill_name: name,
-          skill_source: "user",
-          content_sha256: checksumOf(bundle),
-          bundle_format: "zip",
-          schema_version: 1,
-        },
-      });
+      serverInternals.posthogAPI.getTaskRun = vi.fn(async () =>
+        createTaskRun({ artifacts }),
+      );
 
       const token = createToken();
       const response = await fetch(`http://localhost:${port}/command`, {
@@ -2841,14 +2861,7 @@ describe("AgentServer HTTP Mode", () => {
           method: "user_message",
           params: {
             content: "please use /mentioned-skill on the diff",
-            artifacts: [
-              makeArtifact(
-                "skill-artifact-mentioned",
-                "mentioned-skill",
-                mentionedBundle,
-              ),
-              makeArtifact("skill-artifact-prefix", "mentioned", prefixBundle),
-            ],
+            artifacts,
           },
         }),
       });

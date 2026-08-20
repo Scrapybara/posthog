@@ -1767,6 +1767,7 @@ class TestConversationSandboxRoute(APIBaseTest):
             {"content": "x" * 40001},  # over the content length cap
             {"content": "hello", "trace_id": "not-a-uuid"},  # malformed trace id
             {"content": "hello", "initial_permission_mode": "full-access"},  # Codex-only mode, not valid for Claude
+            {"content": "   ", "attachment_ids": [str(uuid.uuid4())]},
         ]
         for payload in bad_payloads:
             with patch("ee.api.conversation.SandboxSession") as m_session:

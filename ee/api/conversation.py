@@ -2,7 +2,7 @@ import time
 import uuid
 import asyncio
 from collections.abc import AsyncGenerator, Iterable
-from typing import cast
+from typing import Any, cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -228,18 +228,25 @@ def _validate_sandbox_task(task_id: uuid.UUID, team_id: int, user_id: int | None
 
 
 class SandboxOpenSerializer(serializers.Serializer):
-    """Request body for `POST /conversations/{id}/open/`. A string `content` processes a turn; a
-    null/absent `content` warms a sandbox that idles awaiting the first message."""
+    """Request body for `POST /conversations/{id}/open/`. Nonblank `content` processes a turn and may include
+    `attachment_ids`; null or absent `content` with no attachments warms a sandbox awaiting its first message."""
 
     content = serializers.CharField(
         required=False,
         allow_null=True,
         allow_blank=True,
         max_length=40000,
-        help_text="The user's message text. Omit or null to warm a sandbox (boot + idle) ahead of the first message.",
+        help_text="The user's message text. Omit or null to warm a sandbox ahead of the first message, unless attachment_ids are provided.",
     )
     trace_id = serializers.UUIDField(
         required=False, help_text="Client-generated trace id correlated with the resulting Run's SSE stream."
+    )
+    attachment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        min_length=1,
+        max_length=4,
+        help_text="Finalized sandbox image attachment IDs to send with this message.",
     )
     # Deprecated with the legacy Max bridge (see SandboxAttachedContextItemSerializer) — do not extend.
     attached_context = serializers.ListField(
@@ -263,6 +270,15 @@ class SandboxOpenSerializer(serializers.Serializer):
             "for an already-existing conversation."
         ),
     )
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        attachment_ids = attrs.get("attachment_ids") or []
+        if len(set(attachment_ids)) != len(attachment_ids):
+            raise serializers.ValidationError({"attachment_ids": "Attachment IDs must be unique."})
+        content = attrs.get("content") or ""
+        if attachment_ids and not content.strip():
+            raise serializers.ValidationError({"attachment_ids": "Attachment IDs require a message send."})
+        return attrs
 
     def validate_task_id(self, value: uuid.UUID) -> uuid.UUID:
         """Resolve the Task to bind, scoped to the team and the requesting user's visibility.
@@ -729,20 +745,27 @@ class ConversationViewSet(
         if conversation.task_id is not None:
             _validate_sandbox_task(conversation.task_id, self.team.id, request.user.id)
 
-        has_content = bool(serializer.validated_data.get("content"))
-        convert_to_acp, resumed_context = self._compute_sandbox_conversion(request, conversation, has_content)
+        content = serializer.validated_data.get("content") or ""
+        attachment_ids = serializer.validated_data.get("attachment_ids") or []
+        has_message = bool(content.strip()) or bool(attachment_ids)
+        convert_to_acp, resumed_context = self._compute_sandbox_conversion(request, conversation, has_message)
 
         # Sandbox-only endpoint. A converting LangGraph thread is still LANGGRAPH here (the flip happens
         # inside the routing service), so allow it through; reject any other non-sandbox conversation.
         if conversation.agent_runtime != Conversation.AgentRuntime.SANDBOX and not convert_to_acp:
             raise exceptions.ValidationError("This conversation is not on the sandbox runtime.")
 
-        if has_content and conversation.title is None:
-            conversation.title = serializer.validated_data["content"][:80]
+        if has_message and conversation.title is None:
+            conversation.title = content[:80] if content.strip() else "Image attachment"
             conversation.save(update_fields=["title"])
 
         return self._route_sandbox_message(
-            request, conversation, resumed_context=resumed_context, convert_to_acp=convert_to_acp, created=created
+            request,
+            conversation,
+            payload=serializer.validated_data,
+            resumed_context=resumed_context,
+            convert_to_acp=convert_to_acp,
+            created=created,
         )
 
     def _get_or_create_sandbox_conversation(
@@ -815,7 +838,7 @@ class ConversationViewSet(
             resumed_context = None
         return True, resumed_context
 
-    def _auto_route_repository(self, request: Request, conversation: Conversation, user: User) -> str | None:
+    def _auto_route_repository(self, payload: dict[str, Any], conversation: Conversation, user: User) -> str | None:
         """Auto-select the repository a sandbox conversation's first message is about.
 
         Runs only on a first message — no backing Task yet (`task_id is None`) and real content.
@@ -825,7 +848,7 @@ class ConversationViewSet(
         """
         if conversation.task_id is not None:
             return None
-        content = request.data.get("content")
+        content = payload.get("content")
         if not isinstance(content, str) or not content.strip():
             return None
         return asgi_async_to_sync(tasks_facade.select_repository_for_message)(
@@ -837,14 +860,15 @@ class ConversationViewSet(
         request: Request,
         conversation: Conversation,
         *,
+        payload: dict[str, Any],
         resumed_context: str | None = None,
         convert_to_acp: bool = False,
         created: bool = False,
     ) -> Response:
         user = cast(User, request.user)
-        repository = self._auto_route_repository(request, conversation, user)
+        repository = self._auto_route_repository(payload, conversation, user)
         result = SandboxSession(conversation, user).open(
-            request.data, resumed_context=resumed_context, convert_to_acp=convert_to_acp, repository=repository
+            payload, resumed_context=resumed_context, convert_to_acp=convert_to_acp, repository=repository
         )
         if result is None:
             # Warm intent that provisioned nothing (pool full / released) — no run to open. Drop the
@@ -852,8 +876,9 @@ class ConversationViewSet(
             if created:
                 conversation.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
-        content = request.data.get("content")
-        if isinstance(content, str) and content.strip():
+        content = payload.get("content")
+        attachment_ids = payload.get("attachment_ids") or []
+        if (isinstance(content, str) and content.strip()) or attachment_ids:
             report_user_action(
                 user,
                 "prompt sent",

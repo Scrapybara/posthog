@@ -242,7 +242,7 @@ class TaskRunUpdateSerializer(serializers.Serializer):
     )
 
 
-class TaskRunArtifactMetadataSerializer(serializers.Serializer):
+class TaskRunSkillBundleMetadataSerializer(serializers.Serializer):
     skill_name = serializers.CharField(
         allow_blank=False,
         max_length=255,
@@ -266,15 +266,44 @@ class TaskRunArtifactMetadataSerializer(serializers.Serializer):
     )
 
 
+class TaskRunImageAttachmentMetadataSerializer(serializers.Serializer):
+    conversation_id = serializers.UUIDField(
+        help_text="PostHog AI conversation that supplied a user attachment.",
+    )
+    width = serializers.IntegerField(
+        min_value=1,
+        help_text="Normalized image width in pixels for a user attachment.",
+    )
+    height = serializers.IntegerField(
+        min_value=1,
+        help_text="Normalized image height in pixels for a user attachment.",
+    )
+
+
+@extend_schema_field(
+    PolymorphicProxySerializer(
+        component_name="TaskRunArtifactMetadata",
+        serializers=[TaskRunSkillBundleMetadataSerializer, TaskRunImageAttachmentMetadataSerializer],
+        resource_type_field_name=None,
+    )
+)
+class TaskRunArtifactMetadataField(serializers.JSONField):
+    pass
+
+
 def validate_task_run_artifact_metadata(attrs: dict[str, Any]) -> dict[str, Any]:
     artifact_type = attrs.get("type")
     metadata = attrs.get("metadata")
 
     if artifact_type != "skill_bundle":
+        if metadata:
+            TaskRunImageAttachmentMetadataSerializer(data=metadata).is_valid(raise_exception=True)
         return attrs
 
     if not metadata:
         raise serializers.ValidationError({"metadata": "Skill bundle artifacts require metadata"})
+
+    TaskRunSkillBundleMetadataSerializer(data=metadata).is_valid(raise_exception=True)
 
     return attrs
 
@@ -290,7 +319,7 @@ class TaskRunArtifactResponseSerializer(serializers.Serializer):
     )
     size = serializers.IntegerField(required=False, help_text="Artifact size in bytes")
     content_type = serializers.CharField(required=False, allow_blank=True, help_text="Optional MIME type")
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -914,7 +943,7 @@ class TaskRunArtifactUploadSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Optional MIME type for the artifact",
     )
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1201,7 +1230,7 @@ class TaskRunArtifactPrepareUploadSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Optional MIME type for the artifact upload",
     )
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1248,7 +1277,7 @@ class TaskRunArtifactPrepareUploadResponseSerializer(serializers.Serializer):
     )
     size = serializers.IntegerField(help_text="Expected upload size in bytes")
     content_type = serializers.CharField(required=False, allow_blank=True, help_text="Optional MIME type")
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1281,7 +1310,7 @@ class TaskRunArtifactFinalizeUploadSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Optional MIME type recorded for the artifact",
     )
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1324,7 +1353,7 @@ class TaskStagedArtifactPrepareUploadSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Optional MIME type for the artifact upload",
     )
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1365,7 +1394,7 @@ class TaskStagedArtifactPrepareUploadResponseSerializer(serializers.Serializer):
     )
     size = serializers.IntegerField(help_text="Expected upload size in bytes")
     content_type = serializers.CharField(required=False, allow_blank=True, help_text="Optional MIME type")
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )
@@ -1404,7 +1433,7 @@ class TaskStagedArtifactFinalizeUploadSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Optional MIME type recorded for the artifact",
     )
-    metadata = TaskRunArtifactMetadataSerializer(
+    metadata = TaskRunArtifactMetadataField(
         required=False,
         help_text="Optional structured metadata for special artifact types, such as skill bundles.",
     )

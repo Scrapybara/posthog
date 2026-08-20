@@ -23,6 +23,15 @@ from posthog.exceptions import Conflict
 from posthog.models.user import User
 from posthog.storage import object_storage
 
+from products.posthog_ai.backend.attachments import (
+    AttachmentNotFoundError,
+    AttachmentPromotion,
+    AttachmentValidationError,
+    commit_attachment_promotion,
+    promote_attachments,
+    rollback_attachment_promotion,
+    validate_new_run_attachments,
+)
 from products.posthog_ai.backend.context_wrapper import (
     ALLOWED_TYPES,
     MAX_ATTACHED_ITEMS,
@@ -128,20 +137,22 @@ class SandboxSession(BaseSandboxService):
     ) -> SandboxRouteResult | None:
         initial_permission_mode = self._initial_permission_mode(data.get("initial_permission_mode"))
         content = data.get("content")
-        if not isinstance(content, str) or not content.strip():
-            # No message — warm intent: boot a Run that idles awaiting the first `user_message`.
-            # Returns the warm handle, or None when the pool is full and nothing was provisioned.
-            return self._warm(trace_id=data.get("trace_id"), initial_permission_mode=initial_permission_mode)
+        trace_value = data.get("trace_id")
+        trace_id = str(trace_value) if trace_value is not None else None
+        attachment_ids = [str(attachment_id) for attachment_id in (data.get("attachment_ids") or [])]
+        if attachment_ids and not (isinstance(content, str) and content.strip()):
+            raise exceptions.ValidationError("Attachment IDs require a message send.")
+        has_message = isinstance(content, str) and bool(content.strip())
+        if not has_message:
+            return self._warm(trace_id=trace_id, initial_permission_mode=initial_permission_mode)
 
-        trace_id = data.get("trace_id")
         attached_context = self._validate_attached_context(data.get("attached_context"))
+        normalized_content = content if isinstance(content, str) else ""
 
         if self.conversation.task_id is None:
-            # `resumed_context` / `convert_to_acp` only apply to the conversion event, which is
-            # always a first message (the gate requires `task_id is None`). `repository` is the
-            # auto-routed repo for this first message — followups/resumes reuse the existing Task.
             return self._handle_first_message(
-                content=content,
+                content=normalized_content,
+                attachment_ids=attachment_ids,
                 trace_id=trace_id,
                 attached_context=attached_context,
                 initial_permission_mode=initial_permission_mode,
@@ -160,12 +171,13 @@ class SandboxSession(BaseSandboxService):
         context_service = ContextService()
         prior_seen = self._collect_seen_entity_refs(current_run)
         deduped = context_service.prune_repeated_entity_refs(attached_context, prior=prior_seen)
-        wrapped = context_service.wrap_user_message(content, deduped)
+        wrapped = context_service.wrap_user_message(normalized_content, deduped)
 
         if current_run.status in self._IN_PROGRESS_STATUSES:
             return self._handle_in_progress_followup(
                 run=current_run,
                 wrapped=wrapped,
+                attachment_ids=attachment_ids,
                 trace_id=trace_id,
                 attached_context=attached_context,
             )
@@ -173,6 +185,7 @@ class SandboxSession(BaseSandboxService):
         return self._handle_terminal_resume(
             run=current_run,
             wrapped=wrapped,
+            attachment_ids=attachment_ids,
             trace_id=trace_id,
             attached_context=attached_context,
             initial_permission_mode=initial_permission_mode,
@@ -256,6 +269,7 @@ class SandboxSession(BaseSandboxService):
         self,
         *,
         content: str,
+        attachment_ids: list[str],
         trace_id: str | None,
         attached_context: list[AttachedContext],
         initial_permission_mode: InitialPermissionMode,
@@ -272,12 +286,25 @@ class SandboxSession(BaseSandboxService):
             # sandbox agent has continuity, then the user's own attachments + message.
             wrapped = f"{resumed_context}\n\n{wrapped}"
 
+        if attachment_ids:
+            try:
+                validate_new_run_attachments(
+                    team_id=self.team.id,
+                    user_id=self.user.pk,
+                    conversation_id=self.conversation.id,
+                    attachment_ids=attachment_ids,
+                )
+            except (AttachmentNotFoundError, AttachmentValidationError) as error:
+                raise exceptions.ValidationError(str(error)) from error
+
         system_prompt = PromptService(self.team, self.user).build()
 
+        task_title = content[:80] if content.strip() else "Image attachment"
+        task_description = content or "Image attachment"
         created = tasks_facade.create_and_run_task(
             team=self.team,
-            title=content[:80],
-            description=content,
+            title=task_title,
+            description=task_description,
             origin_product=tasks_facade.TaskOriginProduct.POSTHOG_AI,
             user_id=self.user.pk,
             repository=repository,
@@ -293,46 +320,47 @@ class SandboxSession(BaseSandboxService):
         if run_dto is None:
             raise exceptions.ValidationError("Failed to create sandbox task run.")
 
-        # Seed the PostHog AI per-Run state keys. `attached_context` keeps the full,
-        # undeduped list. These aren't `create_and_run` arguments, so merge them into the
-        # run state here, before the workflow starts and reads it. `exclude_unset` keeps the
-        # merge limited to exactly these keys — model defaults must not leak into the bag.
-        ph_state = PostHogAIRunState(
-            system_prompt=system_prompt,
-            attached_context=attached_context,
-            initial_permission_mode=initial_permission_mode,
-            interaction_origin=POSTHOG_AI_INTERACTION_ORIGIN,
-            pending_user_message=wrapped,
-        )
-        state_updates = ph_state.model_dump(mode="json", by_alias=True, exclude_unset=True)
-        # Persist the enriched run state and conversation linkage together, under the row lock so a
-        # concurrent first message / conversion in another tab can't double-link. Re-check
-        # `task_id is None` inside the lock; a half-write would orphan the run (enriched state, but
-        # conversation.task still NULL) and the next retry would look like a fresh first message. On
-        # a conversion, the runtime flip to sandbox happens here too, atomically with the link.
-        with lock_conversation_for_followup(str(self.conversation.id), self.team.pk) as locked:
-            if locked.task_id is not None:
-                raise Conflict("This conversation was just resumed in another tab. Please try again.")
-            tasks_facade.update_task_run_state(run_dto.id, updates=state_updates)
-            locked.task_id = created.task_id
-            update_fields = ["task", "updated_at"]
-            if convert_to_acp:
-                locked.agent_runtime = Conversation.AgentRuntime.SANDBOX
-                update_fields = ["task", "agent_runtime", "updated_at"]
-            locked.save(update_fields=update_fields)
-
-        # Mirror the committed writes onto the in-memory instance for the response + the rollback below.
-        self.conversation.task_id = created.task_id
-        if convert_to_acp:
-            self.conversation.agent_runtime = Conversation.AgentRuntime.SANDBOX
-
-        # Start the run after the commit. `posthog_mcp_scopes="full"` mirrors the legacy
-        # first-message path: the agent creates insights, dashboards, and notebooks, so it
-        # needs write scopes (the workflow client otherwise defaults to read-only). If the
-        # start fails, un-link the conversation so the user's retry is a fresh first message
-        # rather than a follow-up onto a run that never started; on a conversion, also revert the
-        # runtime flip so the user is left on a clean idle LangGraph conversation.
+        promotion = None
+        linked_conversation = False
         try:
+            if attachment_ids:
+                try:
+                    promotion = promote_attachments(
+                        team_id=self.team.id,
+                        user_id=self.user.pk,
+                        conversation_id=self.conversation.id,
+                        task_id=str(created.task_id),
+                        run_id=str(run_dto.id),
+                        attachment_ids=attachment_ids,
+                    )
+                except (AttachmentNotFoundError, AttachmentValidationError) as error:
+                    raise exceptions.ValidationError(str(error)) from error
+
+            ph_state = PostHogAIRunState(
+                system_prompt=system_prompt,
+                attached_context=attached_context,
+                initial_permission_mode=initial_permission_mode,
+                interaction_origin=POSTHOG_AI_INTERACTION_ORIGIN,
+                pending_user_message=wrapped,
+                pending_user_artifact_ids=promotion.attachment_ids if promotion is not None else None,
+            )
+            state_updates = ph_state.model_dump(mode="json", by_alias=True, exclude_unset=True)
+            with lock_conversation_for_followup(str(self.conversation.id), self.team.pk) as locked:
+                if locked.task_id is not None:
+                    raise Conflict("This conversation was just resumed in another tab. Please try again.")
+                tasks_facade.update_task_run_state(run_dto.id, updates=state_updates)
+                locked.task_id = created.task_id
+                update_fields = ["task", "updated_at"]
+                if convert_to_acp:
+                    locked.agent_runtime = Conversation.AgentRuntime.SANDBOX
+                    update_fields = ["task", "agent_runtime", "updated_at"]
+                locked.save(update_fields=update_fields)
+                linked_conversation = True
+
+            self.conversation.task_id = created.task_id
+            if convert_to_acp:
+                self.conversation.agent_runtime = Conversation.AgentRuntime.SANDBOX
+
             execute_task_processing_workflow(
                 task_id=str(created.task_id),
                 run_id=str(run_dto.id),
@@ -341,13 +369,22 @@ class SandboxSession(BaseSandboxService):
                 create_pr=False,
                 posthog_mcp_scopes="full",
             )
+            self._commit_attachment_promotion(promotion, run_id=str(run_dto.id))
         except Exception:
-            self.conversation.task_id = None
-            revert_fields = ["task", "updated_at"]
-            if convert_to_acp:
-                self.conversation.agent_runtime = Conversation.AgentRuntime.LANGGRAPH
-                revert_fields = ["task", "agent_runtime", "updated_at"]
-            self.conversation.save(update_fields=revert_fields)
+            rollback_attachment_promotion(promotion)
+            tasks_facade.claim_and_fail_stale_run(run_dto.id, "Failed to start the sandbox run.")
+            if linked_conversation:
+                with lock_conversation_for_followup(str(self.conversation.id), self.team.pk) as locked:
+                    if locked.task_id == created.task_id:
+                        locked.task_id = None
+                        update_fields = ["task", "updated_at"]
+                        if convert_to_acp:
+                            locked.agent_runtime = Conversation.AgentRuntime.LANGGRAPH
+                            update_fields = ["task", "agent_runtime", "updated_at"]
+                        locked.save(update_fields=update_fields)
+                        self.conversation.task_id = None
+                        if convert_to_acp:
+                            self.conversation.agent_runtime = Conversation.AgentRuntime.LANGGRAPH
             raise
 
         return SandboxRouteResult(
@@ -364,6 +401,7 @@ class SandboxSession(BaseSandboxService):
         *,
         run: "TaskRun",
         wrapped: str,
+        attachment_ids: list[str],
         trace_id: str | None,
         attached_context: list[AttachedContext],
     ) -> SandboxRouteResult:
@@ -373,9 +411,28 @@ class SandboxSession(BaseSandboxService):
         The full undeduped context is recorded on the logged message's
         `_meta.attached_context` so the persisted ACP log stays a complete record.
         """
+        promotion = None
+        if attachment_ids:
+            try:
+                promotion = promote_attachments(
+                    team_id=self.team.id,
+                    user_id=self.user.pk,
+                    conversation_id=self.conversation.id,
+                    task_id=str(run.task_id),
+                    run_id=str(run.id),
+                    attachment_ids=attachment_ids,
+                )
+            except (AttachmentNotFoundError, AttachmentValidationError) as error:
+                raise exceptions.ValidationError(str(error)) from error
         try:
-            signal_task_followup_message(run.workflow_id, wrapped, artifact_ids=[])
+            signal_task_followup_message(
+                run.workflow_id,
+                wrapped,
+                artifact_ids=attachment_ids,
+                message_id=trace_id,
+            )
         except Exception as e:
+            rollback_attachment_promotion(promotion)
             # Status race: the run still reads in-progress but its workflow has already finished or
             # was terminated, so the signal can't be delivered. Surface a recoverable conflict
             # instead of an unhandled 500, and don't log the turn — a retry then routes cleanly
@@ -387,6 +444,8 @@ class SandboxSession(BaseSandboxService):
                 error=str(e),
             )
             raise Conflict("The sandbox run is no longer accepting messages. Please try again.") from e
+
+        self._commit_attachment_promotion(promotion, run_id=str(run.id))
 
         # The Run has received its first human message, so it is no longer speculative — drop the
         # warm flag so the warm-pool cap stops counting it (it's now an active Run governed by AI
@@ -400,7 +459,7 @@ class SandboxSession(BaseSandboxService):
         try:
             # Persist only after the signal was accepted, so the log never records a message the
             # agent never received.
-            self._log_user_message(run, wrapped, attached_context)
+            self._log_user_message(run, wrapped, attached_context, attachment_ids)
         except Exception as e:
             # The agent already has the message; a log-append failure must not fail the request —
             # it only degrades context-dedup on the next follow-up.
@@ -420,6 +479,7 @@ class SandboxSession(BaseSandboxService):
         *,
         run: "TaskRun",
         wrapped: str,
+        attachment_ids: list[str],
         trace_id: str | None,
         attached_context: list[AttachedContext],
         initial_permission_mode: InitialPermissionMode,
@@ -440,6 +500,17 @@ class SandboxSession(BaseSandboxService):
         task = self.conversation.task
         if task is None:
             raise exceptions.ValidationError("This conversation has no backing task to resume.")
+
+        if attachment_ids:
+            try:
+                validate_new_run_attachments(
+                    team_id=self.team.id,
+                    user_id=self.user.pk,
+                    conversation_id=self.conversation.id,
+                    attachment_ids=attachment_ids,
+                )
+            except (AttachmentNotFoundError, AttachmentValidationError) as error:
+                raise exceptions.ValidationError(str(error)) from error
 
         system_prompt = PromptService(self.team, self.user).build()
 
@@ -466,16 +537,40 @@ class SandboxSession(BaseSandboxService):
 
             new_run = task.create_run(mode="interactive", extra_state=extra_state)
 
-        # Same write scopes as the first message — the resumed agent keeps creating
-        # insights/dashboards/notebooks on follow-up turns.
-        execute_task_processing_workflow(
-            task_id=str(task.id),
-            run_id=str(new_run.id),
-            team_id=self.team.id,
-            user_id=self.user.pk,
-            create_pr=False,
-            posthog_mcp_scopes="full",
-        )
+        promotion = None
+        try:
+            if attachment_ids:
+                try:
+                    promotion = promote_attachments(
+                        team_id=self.team.id,
+                        user_id=self.user.pk,
+                        conversation_id=self.conversation.id,
+                        task_id=str(task.id),
+                        run_id=str(new_run.id),
+                        attachment_ids=attachment_ids,
+                    )
+                except (AttachmentNotFoundError, AttachmentValidationError) as error:
+                    raise exceptions.ValidationError(str(error)) from error
+                if promotion is None:
+                    raise exceptions.ValidationError("Failed to attach images to the sandbox run.")
+                tasks_facade.update_task_run_state(
+                    new_run.id,
+                    updates={"pending_user_artifact_ids": promotion.attachment_ids},
+                )
+
+            execute_task_processing_workflow(
+                task_id=str(task.id),
+                run_id=str(new_run.id),
+                team_id=self.team.id,
+                user_id=self.user.pk,
+                create_pr=False,
+                posthog_mcp_scopes="full",
+            )
+            self._commit_attachment_promotion(promotion, run_id=str(new_run.id))
+        except Exception:
+            rollback_attachment_promotion(promotion)
+            tasks_facade.claim_and_fail_stale_run(new_run.id, "Failed to resume the sandbox run.")
+            raise
 
         return SandboxRouteResult(
             task_id=str(task.id),
@@ -485,6 +580,12 @@ class SandboxSession(BaseSandboxService):
             just_created_run=True,
             attached_context_count=len(attached_context),
         )
+
+    def _commit_attachment_promotion(self, promotion: AttachmentPromotion | None, *, run_id: str) -> None:
+        try:
+            commit_attachment_promotion(promotion)
+        except Exception as error:
+            logger.warning("sandbox_attachment_delivery_commit_failed", run_id=run_id, error=str(error))
 
     def _collect_seen_entity_refs(self, run: "TaskRun") -> list[tuple[str, str | int]]:
         """Collect `(type, id)` pairs for entities already named in the conversation.
@@ -532,18 +633,24 @@ class SandboxSession(BaseSandboxService):
 
         return seen
 
-    def _log_user_message(self, run: "TaskRun", wrapped: str, attached_context: list[AttachedContext]) -> None:
+    def _log_user_message(
+        self,
+        run: "TaskRun",
+        wrapped: str,
+        attached_context: list[AttachedContext],
+        artifact_ids: list[str],
+    ) -> None:
         """Append a `_posthog/user_message` entry to the Run's ACP log.
 
-        Records the wrapped content plus the full undeduped `attached_context` under
-        `_meta` so the persisted log is a complete per-message record that
-        `_collect_seen_entity_refs` reads on later follow-ups.
+        Records the wrapped content, attachment ids, and the full undeduped
+        `attached_context` so the persisted log is a complete per-message record.
         """
         entry = {
             "notification": {
                 "method": "_posthog/user_message",
                 "params": {
                     "content": wrapped,
+                    "artifact_ids": artifact_ids,
                     "_meta": {"attached_context": attached_context},
                 },
             }

@@ -526,18 +526,24 @@ export const InitialPermissionModeEnumApi = {
 } as const
 
 /**
- * Request body for `POST /conversations/{id}/open/`. A string `content` processes a turn; a
- * null/absent `content` warms a sandbox that idles awaiting the first message.
+ * Request body for `POST /conversations/{id}/open/`. Nonblank `content` processes a turn and may include
+ * `attachment_ids`; null or absent `content` with no attachments warms a sandbox awaiting its first message.
  */
 export interface SandboxOpenApi {
     /**
-     * The user's message text. Omit or null to warm a sandbox (boot + idle) ahead of the first message.
+     * The user's message text. Omit or null to warm a sandbox ahead of the first message, unless attachment_ids are provided.
      * @maxLength 40000
      * @nullable
      */
     content?: string | null
     /** Client-generated trace id correlated with the resulting Run's SSE stream. */
     trace_id?: string
+    /**
+     * Finalized sandbox image attachment IDs to send with this message.
+     * @minItems 1
+     * @maxItems 4
+     */
+    attachment_ids?: string[]
     /** Typed PostHog entities (and free text) attached to this message. */
     attached_context?: SandboxAttachedContextItemApi[]
     /** Initial permission mode for the sandbox agent session. Defaults to `auto`, which allows safe tool use while preserving explicit confirmations.

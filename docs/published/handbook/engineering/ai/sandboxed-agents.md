@@ -51,6 +51,14 @@ The agent inside the sandbox gets:
 - Access to the **PostHog MCP server** for querying data
 - **Code execution** capabilities within the sandbox
 
+### PostHog AI screenshot context
+
+PostHog AI sandbox conversations can include up to four PNG or JPEG screenshots with a nonblank message. Each image can be up to 4 MiB, and the images in one message can total up to 10 MiB.
+
+The browser uploads each image directly to object storage through a 15-minute signed form. The API validates and normalizes the image before it promotes a separate copy into the task run's artifact manifest. Only opaque attachment IDs pass through Temporal and the agent command protocol, so image bytes and storage credentials never enter workflow payloads.
+
+Staged uploads are scoped to one team, user, and conversation. The agent server resolves promoted IDs only from the current task run and accepts normalized PNG or JPEG context artifacts uploaded by a user.
+
 ## Creating a sandboxed agent
 
 Use `Task.create_and_run()` to launch a sandboxed agent from your product code:

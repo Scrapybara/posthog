@@ -7,6 +7,7 @@ from rest_framework import exceptions
 
 from posthog.exceptions import Conflict, QuotaLimitExceeded
 
+from products.posthog_ai.backend.attachments import AttachmentPromotion
 from products.posthog_ai.backend.context_wrapper import MAX_ATTACHED_ITEMS, MAX_TEXT_LENGTH
 from products.posthog_ai.backend.message_routing import (
     POSTHOG_AI_INTERACTION_ORIGIN,
@@ -136,6 +137,37 @@ class TestOpenSandboxMessage(APIBaseTest):
         assert run.state["pending_user_message"] == "Hello"
         assert run.state["attached_context"] == []
 
+    def test_first_message_conflict_does_not_clear_winner_task_link(self):
+        task, orphan_run = self._stub_task()
+        winning_task, _ = self._stub_task()
+        Conversation.objects.filter(id=self.conversation.id).update(task_id=winning_task.id)
+
+        car, workflow, sysprompt = self._patches(task)
+        with car, workflow, sysprompt, self.assertRaises(Conflict):
+            self._service().open({"content": "Hello", "trace_id": "t"})
+
+        self.conversation.refresh_from_db()
+        orphan_run.refresh_from_db()
+        assert self.conversation.task_id == winning_task.id
+        assert orphan_run.status == TaskRun.Status.FAILED
+
+    def test_attachment_ids_require_nonblank_message(self):
+        with self.assertRaises(exceptions.ValidationError):
+            self._service().open({"content": "   ", "attachment_ids": ["att-1"]})
+
+    def test_first_message_rejects_invalid_attachment_before_creating_task(self):
+        with (
+            patch(
+                f"{ROUTING}.validate_new_run_attachments",
+                side_effect=exceptions.ValidationError("not found"),
+            ),
+            patch.object(Task, "create_and_run") as create_and_run,
+            self.assertRaises(exceptions.ValidationError),
+        ):
+            self._service().open({"content": "inspect", "attachment_ids": ["att-1"]})
+
+        create_and_run.assert_not_called()
+
     def test_unknown_attached_context_type_raises(self):
         with self.assertRaises(exceptions.ValidationError):
             self._service().open({"content": "x", "attached_context": [{"type": "bogus", "id": 1}]})
@@ -190,6 +222,7 @@ class TestOpenSandboxMessage(APIBaseTest):
         signal_args, _ = m_signal.call_args
         assert signal_args[0] == run.workflow_id
         assert "and the mobile funnel?" in signal_args[1]
+        assert m_signal.call_args.kwargs["message_id"] == "trace-2"
         assert task.runs.count() == 1
 
         # The follow-up is logged with the full undeduped attached_context on _meta.
@@ -197,6 +230,36 @@ class TestOpenSandboxMessage(APIBaseTest):
         logged_entries = m_append.call_args[0][0]
         meta = logged_entries[0]["notification"]["params"]["_meta"]
         assert meta["attached_context"] == [{"type": "insight", "id": "abc"}]
+
+    def test_in_progress_followup_logs_artifact_ids(self):
+        task, run = self._stub_task()
+        run.status = TaskRun.Status.IN_PROGRESS
+        run.save(update_fields=["status"])
+        self._attach_task(task)
+        promotion = AttachmentPromotion(
+            attachment_ids=["att-1"],
+            newly_attached_ids=["att-1"],
+            task_id=str(task.id),
+            run_id=str(run.id),
+            records=[
+                {
+                    "id": "att-1",
+                    "team_id": self.team.id,
+                    "user_id": self.user.id,
+                    "conversation_id": str(self.conversation.id),
+                }
+            ],
+        )
+
+        with (
+            patch(f"{ROUTING}.promote_attachments", return_value=promotion),
+            patch(f"{ROUTING}.signal_task_followup_message"),
+            patch.object(TaskRun, "append_log") as m_append,
+        ):
+            self._service().open({"content": "follow up", "attachment_ids": ["att-1"], "attached_context": []})
+
+        logged_entries = m_append.call_args[0][0]
+        assert logged_entries[0]["notification"]["params"]["artifact_ids"] == ["att-1"]
 
     def test_in_progress_followup_clears_warm_flag(self):
         # A warm Run that receives its first human message is no longer speculative — the warm flag is
@@ -290,6 +353,95 @@ class TestOpenSandboxMessage(APIBaseTest):
         assert m_workflow.call_args.kwargs["run_id"] == str(new_run.id)
         # The resumed agent keeps the same write scopes as the first message.
         assert m_workflow.call_args.kwargs["posthog_mcp_scopes"] == "full"
+
+    def test_terminal_followup_rejects_invalid_attachment_before_creating_run(self):
+        task, run = self._stub_task()
+        run.status = TaskRun.Status.COMPLETED
+        run.save(update_fields=["status"])
+        self._attach_task(task)
+
+        with (
+            patch(
+                f"{ROUTING}.validate_new_run_attachments",
+                side_effect=exceptions.ValidationError("not found"),
+            ),
+            self.assertRaises(exceptions.ValidationError),
+        ):
+            self._service().open({"content": "inspect", "attachment_ids": ["att-1"]})
+
+        assert task.runs.count() == 1
+
+    def test_terminal_followup_sets_pending_artifact_ids_after_promotion(self):
+        task, run = self._stub_task()
+        run.status = TaskRun.Status.COMPLETED
+        run.save(update_fields=["status"])
+        self._attach_task(task)
+        promotion = AttachmentPromotion(
+            attachment_ids=["att-1"],
+            newly_attached_ids=["att-1"],
+            task_id=str(task.id),
+            run_id="ignored",
+            records=[
+                {
+                    "id": "att-1",
+                    "team_id": self.team.id,
+                    "user_id": self.user.id,
+                    "conversation_id": str(self.conversation.id),
+                }
+            ],
+        )
+
+        with (
+            patch.object(PromptService, "build", return_value=SYS_PROMPT),
+            patch(f"{ROUTING}.validate_new_run_attachments"),
+            patch(f"{ROUTING}.promote_attachments", return_value=promotion),
+            patch(f"{ROUTING}.execute_task_processing_workflow"),
+            patch.object(Task, "create_run", wraps=task.create_run) as m_create_run,
+        ):
+            result = self._service().open({"content": "resume please", "attachment_ids": ["att-1"]})
+
+        assert result is not None
+        extra_state = m_create_run.call_args.kwargs["extra_state"]
+        assert "pending_user_artifact_ids" not in extra_state
+        new_run = task.runs.order_by("-created_at").first()
+        assert new_run is not None
+        assert new_run.state["pending_user_artifact_ids"] == ["att-1"]
+
+    def test_terminal_followup_workflow_failure_rolls_back_and_fails_run(self):
+        task, run = self._stub_task()
+        run.status = TaskRun.Status.COMPLETED
+        run.save(update_fields=["status"])
+        self._attach_task(task)
+        promotion = AttachmentPromotion(
+            attachment_ids=["att-1"],
+            newly_attached_ids=["att-1"],
+            task_id=str(task.id),
+            run_id="ignored",
+            records=[
+                {
+                    "id": "att-1",
+                    "team_id": self.team.id,
+                    "user_id": self.user.id,
+                    "conversation_id": str(self.conversation.id),
+                }
+            ],
+        )
+
+        with (
+            patch.object(PromptService, "build", return_value=SYS_PROMPT),
+            patch(f"{ROUTING}.validate_new_run_attachments"),
+            patch(f"{ROUTING}.promote_attachments", return_value=promotion),
+            patch(f"{ROUTING}.rollback_attachment_promotion") as m_rollback,
+            patch(f"{ROUTING}.execute_task_processing_workflow", side_effect=RuntimeError("boom")),
+        ):
+            with self.assertRaises(RuntimeError):
+                self._service().open({"content": "resume please", "attachment_ids": ["att-1"]})
+
+        new_run = task.runs.order_by("-created_at").first()
+        assert new_run is not None
+        new_run.refresh_from_db()
+        m_rollback.assert_called_once()
+        assert new_run.status == TaskRun.Status.FAILED
 
     def test_dedupes_entities_named_in_prior_run_state(self):
         task, run = self._stub_task()

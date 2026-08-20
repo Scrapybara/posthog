@@ -288,13 +288,23 @@ export type ArtifactSource =
   | "user_attachment"
   | "posthog_code_skill";
 
-export interface TaskRunArtifactMetadata {
+export interface TaskRunSkillBundleMetadata {
   skill_name: string;
   skill_source: UploadableSkillSource;
   content_sha256: string;
   bundle_format: "zip";
   schema_version: number;
 }
+
+export interface TaskRunImageAttachmentMetadata {
+  conversation_id: string;
+  width: number;
+  height: number;
+}
+
+export type TaskRunArtifactMetadata =
+  | TaskRunSkillBundleMetadata
+  | TaskRunImageAttachmentMetadata;
 
 export interface TaskRunArtifact {
   id?: string;

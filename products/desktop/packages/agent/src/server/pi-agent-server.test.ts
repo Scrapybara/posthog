@@ -342,8 +342,28 @@ describe("PiAgentServer", () => {
       .fn()
       .mockResolvedValueOnce(Buffer.from("notes"))
       .mockResolvedValueOnce(Buffer.from("image"));
+    const artifacts = [
+      {
+        id: "file-1",
+        name: "notes.txt",
+        type: "user_attachment",
+        content_type: "text/plain",
+        storage_path: "artifacts/notes.txt",
+      },
+      {
+        id: "image-1",
+        name: "image.png",
+        type: "user_attachment",
+        content_type: "image/png",
+        storage_path: "artifacts/image.png",
+      },
+    ];
+    const getTaskRun = vi.fn(async () => ({ artifacts }));
     const server = new PiAgentServer(config({ repositoryPath })) as unknown as {
-      posthogAPI: { downloadArtifact: typeof downloadArtifact };
+      posthogAPI: {
+        downloadArtifact: typeof downloadArtifact;
+        getTaskRun: typeof getTaskRun;
+      };
       session: unknown;
       executeCommand(
         method: string,
@@ -351,6 +371,7 @@ describe("PiAgentServer", () => {
       ): Promise<unknown>;
     };
     server.posthogAPI.downloadArtifact = downloadArtifact;
+    server.posthogAPI.getTaskRun = getTaskRun;
     server.session = {
       runtime: {
         client: {
@@ -362,22 +383,7 @@ describe("PiAgentServer", () => {
 
     await server.executeCommand("user_message", {
       content: "Read these",
-      artifacts: [
-        {
-          id: "file-1",
-          name: "notes.txt",
-          type: "user_attachment",
-          content_type: "text/plain",
-          storage_path: "artifacts/notes.txt",
-        },
-        {
-          id: "image-1",
-          name: "image.png",
-          type: "user_attachment",
-          content_type: "image/png",
-          storage_path: "artifacts/image.png",
-        },
-      ],
+      artifacts,
     });
 
     const command = sendCommand.mock.calls[0][0];

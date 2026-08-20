@@ -4,6 +4,7 @@ from uuid import UUID
 from rest_framework.exceptions import ValidationError
 
 from posthog.schema import (
+    AccountHealthNoDataReason,
     AccountsTableAccountFieldColumn,
     AccountsTableAccountIdFilter,
     AccountsTableAggregateMetric,
@@ -27,12 +28,15 @@ from posthog.schema import (
 )
 
 from posthog.hogql.constants import get_default_limit_for_context, get_max_limit_for_context
+from posthog.hogql.errors import BaseHogQLError
 
+from posthog.errors import InternalCHQueryError
 from posthog.hogql_queries.query_runner import AnalyticsQueryRunner
 from posthog.models import User
 from posthog.rbac.user_access_control import UserAccessControl, UserAccessControlError
 
 from products.customer_analytics.backend.facade import api, contracts
+from products.customer_analytics.backend.hogql_queries.account_health import AccountHealthScorer, no_data_account_health
 
 ACCOUNTS_TABLE_MAX_COLUMNS = 100
 ACCOUNTS_TABLE_MAX_FILTERS = 50
@@ -254,6 +258,21 @@ class AccountsTableQueryRunner(AnalyticsQueryRunner[AccountsTableQueryResponse])
         except api.InvalidAccountTableColumn as error:
             raise ValidationError(str(error)) from error
 
+        health_scorer = AccountHealthScorer(
+            team=self.team,
+            timings=self.timings,
+            modifiers=self.modifiers,
+            user=self.user,
+        )
+        try:
+            health_by_external_id = health_scorer.score_external_ids(row.external_id for row in page.rows)
+        except (BaseHogQLError, InternalCHQueryError, ValueError):
+            health_by_external_id = {
+                row.external_id: no_data_account_health(AccountHealthNoDataReason.CALCULATION_ERROR)
+                for row in page.rows
+                if row.external_id is not None
+            }
+
         return AccountsTableQueryResponse(
             results=[
                 AccountsTableRow(
@@ -276,6 +295,14 @@ class AccountsTableQueryRunner(AnalyticsQueryRunner[AccountsTableQueryResponse])
                         ]
                         for definition_id, points in row.custom_property_history.items()
                     },
+                    health=(
+                        health_by_external_id.get(
+                            row.external_id,
+                            no_data_account_health(AccountHealthNoDataReason.CALCULATION_ERROR),
+                        )
+                        if row.external_id is not None
+                        else no_data_account_health(AccountHealthNoDataReason.MISSING_EXTERNAL_ID)
+                    ),
                 )
                 for row in page.rows
             ],
@@ -283,3 +310,14 @@ class AccountsTableQueryRunner(AnalyticsQueryRunner[AccountsTableQueryResponse])
             limit=page.limit,
             offset=page.offset,
         )
+
+    def get_cache_payload(self) -> dict:
+        payload = super().get_cache_payload()
+        if self.query.metrics is None:
+            payload["account_health"] = AccountHealthScorer(
+                team=self.team,
+                timings=self.timings,
+                modifiers=self.modifiers,
+                user=self.user,
+            ).cache_fingerprint()
+        return payload

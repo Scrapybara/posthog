@@ -13,6 +13,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, con
 from posthog.schema_discriminators import property_filter_discriminator
 from posthog.schema_enums import (
     AccessControlLevel as AccessControlLevel,
+    AccountHealthNoDataReason as AccountHealthNoDataReason,
+    AccountHealthStatus as AccountHealthStatus,
     AccountsTableAccountField as AccountsTableAccountField,
     AccountsTableAggregation as AccountsTableAggregation,
     AccountsTableCustomPropertyOperator as AccountsTableCustomPropertyOperator,
@@ -3081,6 +3083,39 @@ class AccountCustomPropertyFilter(BaseModel):
     value: list[str | float | bool] | str | float | bool | None = None
 
 
+class AccountHealthFactor(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    contribution: float | None = Field(
+        ...,
+        description=("Points this factor adds to the overall score after equal weighting."),
+    )
+    current: float
+    metricId: str
+    metricName: str
+    normalizedScore: int | None = Field(
+        ...,
+        description="Current usage retained from the previous period, capped at 100.",
+    )
+    previous: float
+
+
+class AccountHealthScore(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    computedAt: AwareDatetime
+    currentPeriodStart: AwareDatetime
+    factors: list[AccountHealthFactor]
+    isLimited: bool
+    lookbackDays: int
+    noDataReason: AccountHealthNoDataReason | None = None
+    previousPeriodStart: AwareDatetime
+    score: int | None = None
+    status: AccountHealthStatus
+
+
 class AccountsTableAggregateMetric(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -3142,6 +3177,10 @@ class AccountsTableRow(BaseModel):
         description=("Numeric write history keyed by requested custom property definition ID."),
     )
     externalId: str | None = None
+    health: AccountHealthScore = Field(
+        ...,
+        description=("Query-time account health result derived from configured usage metrics."),
+    )
     id: str
     name: str
     noteCount: int | None = Field(

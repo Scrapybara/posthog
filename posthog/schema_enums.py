@@ -30,6 +30,21 @@ class AccessControlLevel(StrEnum):
     MANAGER = "manager"
 
 
+class AccountHealthNoDataReason(StrEnum):
+    MISSING_EXTERNAL_ID = "missing_external_id"
+    MISSING_GROUP_TYPE = "missing_group_type"
+    NO_METRICS = "no_metrics"
+    NO_ACTIVITY = "no_activity"
+    CALCULATION_ERROR = "calculation_error"
+
+
+class AccountHealthStatus(StrEnum):
+    HEALTHY = "healthy"
+    NEUTRAL = "neutral"
+    AT_RISK = "at_risk"
+    NO_DATA = "no_data"
+
+
 class AccountsTableAccountField(StrEnum):
     NAME = "name"
     EXTERNAL_ID = "external_id"

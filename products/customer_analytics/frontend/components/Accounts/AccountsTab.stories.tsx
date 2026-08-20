@@ -8,6 +8,7 @@ import { urls } from 'scenes/urls'
 
 import { mswDecorator } from '~/mocks/browser'
 import type { MockResolverInfo } from '~/mocks/utils'
+import type { AccountHealthScore } from '~/queries/schema/schema-general'
 
 import type { PaginatedAccountEmailThreadListApi } from 'products/customer_analytics/frontend/generated/api.schemas'
 
@@ -34,6 +35,96 @@ type AccountRow = [
     AccountRelationshipCell,
     AccountRelationshipCell,
 ]
+
+const HEALTH_PERIOD = {
+    lookbackDays: 30,
+    previousPeriodStart: '2026-03-22T00:00:00Z',
+    currentPeriodStart: '2026-04-21T00:00:00Z',
+    computedAt: '2026-05-21T00:00:00Z',
+} as const
+
+const HEALTH_BY_ACCOUNT_ID: Record<string, AccountHealthScore> = {
+    'acc-1': {
+        ...HEALTH_PERIOD,
+        score: 91,
+        status: 'healthy',
+        isLimited: false,
+        factors: [
+            {
+                metricId: 'metric-events',
+                metricName: 'Events ingested',
+                current: 920,
+                previous: 1000,
+                normalizedScore: 92,
+                contribution: 46,
+            },
+            {
+                metricId: 'metric-users',
+                metricName: 'Active users',
+                current: 90,
+                previous: 100,
+                normalizedScore: 90,
+                contribution: 45,
+            },
+        ],
+    },
+    'acc-2': {
+        ...HEALTH_PERIOD,
+        score: 60,
+        status: 'neutral',
+        isLimited: false,
+        factors: [
+            {
+                metricId: 'metric-events',
+                metricName: 'Events ingested',
+                current: 620,
+                previous: 1000,
+                normalizedScore: 62,
+                contribution: 31,
+            },
+            {
+                metricId: 'metric-users',
+                metricName: 'Active users',
+                current: 58,
+                previous: 100,
+                normalizedScore: 58,
+                contribution: 29,
+            },
+        ],
+    },
+    'acc-3': {
+        ...HEALTH_PERIOD,
+        score: null,
+        status: 'no_data',
+        isLimited: false,
+        noDataReason: 'missing_external_id',
+        factors: [],
+    },
+    'acc-4': {
+        ...HEALTH_PERIOD,
+        score: 32,
+        status: 'at_risk',
+        isLimited: false,
+        factors: [
+            {
+                metricId: 'metric-events',
+                metricName: 'Events ingested',
+                current: 30,
+                previous: 100,
+                normalizedScore: 30,
+                contribution: 15,
+            },
+            {
+                metricId: 'metric-users',
+                metricName: 'Active users',
+                current: 34,
+                previous: 100,
+                normalizedScore: 34,
+                contribution: 17,
+            },
+        ],
+    },
+}
 
 const RELATIONSHIP_DEFINITIONS = {
     count: 3,
@@ -78,6 +169,7 @@ function buildAccountsTableQueryResponse(rows: AccountRow[]): Record<string, unk
             },
             customProperties: {},
             customPropertyHistory: {},
+            health: HEALTH_BY_ACCOUNT_ID[account.id],
         })),
         hasMore: false,
         limit: 100,
@@ -89,6 +181,7 @@ const SAMPLE_ROWS: AccountRow[] = [
     [{ name: 'Acme Inc', external_id: 'cust_acme_001', id: 'acc-1' }, ['enterprise', 'priority'], 0, [178], [202], []],
     [{ name: 'Globex', external_id: 'cust_globex_002', id: 'acc-2' }, [], 0, [], [], []],
     [{ name: 'Hooli', external_id: null, id: 'acc-3' }, ['scaleup'], 0, [178], [], [202]],
+    [{ name: 'Initech', external_id: 'cust_initech_004', id: 'acc-4' }, [], 0, [], [202], []],
 ]
 
 const SINGLE_ROW: AccountRow[] = [
@@ -384,6 +477,33 @@ export const RowExpandedWithNote: Story = {
     ],
     play: async ({ canvasElement }) => {
         await expandFirstRow(canvasElement)
+    },
+}
+
+export const HealthExplanation: Story = {
+    render: () => <App />,
+    parameters: {
+        testOptions: {
+            ...EXPANDED_ROW_TEST_OPTIONS,
+            waitForSelector: ['[data-attr="accounts-refresh"]', '[data-attr="account-health-detail"]'],
+        },
+    },
+    decorators: [
+        ...expandedRowDecorators(),
+        mswDecorator({
+            get: {
+                [ACCOUNT_RETRIEVE_ENDPOINT]: ACCOUNT_WITH_LINKS,
+                [ACCOUNT_NOTEBOOKS_ENDPOINT]: { count: 0, next: null, previous: null, results: [] },
+            },
+            post: {
+                [QUERY_ENDPOINT]: mockAccountsTableQuery(SAMPLE_ROWS),
+            },
+        }),
+    ],
+    play: async ({ canvasElement }) => {
+        const canvas = within(canvasElement)
+        await userEvent.click(await canvas.findByLabelText('Health score: 32 out of 100, At risk. View calculation.'))
+        await canvas.findByText('mean(30, 34) = 32')
     },
 }
 

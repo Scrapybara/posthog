@@ -95,7 +95,7 @@ import type {
   TaskRun,
   TaskRunArtifact,
 } from "../types";
-import { resourceLink } from "../utils/acp-content";
+import { image, resourceLink } from "../utils/acp-content";
 import { AsyncMutex } from "../utils/async-mutex";
 import { withTimeout } from "../utils/common";
 import { resolveGatewayProduct, resolveGatewayTarget } from "../utils/gateway";
@@ -113,6 +113,7 @@ import {
   checkoutExistingPullRequest,
   type ExistingPrCheckoutResult,
 } from "./pr-checkout";
+import { resolveUserArtifactsById } from "./resolve-user-artifacts";
 import { resolveRtkSavings } from "./rtk-savings";
 import { RunUsageAccumulator } from "./run-usage";
 import {
@@ -1180,12 +1181,26 @@ export class AgentServer {
             artifactCount: Array.isArray(params.artifacts)
               ? params.artifacts.length
               : 0,
+            artifactIdCount: Array.isArray(params.artifact_ids)
+              ? params.artifact_ids.length
+              : 0,
           });
+          const resolvedArtifacts = await resolveUserArtifactsById(
+            this.posthogAPI,
+            commandSession.payload.task_id,
+            commandSession.payload.run_id,
+            Array.isArray(params.artifact_ids)
+              ? (params.artifact_ids as string[])
+              : [],
+          );
           const builtPrompt = await this.buildPromptFromContentAndArtifacts({
             content: params.content as string | ContentBlock[] | undefined,
-            artifacts: Array.isArray(params.artifacts)
-              ? (params.artifacts as TaskRunArtifact[])
-              : [],
+            artifacts: [
+              ...(Array.isArray(params.artifacts)
+                ? (params.artifacts as TaskRunArtifact[])
+                : []),
+              ...resolvedArtifacts,
+            ],
             taskId: commandSession.payload.task_id,
             runId: commandSession.payload.run_id,
           });
@@ -3329,6 +3344,11 @@ export class AgentServer {
     );
     if (!data) {
       throw new Error(`Failed to download artifact ${artifact.name}`);
+    }
+
+    const mimeType = artifact.content_type?.toLowerCase();
+    if (mimeType === "image/png" || mimeType === "image/jpeg") {
+      return image(Buffer.from(data).toString("base64"), mimeType);
     }
 
     const safeName = this.getSafeArtifactName(artifact.name);

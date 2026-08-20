@@ -33,7 +33,8 @@ import { resolveLlmGatewayUrl } from "../utils/gateway";
 import { Logger } from "../utils/logger";
 import { TaskRunEventStreamSender } from "./event-stream-sender";
 import { type JwtPayload, JwtValidationError, validateJwt } from "./jwt";
-import { jsonRpcRequestSchema } from "./schemas";
+import { resolveUserArtifactsById } from "./resolve-user-artifacts";
+import { jsonRpcRequestSchema, userAttachmentIdsSchema } from "./schemas";
 import type { AgentServerConfig } from "./types";
 
 interface SseController {
@@ -57,11 +58,15 @@ const userMessageCommandSchema = z
   .object({
     content: z.string().min(1).optional(),
     artifacts: z.array(z.record(z.string(), z.unknown())).optional(),
+    artifact_ids: userAttachmentIdsSchema.optional(),
     messageId: z.string().min(1).optional(),
     steer: z.boolean().optional(),
   })
   .refine(
-    (params) => params.content || (params.artifacts?.length ?? 0) > 0,
+    (params) =>
+      params.content ||
+      (params.artifacts?.length ?? 0) > 0 ||
+      (params.artifact_ids?.length ?? 0) > 0,
     "Either content or artifacts are required",
   );
 
@@ -705,12 +710,20 @@ export class PiAgentServer {
     runtime: PiRuntime,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const artifacts = Array.isArray(params.artifacts)
+    const legacyArtifacts = Array.isArray(params.artifacts)
       ? (params.artifacts as TaskRunArtifact[])
       : [];
+    const resolvedArtifacts = await resolveUserArtifactsById(
+      this.posthogAPI,
+      this.config.taskId,
+      this.config.runId,
+      Array.isArray(params.artifact_ids)
+        ? (params.artifact_ids as string[])
+        : [],
+    );
     const message = await this.prepareUserMessage(
       typeof params.content === "string" ? params.content : "",
-      artifacts,
+      [...legacyArtifacts, ...resolvedArtifacts],
     );
     const result = await this.dispatchUserMessage(
       runtime,

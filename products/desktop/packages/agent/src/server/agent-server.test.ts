@@ -2373,6 +2373,203 @@ describe("AgentServer HTTP Mode", () => {
       });
     }, 20000);
 
+    it("resolves screenshot IDs into native ACP image blocks", async () => {
+      const pngAttachmentId = "11111111-1111-4111-8111-111111111111";
+      const jpegAttachmentId = "22222222-2222-4222-8222-222222222222";
+      const s = createServer();
+      await s.start();
+      const prompt = vi.fn(async () => ({ stopReason: "cancelled" }));
+      const getTaskRun = vi.fn(async () =>
+        createTaskRun({
+          artifacts: [
+            {
+              id: pngAttachmentId,
+              name: "screen.png",
+              type: "context",
+              source: "user_attachment",
+              size: 3,
+              content_type: "image/png",
+              storage_path: "artifacts/screen.png",
+              uploaded_by: "user",
+              uploaded_by_user_id: 1,
+            },
+            {
+              id: jpegAttachmentId,
+              name: "photo.jpg",
+              type: "context",
+              source: "user_attachment",
+              size: 4,
+              content_type: "image/jpeg",
+              storage_path: "artifacts/photo.jpg",
+              uploaded_by: "user",
+              uploaded_by_user_id: 1,
+            },
+          ],
+        }),
+      );
+      const downloadArtifact = vi.fn(
+        async (_taskId: string, _runId: string, storagePath: string) =>
+          exactArrayBuffer(
+            new TextEncoder().encode(
+              storagePath.endsWith("screen.png") ? "png" : "jpeg",
+            ),
+          ),
+      );
+      const serverInternals = s as unknown as {
+        session: { clientConnection: { prompt: typeof prompt } };
+        posthogAPI: {
+          getTaskRun: typeof getTaskRun;
+          downloadArtifact: typeof downloadArtifact;
+        };
+      };
+      serverInternals.session.clientConnection.prompt = prompt;
+      serverInternals.posthogAPI.getTaskRun = getTaskRun;
+      serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
+
+      const response = await fetch(`http://localhost:${port}/command`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${createToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "screenshots",
+          method: "user_message",
+          params: {
+            content: "Compare these screenshots",
+            artifact_ids: [pngAttachmentId, jpegAttachmentId],
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(getTaskRun).toHaveBeenCalledWith("test-task-id", "test-run-id");
+      expect(prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: [
+            { type: "text", text: "Compare these screenshots" },
+            {
+              type: "image",
+              data: Buffer.from("png").toString("base64"),
+              mimeType: "image/png",
+            },
+            {
+              type: "image",
+              data: Buffer.from("jpeg").toString("base64"),
+              mimeType: "image/jpeg",
+            },
+          ],
+        }),
+      );
+    }, 20000);
+
+    it("rejects screenshot IDs missing from the current ACP run manifest", async () => {
+      const missingAttachmentId = "11111111-1111-4111-8111-111111111111";
+      const s = createServer();
+      await s.start();
+      const prompt = vi.fn(async () => ({ stopReason: "cancelled" }));
+      const getTaskRun = vi.fn(async () => createTaskRun({ artifacts: [] }));
+      const downloadArtifact = vi.fn();
+      const serverInternals = s as unknown as {
+        session: { clientConnection: { prompt: typeof prompt } };
+        posthogAPI: {
+          getTaskRun: typeof getTaskRun;
+          downloadArtifact: typeof downloadArtifact;
+        };
+      };
+      serverInternals.session.clientConnection.prompt = prompt;
+      serverInternals.posthogAPI.getTaskRun = getTaskRun;
+      serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
+
+      const response = await fetch(`http://localhost:${port}/command`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${createToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "missing-screenshot",
+          method: "user_message",
+          params: {
+            content: "Inspect this screenshot",
+            artifact_ids: [missingAttachmentId],
+          },
+        }),
+      });
+      const body = (await response.json()) as {
+        error?: { code?: number; message?: string };
+      };
+
+      expect(body.error).toEqual({
+        code: -32000,
+        message: "Screenshot attachments are unavailable for this task run",
+      });
+      expect(downloadArtifact).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+    }, 20000);
+
+    it("rejects IDs for non-screenshot artifacts in the current ACP run manifest", async () => {
+      const skillArtifactId = "11111111-1111-4111-8111-111111111111";
+      const s = createServer();
+      await s.start();
+      const prompt = vi.fn(async () => ({ stopReason: "cancelled" }));
+      const getTaskRun = vi.fn(async () =>
+        createTaskRun({
+          artifacts: [
+            {
+              id: skillArtifactId,
+              name: "bundle.zip",
+              type: "skill_bundle",
+              source: "posthog_code_skill",
+              size: 100,
+              content_type: "application/zip",
+              storage_path: "artifacts/bundle.zip",
+              uploaded_by: "agent",
+            },
+          ],
+        }),
+      );
+      const downloadArtifact = vi.fn();
+      const serverInternals = s as unknown as {
+        session: { clientConnection: { prompt: typeof prompt } };
+        posthogAPI: {
+          getTaskRun: typeof getTaskRun;
+          downloadArtifact: typeof downloadArtifact;
+        };
+      };
+      serverInternals.session.clientConnection.prompt = prompt;
+      serverInternals.posthogAPI.getTaskRun = getTaskRun;
+      serverInternals.posthogAPI.downloadArtifact = downloadArtifact;
+
+      const response = await fetch(`http://localhost:${port}/command`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${createToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "non-screenshot",
+          method: "user_message",
+          params: {
+            artifact_ids: [skillArtifactId],
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        error: {
+          code: -32000,
+          message: "Screenshot attachments are unavailable for this task run",
+        },
+      });
+      expect(downloadArtifact).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+    }, 20000);
+
     it("rewrites a bundled local skill slash command before sending the prompt", async () => {
       const skillDefinition = [
         "---",

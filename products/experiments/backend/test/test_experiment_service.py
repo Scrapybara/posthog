@@ -47,6 +47,7 @@ from products.experiments.backend.experiment_service import (
     _merge_saved_metric_links,
     _resolve_scalar_updates,
 )
+from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.models.experiment import (
     EXPOSURE_FROZEN_COHORT_KEY,
     EXPOSURE_FROZEN_GROUP_KEY,
@@ -294,27 +295,33 @@ class TestExperimentService(APIBaseTest):
         self._create_flag(key="fingerprint-test")
         service = self._service()
 
-        metrics = [
-            {
-                "kind": "ExperimentMetric",
-                "metric_type": "mean",
-                "uuid": "uuid-1",
-                "source": {"kind": "EventsNode", "event": "$pageview"},
-            },
-        ]
+        metric = {
+            "kind": "ExperimentMetric",
+            "metric_type": "mean",
+            "uuid": "uuid-1",
+            "source": {"kind": "EventsNode", "event": "$pageview"},
+        }
+        metrics = [deepcopy(metric)]
 
+        start_date = timezone.now()
         experiment = service.create_experiment(
             name="Fingerprint Test",
             feature_flag_key="fingerprint-test",
             allow_unknown_events=True,
             metrics=metrics,
+            start_date=start_date,
         )
 
         assert experiment.metrics is not None
         assert len(experiment.metrics) == 1
-        assert "fingerprint" in experiment.metrics[0]
-        assert isinstance(experiment.metrics[0]["fingerprint"], str)
-        assert len(experiment.metrics[0]["fingerprint"]) == 64  # SHA256 hex
+        assert experiment.metrics[0]["fingerprint"] == compute_metric_fingerprint(
+            metric=metric,
+            start_date=start_date,
+            stats_method=(experiment.stats_config or {}).get("method", "bayesian"),
+            exposure_criteria=experiment.exposure_criteria,
+            only_count_matured_users=experiment.only_count_matured_users,
+            excluded_variants=experiment.excluded_variants,
+        )
 
     def test_lifecycle_save_does_not_clobber_concurrent_metric_change(self):
         from django.utils import timezone

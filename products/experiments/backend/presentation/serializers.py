@@ -35,7 +35,7 @@ from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from products.ai_observability.backend.models.llm_prompt import LLMPrompt
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.facade.contracts import CreateExperimentInput
-from products.experiments.backend.hogql_queries import get_experiment_baseline_variant_key
+from products.experiments.backend.hogql_queries import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.exposure_query_logic import resolve_default_exposure_event
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
@@ -577,7 +577,7 @@ class ExperimentSerializer(ExperimentBaseSerializer):
                         instance.exposure_criteria,
                         only_count_matured_users=instance.only_count_matured_users,
                         excluded_variants=instance.excluded_variants or [],
-                        baseline_variant_key=get_experiment_baseline_variant_key(instance),
+                        baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(instance),
                     )
 
         return data

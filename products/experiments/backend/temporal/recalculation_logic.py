@@ -28,7 +28,7 @@ from posthog.hogql_queries.query_runner import ExecutionMode
 from posthog.models.scoping import team_scope
 from posthog.sync import database_sync_to_async_pool
 
-from products.experiments.backend.hogql_queries import get_experiment_baseline_variant_key
+from products.experiments.backend.hogql_queries import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.base_query_utils import experiment_window_end
 from products.experiments.backend.hogql_queries.error_handling import (
     classify_experiment_query_error,
@@ -601,7 +601,7 @@ def _calculate_experiment_metric_for_recalculation_sync(
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
             excluded_variants=experiment.excluded_variants,
-            baseline_variant_key=get_experiment_baseline_variant_key(experiment),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
         )
         recalc_fp = compute_recalc_fingerprint(config_fp)
 

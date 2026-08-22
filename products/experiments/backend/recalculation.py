@@ -30,7 +30,7 @@ from posthog.models.user import User
 from posthog.settings import CLICKHOUSE_CLUSTER
 from posthog.temporal.common.client import sync_connect
 
-from products.experiments.backend.hogql_queries import get_experiment_baseline_variant_key
+from products.experiments.backend.hogql_queries import get_experiment_fingerprint_baseline_variant_key
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.utils import get_experiment_stats_method
 from products.experiments.backend.models.experiment import (
@@ -392,7 +392,7 @@ def _recalc_fingerprints_for_run(experiment: Experiment, recalc: ExperimentMetri
             experiment.exposure_criteria,
             only_count_matured_users=experiment.only_count_matured_users,
             excluded_variants=experiment.excluded_variants,
-            baseline_variant_key=get_experiment_baseline_variant_key(experiment),
+            baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
         )
         fingerprints[metric_uuid] = compute_recalc_fingerprint(config_fp)
     return fingerprints
@@ -457,7 +457,7 @@ def build_timeseries_cold_start_payload(experiment: Experiment) -> dict | None:
                 experiment.exposure_criteria,
                 only_count_matured_users=experiment.only_count_matured_users,
                 excluded_variants=experiment.excluded_variants,
-                baseline_variant_key=get_experiment_baseline_variant_key(experiment),
+                baseline_variant_key=get_experiment_fingerprint_baseline_variant_key(experiment),
             )
             row = (
                 ExperimentMetricResult.objects.filter(

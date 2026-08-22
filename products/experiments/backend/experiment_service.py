@@ -56,7 +56,11 @@ from posthog.utils import str_to_bool
 from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
 from products.experiments.backend.flag_cleanup import build_cleanup_prompt, cleanup_plan
-from products.experiments.backend.hogql_queries import CONTROL_VARIANT_KEY, get_baseline_variant_key
+from products.experiments.backend.hogql_queries import (
+    CONTROL_VARIANT_KEY,
+    get_baseline_variant_key,
+    get_fingerprint_baseline_variant_key,
+)
 from products.experiments.backend.hogql_queries.base_query_utils import is_threshold_supported_math
 from products.experiments.backend.hogql_queries.experiment_metric_fingerprint import compute_metric_fingerprint
 from products.experiments.backend.hogql_queries.exposure_query_logic import (
@@ -1318,7 +1322,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
-                    baseline_variant_key=(stats_config or {}).get("baseline_variant_key"),
+                    baseline_variant_key=get_fingerprint_baseline_variant_key(stats_config, used_variant_keys),
                 )
         if metrics_secondary is not None:
             for metric in metrics_secondary:
@@ -1329,7 +1333,7 @@ class ExperimentService:
                     exposure_criteria,
                     only_count_matured_users=only_count_matured_users,
                     excluded_variants=excluded_variants,
-                    baseline_variant_key=(stats_config or {}).get("baseline_variant_key"),
+                    baseline_variant_key=get_fingerprint_baseline_variant_key(stats_config, used_variant_keys),
                 )
 
         self.validate_no_duplicate_metric_uuids(metrics, metrics_secondary)
@@ -1716,7 +1720,7 @@ class ExperimentService:
                 exposure_criteria,
                 only_count_matured_users=only_count_matured_users,
                 excluded_variants=excluded_variants,
-                baseline_variant_key=get_baseline_variant_key(stats_config, variant_keys or []),
+                baseline_variant_key=get_fingerprint_baseline_variant_key(stats_config, variant_keys or []),
             )
             updated.append(metric_copy)
         return updated

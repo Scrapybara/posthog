@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -141,6 +142,87 @@ class TestExperimentTrendsQueryRunner(ClickhouseTestMixin, APIBaseTest):
             ),
         )
         self.assertEqual(feature_flag_filter.value, [original_key])
+
+    def test_uses_configured_baseline_for_statistics_and_cache(self):
+        experiment = self.create_experiment()
+        experiment.stats_config = {"baseline_variant_key": "test"}
+        experiment.save(update_fields=["stats_config"])
+        query_runner = ExperimentTrendsQueryRunner(
+            query=ExperimentTrendsQuery(
+                experiment_id=experiment.id,
+                kind="ExperimentTrendsQuery",
+                count_query=TrendsQuery(series=[EventsNode(event="$pageview")]),
+            ),
+            team=self.team,
+        )
+        count_result = cast(
+            Any,
+            SimpleNamespace(
+                results=[
+                    {"count": 5, "breakdown_value": "control"},
+                    {"count": 8, "breakdown_value": "test"},
+                ]
+            ),
+        )
+        exposure_result = cast(
+            Any,
+            SimpleNamespace(
+                results=[
+                    {"count": 10, "breakdown_value": "control"},
+                    {"count": 12, "breakdown_value": "test"},
+                ]
+            ),
+        )
+
+        baseline, comparisons = query_runner._get_variants_with_base_stats(count_result, exposure_result)
+        query_runner._validate_event_variants(count_result, exposure_result)
+
+        self.assertEqual(baseline.key, "test")
+        self.assertEqual([variant.key for variant in comparisons], ["control"])
+        self.assertEqual(query_runner.get_cache_payload()["baseline_variant_key"], "test")
+
+    def test_excluded_variant_is_omitted_from_statistics(self):
+        feature_flag = self.create_feature_flag()
+        feature_flag.filters["multivariate"]["variants"].append(
+            {"key": "excluded", "name": "Excluded", "rollout_percentage": 0}
+        )
+        feature_flag.save(update_fields=["filters"])
+        experiment = self.create_experiment(feature_flag=feature_flag)
+        experiment.excluded_variants = ["excluded"]
+        experiment.save(update_fields=["excluded_variants"])
+        query_runner = ExperimentTrendsQueryRunner(
+            query=ExperimentTrendsQuery(
+                experiment_id=experiment.id,
+                kind="ExperimentTrendsQuery",
+                count_query=TrendsQuery(series=[EventsNode(event="$pageview")]),
+            ),
+            team=self.team,
+        )
+        count_result = cast(
+            Any,
+            SimpleNamespace(
+                results=[
+                    {"count": 5, "breakdown_value": "control"},
+                    {"count": 8, "breakdown_value": "test"},
+                    {"count": 100, "breakdown_value": "excluded"},
+                ]
+            ),
+        )
+        exposure_result = cast(
+            Any,
+            SimpleNamespace(
+                results=[
+                    {"count": 10, "breakdown_value": "control"},
+                    {"count": 12, "breakdown_value": "test"},
+                    {"count": 100, "breakdown_value": "excluded"},
+                ]
+            ),
+        )
+
+        baseline, comparisons = query_runner._get_variants_with_base_stats(count_result, exposure_result)
+
+        self.assertEqual(baseline.key, "control")
+        self.assertEqual([variant.key for variant in comparisons], ["test"])
 
     @freeze_time("2020-01-01T12:00:00Z")
     def test_query_runner(self):

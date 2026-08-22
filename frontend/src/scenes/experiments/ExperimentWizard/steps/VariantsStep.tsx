@@ -2,6 +2,8 @@ import { useActions, useValues } from 'kea'
 
 import { getSeriesColor } from 'lib/colors'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
+import { LemonSelect } from 'lib/lemon-ui/LemonSelect'
+import { LemonTag } from 'lib/lemon-ui/LemonTag'
 import { Lettermark, LettermarkColor } from 'lib/lemon-ui/Lettermark'
 import { formatPercentage } from 'lib/utils/numbers'
 import { alphabet } from 'lib/utils/strings'
@@ -10,13 +12,16 @@ import type { FeatureFlagType } from '~/types'
 
 import { TrafficPreview } from '../../ExperimentForm/VariantDistributionEditor'
 import { VariantsPanelCreateFeatureFlag } from '../../ExperimentForm/VariantsPanelCreateFeatureFlag'
-import { getFlagVariants } from '../../utils'
+import { getBaselineVariantKey, getFlagVariants } from '../../utils'
 import { experimentWizardLogic } from '../experimentWizardLogic'
 
 const ReadOnlyVariantsStep = ({ flag }: { flag: FeatureFlagType }): JSX.Element => {
+    const { experiment } = useValues(experimentWizardLogic)
+    const { setExperimentValue } = useActions(experimentWizardLogic)
     const variants = getFlagVariants(flag)
     const rolloutPercentage = flag.filters.groups?.[0]?.rollout_percentage ?? 100
     const variantRolloutSum = variants.reduce((sum, { rollout_percentage }) => sum + rollout_percentage, 0)
+    const baselineVariantKey = getBaselineVariantKey(experiment)
 
     return (
         <>
@@ -67,7 +72,12 @@ const ReadOnlyVariantsStep = ({ flag }: { flag: FeatureFlagType }): JSX.Element 
                                             </div>
                                         </td>
                                         <td className="py-2 pr-2">
-                                            <div className="flex items-center h-10 px-2 font-medium">{variant.key}</div>
+                                            <div className="flex items-center h-10 px-2 font-medium gap-2">
+                                                {variant.key}
+                                                {variant.key === baselineVariantKey && (
+                                                    <LemonTag type="muted">Baseline</LemonTag>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="py-2">
                                             <div className="flex items-center h-10 px-2">
@@ -80,6 +90,21 @@ const ReadOnlyVariantsStep = ({ flag }: { flag: FeatureFlagType }): JSX.Element 
                         </table>
                     </div>
                 </div>
+            </div>
+            <div>
+                <div className="font-semibold mb-2">Baseline variant</div>
+                <LemonSelect
+                    value={baselineVariantKey}
+                    options={variants.map(({ key }) => ({ value: key, label: key }))}
+                    onChange={(baseline_variant_key) => {
+                        setExperimentValue('stats_config', {
+                            ...experiment.stats_config,
+                            baseline_variant_key,
+                        })
+                    }}
+                    data-attr="experiment-baseline-variant"
+                />
+                <p className="text-muted text-xs mt-1">The variant all others are compared against.</p>
             </div>
         </>
     )

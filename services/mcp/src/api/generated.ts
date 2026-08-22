@@ -31042,6 +31042,43 @@ export namespace Schemas {
       recommended_sample_size?: number | null;
     }
 
+    export interface ExperimentBayesianStatsConfig {
+      ci_level?: number | null;
+      [key: string]: unknown;
+     }
+
+    export interface ExperimentCupedStatsConfig {
+      enabled?: boolean | null;
+      lookback_days?: number | null;
+      [key: string]: unknown;
+     }
+
+    export interface ExperimentFrequentistStatsConfig {
+      alpha?: number | null;
+      sequential_testing_enabled?: boolean | null;
+      sequential_tuning_parameter?: number | null;
+      [key: string]: unknown;
+     }
+
+    export type ExperimentStatsConfigMethod = typeof ExperimentStatsConfigMethod[keyof typeof ExperimentStatsConfigMethod] | null;
+
+
+    export const ExperimentStatsConfigMethod = {
+      Bayesian: 'bayesian',
+      Frequentist: 'frequentist',
+    } as const;
+
+    export interface ExperimentStatsConfig {
+      /** Variant key all other variants are compared against. The key must exist in the experiment's variants and cannot be excluded from analysis. When omitted, analysis uses 'control' if present, otherwise the first configured variant. */
+      baseline_variant_key?: string | null;
+      bayesian?: ExperimentBayesianStatsConfig | null;
+      cuped?: ExperimentCupedStatsConfig | null;
+      frequentist?: ExperimentFrequentistStatsConfig | null;
+      method?: ExperimentStatsConfigMethod;
+      version?: number | null;
+      [key: string]: unknown;
+     }
+
     export interface ExperimentToSavedMetric {
       readonly id: number;
       experiment: number;
@@ -31225,6 +31262,8 @@ export namespace Schemas {
       parameters?: ExperimentParameters | null;
       /** Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`. */
       running_time_calculation?: ExperimentRunningTimeCalculation | null;
+      /** Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant. */
+      stats_config?: ExperimentStatsConfig | null;
       /**
          * Variant keys to exclude from metric result calculations. Excluded variants are still served to users but omitted from statistical analysis. The baseline variant and holdout pseudo-variants cannot be excluded. Canonical home for what historically lived in `parameters.excluded_variants`.
          * @nullable
@@ -31256,7 +31295,6 @@ export namespace Schemas {
       metrics?: _ExperimentApiMetricsList | null;
       /** Secondary metrics for additional measurements. Same format as primary metrics. */
       metrics_secondary?: _ExperimentApiMetricsList | null;
-      stats_config?: unknown;
       scheduling_config?: unknown;
       /** Suppresses the validation that rejects metrics referencing events not yet ingested by this project. REQUIRES explicit user confirmation before being set to true — never flip this silently to retry a failed call. The default validation catches typo'd event names and missing instrumentation. Set this to true only when the user has confirmed the event is intentional (e.g. they are about to instrument it). */
       allow_unknown_events?: boolean;
@@ -32294,6 +32332,8 @@ export namespace Schemas {
       parameters?: ExperimentParameters | null;
       /** Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`. */
       running_time_calculation?: ExperimentRunningTimeCalculation | null;
+      /** Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant. */
+      stats_config?: ExperimentStatsConfig | null;
       /**
          * Variant keys to exclude from metric result calculations. Excluded variants are still served to users but omitted from statistical analysis. The baseline variant and holdout pseudo-variants cannot be excluded. Canonical home for what historically lived in `parameters.excluded_variants`.
          * @nullable
@@ -32325,7 +32365,6 @@ export namespace Schemas {
       metrics?: _ExperimentApiMetricsList | null;
       /** Secondary metrics for additional measurements. Same format as primary metrics. */
       metrics_secondary?: _ExperimentApiMetricsList | null;
-      stats_config?: unknown;
       scheduling_config?: unknown;
       /** Suppresses the validation that rejects metrics referencing events not yet ingested by this project. REQUIRES explicit user confirmation before being set to true — never flip this silently to retry a failed call. The default validation catches typo'd event names and missing instrumentation. Set this to true only when the user has confirmed the event is intentional (e.g. they are about to instrument it). */
       allow_unknown_events?: boolean;
@@ -56426,6 +56465,8 @@ export namespace Schemas {
       parameters?: ExperimentParameters | null;
       /** Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`. */
       running_time_calculation?: ExperimentRunningTimeCalculation | null;
+      /** Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant. */
+      stats_config?: ExperimentStatsConfig | null;
       /**
          * Variant keys to exclude from metric result calculations. Excluded variants are still served to users but omitted from statistical analysis. The baseline variant and holdout pseudo-variants cannot be excluded. Canonical home for what historically lived in `parameters.excluded_variants`.
          * @nullable
@@ -56457,7 +56498,6 @@ export namespace Schemas {
       metrics?: _ExperimentApiMetricsList | null;
       /** Secondary metrics for additional measurements. Same format as primary metrics. */
       metrics_secondary?: _ExperimentApiMetricsList | null;
-      stats_config?: unknown;
       scheduling_config?: unknown;
       /** Suppresses the validation that rejects metrics referencing events not yet ingested by this project. REQUIRES explicit user confirmation before being set to true — never flip this silently to retry a failed call. The default validation catches typo'd event names and missing instrumentation. Set this to true only when the user has confirmed the event is intentional (e.g. they are about to instrument it). */
       allow_unknown_events?: boolean;

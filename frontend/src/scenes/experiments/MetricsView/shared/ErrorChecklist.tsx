@@ -16,6 +16,7 @@ import {
     EXPOSURE_FEATURE_FLAG_PROPERTY,
     featureFlagVariantProperty,
 } from '../../exposureContract'
+import { getBaselineVariantKey } from '../../utils'
 
 export enum ResultErrorCode {
     NO_CONTROL_VARIANT = 'no-control-variant',
@@ -46,19 +47,20 @@ function ChecklistItem({
     getInsightType,
 }: ChecklistItemProps): JSX.Element {
     const failureText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant not received',
-        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant not received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the baseline variant not received',
+        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one comparison variant not received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events not received',
     }
 
     const successText: Record<ResultErrorCode, string> = {
-        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the control variant received',
-        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one test variant received',
+        [ResultErrorCode.NO_CONTROL_VARIANT]: 'Events with the baseline variant received',
+        [ResultErrorCode.NO_TEST_VARIANT]: 'Events with at least one comparison variant received',
         [ResultErrorCode.NO_EXPOSURES]: 'Exposure events have been received',
     }
 
     const insightType = getInsightType(metric)
     const hasMissingExposure = errorCode === ResultErrorCode.NO_EXPOSURES
+    const baselineVariantKey = getBaselineVariantKey(experiment)
 
     const requiredEvent =
         insightType === InsightType.TRENDS
@@ -87,8 +89,8 @@ function ChecklistItem({
                     value: hasMissingExposure
                         ? variants.map((variant) => variant.key)
                         : errorCode === ResultErrorCode.NO_CONTROL_VARIANT
-                          ? ['control']
-                          : variants.slice(1).map((variant) => variant.key),
+                          ? [baselineVariantKey]
+                          : variants.filter(({ key }) => key !== baselineVariantKey).map(({ key }) => key),
                     operator: 'exact',
                     type: 'event',
                 },

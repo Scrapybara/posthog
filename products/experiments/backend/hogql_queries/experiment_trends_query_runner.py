@@ -37,7 +37,7 @@ from posthog.hogql_queries.insights.trends.trends_query_runner import TrendsQuer
 from posthog.hogql_queries.query_runner import QueryRunner
 from posthog.queries.trends.util import ALL_SUPPORTED_MATH_FUNCTIONS
 
-from products.experiments.backend.hogql_queries import CONTROL_VARIANT_KEY
+from products.experiments.backend.hogql_queries import get_baseline_variant_key
 from products.experiments.backend.hogql_queries.trends_statistics_v2_continuous import (
     are_results_significant_v2_continuous,
     calculate_credible_intervals_v2_continuous,
@@ -65,7 +65,10 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         self.experiment = Experiment.objects.get(id=self.query.experiment_id, team=self.team)
         self.feature_flag = self.experiment.feature_flag
         self.feature_flag_key = self.feature_flag.key_without_tombstone()
-        self.variants = [variant["key"] for variant in self.feature_flag.variants]
+        configured_variant_keys = [variant["key"] for variant in self.feature_flag.variants]
+        self.baseline_variant_key = get_baseline_variant_key(self.experiment.stats_config, configured_variant_keys)
+        excluded_variants = set(self.experiment.excluded_variants or [])
+        self.variants = [key for key in configured_variant_keys if key not in excluded_variants]
         if self.experiment.holdout:
             self.variants.append(f"holdout-{self.experiment.holdout.id}")
         self.breakdown_key = f"$feature/{self.feature_flag_key}"
@@ -330,13 +333,16 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         test_variants = []
         exposure_counts = {}
         exposure_ratios = {}
+        included_variants = set(self.variants)
 
         for result in exposure_results.results:
             count = result.get("count", 0)
             breakdown_value = result.get("breakdown_value")
+            if breakdown_value not in included_variants:
+                continue
             exposure_counts[breakdown_value] = count
 
-        control_exposure = exposure_counts.get(CONTROL_VARIANT_KEY, 0)
+        control_exposure = exposure_counts.get(self.baseline_variant_key, 0)
 
         if control_exposure != 0:
             for key, count in exposure_counts.items():
@@ -345,7 +351,9 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         for result in count_results.results:
             count = result.get("count", 0)
             breakdown_value = result.get("breakdown_value")
-            if breakdown_value == CONTROL_VARIANT_KEY:
+            if breakdown_value not in included_variants:
+                continue
+            if breakdown_value == self.baseline_variant_key:
                 absolute_exposure = exposure_counts.get(breakdown_value, 0)
                 control_variant = ExperimentVariantTrendsBaseStats(
                     key=breakdown_value,
@@ -365,7 +373,7 @@ class ExperimentTrendsQueryRunner(QueryRunner):
                 )
 
         if control_variant is None:
-            raise ValueError("Control variant not found in count results")
+            raise ValueError(f"Baseline variant '{self.baseline_variant_key}' not found in count results")
 
         return control_variant, test_variants
 
@@ -384,14 +392,13 @@ class ExperimentTrendsQueryRunner(QueryRunner):
         if not count_result.results or not count_result.results[0]:
             raise ValidationError(code="no-results", detail=json.dumps(errors))
 
-        # Check if "control" is present
         for event in count_result.results:
             event_variant = event.get("breakdown_value")
-            if event_variant == "control":
+            if event_variant == self.baseline_variant_key:
                 errors[ExperimentNoResultsErrorKeys.NO_CONTROL_VARIANT] = False
                 break
         # Check if at least one of the test variants is present
-        test_variants = [variant for variant in self.variants if variant != "control"]
+        test_variants = [variant for variant in self.variants if variant != self.baseline_variant_key]
 
         for event in count_result.results:
             event_variant = event.get("breakdown_value")
@@ -408,6 +415,12 @@ class ExperimentTrendsQueryRunner(QueryRunner):
 
     def to_query(self) -> ast.SelectQuery:
         raise ValueError(f"Cannot convert source query of type {self.query.count_query.kind} to query")
+
+    def get_cache_payload(self) -> dict:
+        payload = super().get_cache_payload()
+        payload["baseline_variant_key"] = self.baseline_variant_key
+        payload["excluded_variants"] = sorted(self.experiment.excluded_variants or [])
+        return payload
 
     # Cache results for 24 hours
     def cache_target_age(self, last_refresh: Optional[datetime], lazy: bool = False) -> Optional[datetime]:

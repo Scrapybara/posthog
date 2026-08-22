@@ -117,11 +117,11 @@ export function DistributionTable(): JSX.Element {
     const variants = getExperimentVariants(experiment)
 
     /**
-     * We use this check to disable the toggle if there's only one test variant left.
+     * We use this check to disable the toggle if there's only one comparison variant left.
      * - not the baseline variant
      * - not excluded
      */
-    const hasOnlyOneTestVariant =
+    const hasOnlyOneComparisonVariant =
         variants.filter(({ key }) => key !== baselineKey && !excludedVariants.includes(key)).length <= 1
 
     const onSelectElement = (variant: string): void => {
@@ -195,7 +195,7 @@ export function DistributionTable(): JSX.Element {
                            * - the variant is not excluded: we have to allow re-including it
                            * - there's only one variant left when we remove the baseline
                            */
-                          const disableToggle = !excluded && hasOnlyOneTestVariant
+                          const disableToggle = !excluded && hasOnlyOneComparisonVariant
                           return (
                               <div className="flex items-center gap-2">
                                   <LemonSwitch
@@ -203,7 +203,7 @@ export function DistributionTable(): JSX.Element {
                                       onChange={(checked) => setVariantExcluded(key, !checked)}
                                       disabledReason={
                                           disableToggle
-                                              ? 'At least one test variant must remain in analysis'
+                                              ? 'At least one comparison variant must remain in analysis'
                                               : undefined
                                       }
                                       loading={experimentUpdateLoading}
@@ -315,9 +315,9 @@ export function DistributionTable(): JSX.Element {
                     variants are modified to show their relative rollout percentage.
                 </LemonBanner>
             )}
-            {excludedVariants.length > 0 && hasOnlyOneTestVariant && (
+            {excludedVariants.length > 0 && hasOnlyOneComparisonVariant && (
                 <LemonBanner type="warning" className="mb-4">
-                    At least one test variant must remain in analysis. Re-include a variant to exclude others.
+                    At least one comparison variant must remain in analysis. Re-include a variant to exclude others.
                 </LemonBanner>
             )}
             <LemonTable

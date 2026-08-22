@@ -26,7 +26,7 @@ import {
 } from '@posthog/openapi-codegen'
 
 import { discoverDefinitions, resolveSchemaPath } from './lib/definitions.mjs'
-import { stripEnumMinLength, stripUuidFormat } from './lib/schema-transforms.mjs'
+import { preserveAdditionalPropertiesForOrval, stripEnumMinLength, stripUuidFormat } from './lib/schema-transforms.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const mcpRoot = path.resolve(__dirname, '..')
@@ -221,6 +221,7 @@ for (const def of definitions) {
 
     stripDefaultsFromPatchedSchemas(filtered)
     stripUuidFormat(filtered)
+    preserveAdditionalPropertiesForOrval(filtered)
     stripReadOnlyFromRequired(filtered)
     applyNestedExclusions(filtered, schemaExclusions)
     stripEnumMinLength(filtered)

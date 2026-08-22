@@ -58,6 +58,7 @@ export function LegacySummaryTable({
     )
 
     const winningVariant = legacyGetHighestProbabilityVariant(result)
+    const baselineVariantKey = result.variants[0]?.key ?? 'control'
 
     const columns: LemonTableColumns<any> = [
         {
@@ -139,7 +140,7 @@ export function LegacySummaryTable({
             title: (
                 <div className="inline-flex items-center deprecated-space-x-1">
                     <div className="">Delta %</div>
-                    <Tooltip title="Delta % indicates the percentage change in the mean between the control and the test variant.">
+                    <Tooltip title="Delta % indicates the percentage change in the mean between the baseline and comparison variant.">
                         <IconInfo className="text-secondary text-base" />
                     </Tooltip>
                 </div>
@@ -147,7 +148,7 @@ export function LegacySummaryTable({
             render: function Key(_, v): JSX.Element {
                 const variant = v as TrendExperimentVariant
 
-                if (variant.key === 'control') {
+                if (variant.key === baselineVariantKey) {
                     return <em>Baseline</em>
                 }
 
@@ -172,14 +173,14 @@ export function LegacySummaryTable({
             title: (
                 <div className="inline-flex items-center deprecated-space-x-1">
                     <div className="">Credible interval (95%)</div>
-                    <Tooltip title="A credible interval estimates the percentage change in the mean, indicating with 95% probability how much higher or lower the test variant's mean is compared to the control.">
+                    <Tooltip title="A credible interval estimates the percentage change in the mean, indicating with 95% probability how much higher or lower the comparison variant's mean is than the baseline.">
                         <IconInfo className="text-secondary text-base" />
                     </Tooltip>
                 </div>
             ),
             render: function Key(_, v): JSX.Element {
                 const variant = v as TrendExperimentVariant
-                if (variant.key === 'control') {
+                if (variant.key === baselineVariantKey) {
                     return <em>Baseline</em>
                 }
 
@@ -217,17 +218,17 @@ export function LegacySummaryTable({
             title: (
                 <div className="inline-flex items-center deprecated-space-x-1">
                     <div className="">Delta %</div>
-                    <Tooltip title="Delta % indicates the percentage change in the conversion rate between the control and the test variant.">
+                    <Tooltip title="Delta % indicates the percentage change in the conversion rate between the baseline and comparison variant.">
                         <IconInfo className="text-secondary text-base" />
                     </Tooltip>
                 </div>
             ),
             render: function Key(_, item): JSX.Element {
-                if (item.key === 'control') {
+                if (item.key === baselineVariantKey) {
                     return <em>Baseline</em>
                 }
 
-                const controlConversionRate = legacyConversionRateForVariant(result, 'control')
+                const controlConversionRate = legacyConversionRateForVariant(result, baselineVariantKey)
                 const variantConversionRate = legacyConversionRateForVariant(result, item.key)
 
                 if (!controlConversionRate || !variantConversionRate) {
@@ -249,13 +250,13 @@ export function LegacySummaryTable({
             title: (
                 <div className="inline-flex items-center deprecated-space-x-1">
                     <div className="">Credible interval (95%)</div>
-                    <Tooltip title="A credible interval estimates the percentage change in the conversion rate, indicating with 95% probability how much higher or lower the test variant's conversion rate is compared to the control.">
+                    <Tooltip title="A credible interval estimates the percentage change in the conversion rate, indicating with 95% probability how much higher or lower the comparison variant's conversion rate is than the baseline.">
                         <IconInfo className="text-secondary text-base" />
                     </Tooltip>
                 </div>
             ),
             render: function Key(_, item): JSX.Element {
-                if (item.key === 'control') {
+                if (item.key === baselineVariantKey) {
                     return <em>Baseline</em>
                 }
 

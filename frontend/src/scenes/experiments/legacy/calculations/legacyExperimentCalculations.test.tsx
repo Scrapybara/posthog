@@ -1,4 +1,10 @@
+import { NodeKind } from '~/queries/schema/schema-general'
+import { InsightType } from '~/types'
+
 import {
+    type LegacyExperimentMetricResult,
+    legacyCalculateDelta,
+    legacyCredibleIntervalForVariant,
     legacyExpectedRunningTime,
     legacyMinimumSampleSizePerVariant,
     legacyRecommendedExposureForCountData,
@@ -44,6 +50,51 @@ describe('experimentCalculations', () => {
 
             // 0 count, so should be Infinity (can't calculate with zero)
             expect(legacyRecommendedExposureForCountData(30, 0)).toEqual(Infinity)
+        })
+    })
+
+    describe('configurable baseline variants', () => {
+        it('calculates trend deltas and intervals against the first result variant', () => {
+            const result = {
+                variants: [
+                    { key: 'variant-b', count: 80, absolute_exposure: 100 },
+                    { key: 'control', count: 60, absolute_exposure: 100 },
+                ],
+                credible_intervals: { control: [0.5, 0.7] },
+            } as unknown as LegacyExperimentMetricResult
+
+            expect(legacyCalculateDelta(result, 'variant-b', InsightType.TRENDS)).toBeNull()
+            expect(legacyCalculateDelta(result, 'control', InsightType.TRENDS)?.deltaPercent).toBeCloseTo(-25)
+            const interval = legacyCredibleIntervalForVariant(result, 'control', InsightType.TRENDS)
+            expect(interval?.[0]).toBeCloseTo(-37.5)
+            expect(interval?.[1]).toBeCloseTo(-12.5)
+        })
+
+        it('calculates funnel deltas and intervals against the first result variant', () => {
+            const result = {
+                kind: NodeKind.ExperimentFunnelsQuery,
+                variants: [
+                    { key: 'variant-b', success_count: 80, failure_count: 20 },
+                    { key: 'control', success_count: 60, failure_count: 40 },
+                ],
+                insight: [
+                    [
+                        { count: 100, breakdown_value: ['variant-b'] },
+                        { count: 80, breakdown_value: ['variant-b'] },
+                    ],
+                    [
+                        { count: 100, breakdown_value: ['control'] },
+                        { count: 60, breakdown_value: ['control'] },
+                    ],
+                ],
+                credible_intervals: { control: [0.5, 0.7] },
+            } as unknown as LegacyExperimentMetricResult
+
+            expect(legacyCalculateDelta(result, 'variant-b', InsightType.FUNNELS)).toBeNull()
+            expect(legacyCalculateDelta(result, 'control', InsightType.FUNNELS)?.deltaPercent).toBeCloseTo(-25)
+            const interval = legacyCredibleIntervalForVariant(result, 'control', InsightType.FUNNELS)
+            expect(interval?.[0]).toBeCloseTo(-37.5)
+            expect(interval?.[1]).toBeCloseTo(-12.5)
         })
     })
 })

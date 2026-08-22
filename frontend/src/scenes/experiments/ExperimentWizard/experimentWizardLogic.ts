@@ -102,12 +102,38 @@ export interface experimentWizardLogicActions {
         ensure_experience_continuity?: boolean
         feature_flag_key?: string
         rollout_percentage?: number
+        stats_config?: Experiment['stats_config']
         variants?: MultivariateFlagVariant[]
     }) => {
         config: {
             ensure_experience_continuity?: boolean | undefined
             feature_flag_key?: string | undefined
             rollout_percentage?: number | undefined
+            stats_config?:
+                | {
+                      baseline_variant_key?: string | undefined
+                      bayesian?:
+                          | {
+                                ci_level?: number | undefined
+                            }
+                          | undefined
+                      cuped?:
+                          | {
+                                enabled?: boolean | undefined
+                                lookback_days?: number | undefined
+                            }
+                          | undefined
+                      frequentist?:
+                          | {
+                                alpha?: number | undefined
+                                sequential_testing_enabled?: boolean | undefined
+                                sequential_tuning_parameter?: number | undefined
+                            }
+                          | undefined
+                      method?: import('~/types').ExperimentStatsMethod | undefined
+                      version?: number | undefined
+                  }
+                | undefined
             variants?: MultivariateFlagVariant[] | undefined
         }
     } // createExperimentLogic

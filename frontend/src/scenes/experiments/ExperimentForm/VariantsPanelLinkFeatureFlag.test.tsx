@@ -214,7 +214,7 @@ describe('VariantsPanelLinkFeatureFlag', () => {
             expect(screen.getByText('test')).toBeInTheDocument()
         })
 
-        it('highlights control variant with primary tag', () => {
+        it('highlights the default baseline variant with primary tag', () => {
             render(
                 <VariantsPanelLinkFeatureFlag
                     linkedFeatureFlag={baseFeatureFlag}
@@ -224,6 +224,19 @@ describe('VariantsPanelLinkFeatureFlag', () => {
 
             const controlTag = screen.getByText('control').closest('.LemonTag')
             expect(controlTag).toHaveClass('LemonTag--primary')
+        })
+
+        it('highlights an explicitly selected non-control baseline variant', () => {
+            render(
+                <VariantsPanelLinkFeatureFlag
+                    linkedFeatureFlag={baseFeatureFlag}
+                    setShowFeatureFlagSelector={mockSetShowFeatureFlagSelector}
+                    baselineVariantKey="test"
+                />
+            )
+
+            expect(screen.getByText('test').closest('.LemonTag')).toHaveClass('LemonTag--primary')
+            expect(screen.getByText('control').closest('.LemonTag')).not.toHaveClass('LemonTag--primary')
         })
 
         it('renders multiple variants', () => {

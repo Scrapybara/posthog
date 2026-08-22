@@ -1422,6 +1422,45 @@ class ExperimentParameters(BaseModel):
     )
 
 
+class ExperimentBayesianStatsConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ci_level: float | None = None
+
+
+class ExperimentFrequentistStatsConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    alpha: float | None = None
+    sequential_testing_enabled: bool | None = None
+    sequential_tuning_parameter: float | None = None
+
+
+class ExperimentCupedStatsConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool | None = None
+    lookback_days: int | None = None
+
+
+class ExperimentStatsConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    baseline_variant_key: str | None = Field(
+        default=None,
+        description=(
+            "Variant key all other variants are compared against. The key must exist in the experiment's variants "
+            "and cannot be excluded from analysis. When omitted, analysis uses 'control' if present, otherwise the "
+            "first configured variant."
+        ),
+    )
+    bayesian: ExperimentBayesianStatsConfig | None = None
+    cuped: ExperimentCupedStatsConfig | None = None
+    frequentist: ExperimentFrequentistStatsConfig | None = None
+    method: Literal["bayesian", "frequentist"] | None = None
+    version: int | None = None
+
+
 class ExperimentRunningTimeCalculation(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

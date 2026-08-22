@@ -168,10 +168,11 @@ function VariantBar({ variant, index }: { variant: any; index: number }): JSX.El
 
     const deltaResult = legacyCalculateDelta(result, variant.key, metricType)
     const delta = deltaResult?.delta || 0
+    const baselineVariantKey = result.variants[0]?.key ?? 'control'
     let hasEnoughData: boolean
 
     if (metricType === InsightType.TRENDS) {
-        const controlVariant = result.variants.find((v: any) => v.key === 'control')
+        const controlVariant = result.variants.find((v: any) => v.key === baselineVariantKey)
         const variantData = result.variants.find((v: any) => v.key === variant.key)
 
         if (
@@ -226,7 +227,7 @@ function VariantBar({ variant, index }: { variant: any; index: number }): JSX.El
                     >
                         <LegacyVariantTag className="justify-end mt-0.5" variantKey={variant.key} fontSize={10} />
                     </foreignObject>
-                    {variant.key === 'control' ? (
+                    {variant.key === baselineVariantKey ? (
                         <path
                             d={legacyGenerateViolinPath(x1, x2, y, barHeight, deltaX)}
                             fill={colors.BAR_CONTROL}
@@ -282,7 +283,9 @@ function VariantBar({ variant, index }: { variant: any; index: number }): JSX.El
                             x2={0}
                             y2={y + barHeight}
                             stroke={
-                                variant.key === 'control' ? colors.BAR_MIDDLE_POINT_CONTROL : colors.BAR_MIDDLE_POINT
+                                variant.key === baselineVariantKey
+                                    ? colors.BAR_MIDDLE_POINT_CONTROL
+                                    : colors.BAR_MIDDLE_POINT
                             }
                             strokeWidth={2}
                             vectorEffect="non-scaling-stroke"

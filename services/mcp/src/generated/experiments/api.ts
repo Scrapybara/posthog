@@ -1077,6 +1077,59 @@ export const ExperimentsCreateBody = /* @__PURE__ */ zod
             .describe(
                 'Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`.'
             ),
+        stats_config: zod
+            .union([
+                zod.record(zod.string(), zod.unknown()).and(
+                    zod.object({
+                        baseline_variant_key: zod
+                            .union([zod.string(), zod.null()])
+                            .optional()
+                            .describe(
+                                "Variant key all other variants are compared against. The key must exist in the experiment's variants and cannot be excluded from analysis. When omitted, analysis uses 'control' if present, otherwise the first configured variant."
+                            ),
+                        bayesian: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        ci_level: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        cuped: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        lookback_days: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        frequentist: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        alpha: zod.union([zod.number(), zod.null()]).optional(),
+                                        sequential_testing_enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        sequential_tuning_parameter: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        method: zod.union([zod.enum(['bayesian', 'frequentist']), zod.null()]).optional(),
+                        version: zod.union([zod.number(), zod.null()]).optional(),
+                    })
+                ),
+                zod.null(),
+            ])
+            .optional()
+            .describe(
+                'Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant.'
+            ),
         excluded_variants: zod
             .array(zod.string())
             .nullish()
@@ -5754,7 +5807,6 @@ export const ExperimentsCreateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()
@@ -6165,6 +6217,59 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
             .optional()
             .describe(
                 'Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`.'
+            ),
+        stats_config: zod
+            .union([
+                zod.record(zod.string(), zod.unknown()).and(
+                    zod.object({
+                        baseline_variant_key: zod
+                            .union([zod.string(), zod.null()])
+                            .optional()
+                            .describe(
+                                "Variant key all other variants are compared against. The key must exist in the experiment's variants and cannot be excluded from analysis. When omitted, analysis uses 'control' if present, otherwise the first configured variant."
+                            ),
+                        bayesian: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        ci_level: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        cuped: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        lookback_days: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        frequentist: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        alpha: zod.union([zod.number(), zod.null()]).optional(),
+                                        sequential_testing_enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        sequential_tuning_parameter: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        method: zod.union([zod.enum(['bayesian', 'frequentist']), zod.null()]).optional(),
+                        version: zod.union([zod.number(), zod.null()]).optional(),
+                    })
+                ),
+                zod.null(),
+            ])
+            .optional()
+            .describe(
+                'Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant.'
             ),
         excluded_variants: zod
             .array(zod.string())
@@ -10848,7 +10953,6 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()
@@ -11228,6 +11332,59 @@ export const ExperimentsDuplicateCreateBody = /* @__PURE__ */ zod
             .optional()
             .describe(
                 'Running-time calculator state: `minimum_detectable_effect`, `recommended_running_time`, `recommended_sample_size`, and `exposure_estimate_config`. Canonical home for these keys, which historically lived in `parameters`.'
+            ),
+        stats_config: zod
+            .union([
+                zod.record(zod.string(), zod.unknown()).and(
+                    zod.object({
+                        baseline_variant_key: zod
+                            .union([zod.string(), zod.null()])
+                            .optional()
+                            .describe(
+                                "Variant key all other variants are compared against. The key must exist in the experiment's variants and cannot be excluded from analysis. When omitted, analysis uses 'control' if present, otherwise the first configured variant."
+                            ),
+                        bayesian: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        ci_level: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        cuped: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        lookback_days: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        frequentist: zod
+                            .union([
+                                zod.record(zod.string(), zod.unknown()).and(
+                                    zod.object({
+                                        alpha: zod.union([zod.number(), zod.null()]).optional(),
+                                        sequential_testing_enabled: zod.union([zod.boolean(), zod.null()]).optional(),
+                                        sequential_tuning_parameter: zod.union([zod.number(), zod.null()]).optional(),
+                                    })
+                                ),
+                                zod.null(),
+                            ])
+                            .optional(),
+                        method: zod.union([zod.enum(['bayesian', 'frequentist']), zod.null()]).optional(),
+                        version: zod.union([zod.number(), zod.null()]).optional(),
+                    })
+                ),
+                zod.null(),
+            ])
+            .optional()
+            .describe(
+                'Statistical analysis settings. Set `baseline_variant_key` to the variant all other variants are compared against. When omitted, analysis uses `control` if present, otherwise the first variant.'
             ),
         excluded_variants: zod
             .array(zod.string())
@@ -15914,7 +16071,6 @@ export const ExperimentsDuplicateCreateBody = /* @__PURE__ */ zod
             ])
             .optional()
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
-        stats_config: zod.unknown().optional(),
         scheduling_config: zod.unknown().optional(),
         allow_unknown_events: zod
             .boolean()

@@ -10,13 +10,14 @@ import { urls } from 'scenes/urls'
 
 import type { FeatureFlagType } from '~/types'
 
-import { getFlagVariants } from '../utils'
+import { getDefaultBaselineVariantKey, getFlagVariants } from '../utils'
 
 interface VariantsPanelLinkFeatureFlagProps {
     linkedFeatureFlag: FeatureFlagType | null
     setShowFeatureFlagSelector: () => void
     disabled?: boolean
     onRemove?: () => void
+    baselineVariantKey?: string
 }
 
 const getTargetingSummary = (flag: FeatureFlagType): string[] => {
@@ -75,6 +76,7 @@ export const VariantsPanelLinkFeatureFlag = ({
     setShowFeatureFlagSelector,
     disabled = false,
     onRemove,
+    baselineVariantKey,
 }: VariantsPanelLinkFeatureFlagProps): JSX.Element => {
     if (!linkedFeatureFlag) {
         if (disabled) {
@@ -101,6 +103,7 @@ export const VariantsPanelLinkFeatureFlag = ({
     }
 
     const variants = getFlagVariants(linkedFeatureFlag)
+    const effectiveBaselineVariantKey = baselineVariantKey ?? getDefaultBaselineVariantKey(variants)
 
     return (
         <div>
@@ -155,7 +158,7 @@ export const VariantsPanelLinkFeatureFlag = ({
                         <div className="text-xs uppercase tracking-wide font-semibold text-muted">Variants</div>
                         <div className="flex flex-wrap gap-1.5">
                             {variants.map(({ key }) => (
-                                <LemonTag key={key} type={key === 'control' ? 'primary' : 'default'}>
+                                <LemonTag key={key} type={key === effectiveBaselineVariantKey ? 'primary' : 'default'}>
                                     {key}
                                 </LemonTag>
                             ))}

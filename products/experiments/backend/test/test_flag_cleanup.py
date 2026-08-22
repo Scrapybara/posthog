@@ -23,9 +23,7 @@ class TestCleanupPlan(TestCase):
                 {"control", "red"},
                 True,
             ),
-            # Won but nothing shipped: single non-control is a best guess, flagged low-confidence.
             ("won_unshipped_single", "won", _variants(("control", 50), ("test", 50)), "test", {"control"}, False),
-            # Won but nothing shipped and multiple non-control: don't guess — keep nothing, low-confidence.
             (
                 "won_unshipped_ambiguous",
                 "won",
@@ -55,3 +53,33 @@ class TestCleanupPlan(TestCase):
         self.assertEqual(plan.keep_variant, keep)
         self.assertEqual(set(plan.remove_variants), remove)
         self.assertEqual(plan.confident, confident)
+
+    @parameterized.expand(
+        [
+            ("lost", "variant-b", {"control", "variant-a"}, True),
+            ("invalid", "variant-b", {"control", "variant-a"}, True),
+            ("inconclusive", "variant-b", {"control", "variant-a"}, False),
+            ("stopped_early", "variant-b", {"control", "variant-a"}, False),
+        ]
+    )
+    def test_cleanup_plan_uses_configured_baseline(self, conclusion, keep, remove, confident):
+        plan = cleanup_plan(
+            conclusion,
+            _variants(("control", 34), ("variant-a", 33), ("variant-b", 33)),
+            baseline_variant_key="variant-b",
+        )
+
+        self.assertEqual(plan.keep_variant, keep)
+        self.assertEqual(set(plan.remove_variants), remove)
+        self.assertEqual(plan.confident, confident)
+
+    def test_cleanup_plan_does_not_keep_missing_configured_baseline(self):
+        plan = cleanup_plan(
+            "lost",
+            _variants(("control", 50), ("variant-a", 50)),
+            baseline_variant_key="removed",
+        )
+
+        self.assertEqual(plan.keep_variant, "control")
+        self.assertEqual(plan.remove_variants, ["variant-a"])
+        self.assertFalse(plan.confident)

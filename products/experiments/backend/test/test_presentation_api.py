@@ -3062,27 +3062,17 @@ class TestExperimentCRUD(_HoistFlagConfigClientMixin, APILicensedTest):
         # The inferred baseline is pinned, not left implicit (order-sensitive).
         self.assertEqual(response.json()["stats_config"]["baseline_variant_key"], "test_0")
 
-    @parameterized.expand(
-        [
-            ("Control",),
-            ("CONTROL",),
-            ("cOnTrOl",),
-        ]
-    )
-    def test_creating_experiment_normalizes_capitalized_control_key(self, control_key: str):
-        # LLM callers often emit `Control` or `CONTROL` from natural-language input.
-        # The serializer should rewrite it to lowercase `control` instead of rejecting,
-        # since intent is unambiguous and the runtime treats `control` as a reserved key.
-        ff_key = f"case-insensitive-{control_key.lower()}-{control_key}"
+    def test_creating_experiment_preserves_capitalized_variant_key(self):
+        ff_key = "capitalized-baseline"
         response = self.client.post(
             f"/api/projects/{self.team.id}/experiments/",
             {
-                "name": f"Capitalized control {control_key}",
+                "name": "Capitalized baseline",
                 "description": "",
                 "feature_flag_key": ff_key,
                 "parameters": {
                     "feature_flag_variants": [
-                        {"key": control_key, "name": "Control", "split_percent": 50},
+                        {"key": "Control", "name": "Control", "split_percent": 50},
                         {"key": "test", "name": "Test", "split_percent": 50},
                     ]
                 },
@@ -3092,41 +3082,11 @@ class TestExperimentCRUD(_HoistFlagConfigClientMixin, APILicensedTest):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         variants = response.json()["parameters"]["feature_flag_variants"]
-        self.assertEqual([v["key"] for v in variants], ["control", "test"])
-        # The persisted flag should also use lowercase `control`.
+        self.assertEqual([v["key"] for v in variants], ["Control", "test"])
+        self.assertEqual(response.json()["stats_config"]["baseline_variant_key"], "Control")
         flag = FeatureFlag.objects.get(key=ff_key)
         flag_keys = [v["key"] for v in flag.filters["multivariate"]["variants"]]
-        self.assertEqual(flag_keys, ["control", "test"])
-
-    def test_creating_experiment_does_not_collapse_when_control_already_present(self):
-        # If both `control` and `Control` are passed, normalization must NOT run —
-        # otherwise it would rewrite `Control` → `control` and produce two duplicate
-        # entries. The downstream FeatureFlagSerializer may then accept (variants
-        # preserved) or reject (duplicate-key error) — both prove the normalization
-        # path was skipped. A wrong rewrite would surface as duplicate `control` keys
-        # in the 201 response, which the assertion below would catch.
-        ff_key = "control-and-capital-control"
-        response = self.client.post(
-            f"/api/projects/{self.team.id}/experiments/",
-            {
-                "name": "Both controls",
-                "description": "",
-                "feature_flag_key": ff_key,
-                "parameters": {
-                    "feature_flag_variants": [
-                        {"key": "control", "name": "lowercase", "split_percent": 50},
-                        {"key": "Control", "name": "Capitalized", "split_percent": 50},
-                    ]
-                },
-            },
-            format="json",
-        )
-
-        # Must land on a deterministic outcome — not silently bypass.
-        self.assertIn(response.status_code, [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST])
-        if response.status_code == status.HTTP_201_CREATED:
-            variants = response.json()["parameters"]["feature_flag_variants"]
-            self.assertEqual([v["key"] for v in variants], ["control", "Control"])
+        self.assertEqual(flag_keys, ["Control", "test"])
 
     def test_creating_updating_experiment_with_group_aggregation(self):
         ff_key = "a-b-tests"

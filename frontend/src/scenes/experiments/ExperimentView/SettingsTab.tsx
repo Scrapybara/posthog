@@ -1,8 +1,9 @@
 import { useActions, useValues } from 'kea'
 
 import { IconPencil } from '@posthog/icons'
-import { LemonButton, LemonCheckbox, LemonSelect, LemonTag, Link } from '@posthog/lemon-ui'
+import { LemonBanner, LemonButton, LemonCheckbox, LemonSelect, LemonTag, Link } from '@posthog/lemon-ui'
 
+import { Spinner } from 'lib/lemon-ui/Spinner'
 import { LinkedHogFunctions } from 'scenes/hog-functions/list/LinkedHogFunctions'
 import { experimentsConfigLogic } from 'scenes/settings/environment/experimentsConfigLogic'
 import { urls } from 'scenes/urls'
@@ -19,7 +20,7 @@ import { resolveSequentialEnabled } from './sequential'
 import { StatsMethodModal } from './StatsMethodModal'
 
 export function SettingsTab(): JSX.Element {
-    const { experiment, statsMethod, variants } = useValues(experimentLogic)
+    const { experiment, statsMethod, variants, experimentUpdateLoading } = useValues(experimentLogic)
     const { updateExperimentSettings } = useActions(experimentLogic)
     const { openStatsEngineModal, openCupedModal } = useActions(modalsLogic)
     const { experimentsConfig } = useValues(experimentsConfigLogic)
@@ -47,6 +48,10 @@ export function SettingsTab(): JSX.Element {
     )
 
     const returnTo = urls.experiment(experiment.id)
+    const baselineVariantKey = getBaselineVariantKey(experiment)
+    const configuredBaselineVariantKey = experiment.stats_config?.baseline_variant_key
+    const availableBaselineVariants = variants.filter(({ key }) => !experiment.excluded_variants?.includes(key))
+    const isBaselineVariantValid = availableBaselineVariants.some(({ key }) => key === baselineVariantKey)
 
     // Only show alerts section for saved experiments, as the alert relies on experiment.id for filtering
     const shouldShowSignificanceAlerts = typeof experiment.id === 'number'
@@ -90,18 +95,32 @@ export function SettingsTab(): JSX.Element {
             </div>
             <div>
                 <h2 className="font-semibold text-lg">Baseline variant</h2>
-                <LemonSelect
-                    value={getBaselineVariantKey(experiment)}
-                    options={variants.map((v) => ({
-                        value: v.key,
-                        label: v.key,
-                    }))}
-                    onChange={(value) => {
-                        updateExperimentSettings({
-                            stats_config: { ...experiment.stats_config, baseline_variant_key: value },
-                        })
-                    }}
-                />
+                {!isBaselineVariantValid && configuredBaselineVariantKey && (
+                    <LemonBanner type="warning" className="mb-2">
+                        The baseline variant "{configuredBaselineVariantKey}" is no longer available. Select another
+                        baseline before refreshing results.
+                    </LemonBanner>
+                )}
+                <div className="flex items-center gap-2">
+                    <LemonSelect
+                        value={isBaselineVariantValid ? baselineVariantKey : undefined}
+                        options={availableBaselineVariants.map((v) => ({
+                            value: v.key,
+                            label: v.key,
+                        }))}
+                        onChange={(value) => {
+                            if (experimentUpdateLoading) {
+                                return
+                            }
+                            updateExperimentSettings({
+                                stats_config: { ...experiment.stats_config, baseline_variant_key: value },
+                            })
+                        }}
+                        disabledReason={experimentUpdateLoading ? 'Saving the baseline variant' : undefined}
+                        data-attr="experiment-baseline-variant"
+                    />
+                    {experimentUpdateLoading && <Spinner />}
+                </div>
                 <p className="text-muted text-xs mt-1">The variant all others are compared against.</p>
             </div>
             <div>

@@ -177,7 +177,7 @@ export function legacyCountDataForVariant(
 
 /**
  * @deprecated
- * Calculate credible interval for a variant as percentage difference from control
+ * Calculate credible interval for a variant as percentage difference from the baseline
  */
 export function legacyCredibleIntervalForVariant(
     metricResult: LegacyExperimentMetricResult,
@@ -190,9 +190,7 @@ export function legacyCredibleIntervalForVariant(
     }
 
     if (metricType === InsightType.FUNNELS) {
-        const controlVariant = (metricResult.variants as FunnelExperimentVariant[]).find(
-            ({ key }) => key === 'control'
-        ) as FunnelExperimentVariant
+        const controlVariant = metricResult.variants[0] as FunnelExperimentVariant
         const controlConversionRate =
             controlVariant.success_count / (controlVariant.success_count + controlVariant.failure_count)
 
@@ -207,9 +205,7 @@ export function legacyCredibleIntervalForVariant(
         return [lowerBound, upperBound]
     }
 
-    const controlVariant = (metricResult.variants as TrendExperimentVariant[]).find(
-        ({ key }) => key === 'control'
-    ) as TrendExperimentVariant
+    const controlVariant = metricResult.variants[0] as TrendExperimentVariant
 
     const controlMean = controlVariant.count / controlVariant.absolute_exposure
     if (!controlMean) {
@@ -337,21 +333,22 @@ export function legacyExpectedRunningTime(
 
 /**
  * @deprecated
- * Calculate delta (percentage change) between a variant and control
+ * Calculate delta (percentage change) between a variant and the baseline
  */
 export function legacyCalculateDelta(
     metricResult: LegacyExperimentMetricResult,
     variantKey: string,
     metricType: InsightType
 ): DeltaResult | null {
-    if (!metricResult || variantKey === 'control') {
+    const baselineVariantKey = metricResult?.variants[0]?.key
+    if (!metricResult || !baselineVariantKey || variantKey === baselineVariantKey) {
         return null
     }
 
     let delta = 0
 
     if (metricType === InsightType.TRENDS) {
-        const controlVariant = (metricResult.variants as any[]).find((v: any) => v.key === 'control')
+        const controlVariant = (metricResult.variants as any[]).find((v: any) => v.key === baselineVariantKey)
         const variantData = (metricResult.variants as any[]).find((v: any) => v.key === variantKey)
 
         if (
@@ -368,7 +365,7 @@ export function legacyCalculateDelta(
         delta = (variantMean - controlMean) / controlMean
     } else {
         const variantRate = legacyConversionRateForVariant(metricResult, variantKey)
-        const controlRate = legacyConversionRateForVariant(metricResult, 'control')
+        const controlRate = legacyConversionRateForVariant(metricResult, baselineVariantKey)
 
         if (!variantRate || !controlRate) {
             return null

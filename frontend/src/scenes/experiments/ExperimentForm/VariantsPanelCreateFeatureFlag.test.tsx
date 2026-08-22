@@ -38,6 +38,19 @@ jest.mock('scenes/feature-flags/JSONEditorInput', () => ({
     ),
 }))
 
+jest.mock('lib/lemon-ui/LemonSelect', () => ({
+    LemonSelect: ({ value, options, onChange, disabledReason }: any) => (
+        <button
+            aria-label="Baseline variant"
+            type="button"
+            disabled={!!disabledReason}
+            onClick={() => onChange?.((options.find((option: any) => option.value !== value) ?? options[0])?.value)}
+        >
+            Select baseline variant
+        </button>
+    ),
+}))
+
 describe('VariantsPanelCreateFeatureFlag', () => {
     const mockOnChange = jest.fn()
 
@@ -114,8 +127,19 @@ describe('VariantsPanelCreateFeatureFlag', () => {
             expect(mockOnChange).toHaveBeenCalledWith(
                 expect.objectContaining({
                     variants: [expect.objectContaining({ key: 'baseline' }), expect.objectContaining({ key: 'test' })],
+                    stats_config: expect.objectContaining({ baseline_variant_key: 'baseline' }),
                 })
             )
+        })
+
+        it('updates the baseline when selecting a different variant', async () => {
+            renderComponent(defaultExperiment)
+
+            await userEvent.click(screen.getByLabelText('Baseline variant'))
+
+            expect(mockOnChange).toHaveBeenCalledWith({
+                stats_config: expect.objectContaining({ baseline_variant_key: 'test' }),
+            })
         })
 
         it('locks the control variant key for web experiments', () => {
@@ -293,6 +317,24 @@ describe('VariantsPanelCreateFeatureFlag', () => {
             // Control variant should not have a delete button
             const deleteButton = controlRow.querySelector('[data-attr^="delete-prop-filter"]')
             expect(deleteButton).not.toBeInTheDocument()
+        })
+
+        it('does not show a delete button for an explicitly selected baseline', () => {
+            const experimentWithThreeVariants = {
+                ...defaultExperiment,
+                stats_config: { baseline_variant_key: 'test' },
+                feature_flag_config: flagConfig([
+                    { key: 'control', rollout_percentage: 33 },
+                    { key: 'test', rollout_percentage: 33 },
+                    { key: 'test-2', rollout_percentage: 34 },
+                ]),
+            }
+
+            const { container } = renderComponent(experimentWithThreeVariants)
+            const rows = container.querySelectorAll('tbody tr')
+
+            expect(rows[0].querySelector('[data-attr^="delete-prop-filter"]')).toBeInTheDocument()
+            expect(rows[1].querySelector('[data-attr^="delete-prop-filter"]')).not.toBeInTheDocument()
         })
     })
 

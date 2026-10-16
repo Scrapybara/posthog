@@ -295,7 +295,7 @@ class SandboxSession(BaseSandboxService):
                     attachment_ids=attachment_ids,
                 )
             except (AttachmentNotFoundError, AttachmentValidationError) as error:
-                raise exceptions.ValidationError(str(error)) from error
+                raise exceptions.ValidationError(str(error)) from None
 
         system_prompt = PromptService(self.team, self.user).build()
 
@@ -334,7 +334,7 @@ class SandboxSession(BaseSandboxService):
                         attachment_ids=attachment_ids,
                     )
                 except (AttachmentNotFoundError, AttachmentValidationError) as error:
-                    raise exceptions.ValidationError(str(error)) from error
+                    raise exceptions.ValidationError(str(error)) from None
 
             ph_state = PostHogAIRunState(
                 system_prompt=system_prompt,
@@ -423,7 +423,7 @@ class SandboxSession(BaseSandboxService):
                     attachment_ids=attachment_ids,
                 )
             except (AttachmentNotFoundError, AttachmentValidationError) as error:
-                raise exceptions.ValidationError(str(error)) from error
+                raise exceptions.ValidationError(str(error)) from None
         try:
             signal_task_followup_message(
                 run.workflow_id,
@@ -510,7 +510,7 @@ class SandboxSession(BaseSandboxService):
                     attachment_ids=attachment_ids,
                 )
             except (AttachmentNotFoundError, AttachmentValidationError) as error:
-                raise exceptions.ValidationError(str(error)) from error
+                raise exceptions.ValidationError(str(error)) from None
 
         system_prompt = PromptService(self.team, self.user).build()
 
@@ -550,7 +550,7 @@ class SandboxSession(BaseSandboxService):
                         attachment_ids=attachment_ids,
                     )
                 except (AttachmentNotFoundError, AttachmentValidationError) as error:
-                    raise exceptions.ValidationError(str(error)) from error
+                    raise exceptions.ValidationError(str(error)) from None
                 if promotion is None:
                     raise exceptions.ValidationError("Failed to attach images to the sandbox run.")
                 tasks_facade.update_task_run_state(

@@ -140,9 +140,9 @@ class AssistantAttachmentsViewSet(TeamAndOrgViewSetMixin, GenericViewSet):
                 attachments=data["attachments"],
             )
         except AttachmentValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(str(error)) from None
         except AttachmentStorageError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(str(error)) from None
         serializer = AttachmentPrepareResponseSerializer(
             {
                 "attachments": [
@@ -186,11 +186,11 @@ class AssistantAttachmentsViewSet(TeamAndOrgViewSetMixin, GenericViewSet):
                 attachment_id=str(data["attachment_id"]),
             )
         except AttachmentNotFoundError as error:
-            raise NotFound(str(error)) from error
+            raise NotFound(str(error)) from None
         except AttachmentValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(str(error)) from None
         except AttachmentStorageError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(str(error)) from None
         serializer = AttachmentFinalizeResponseSerializer(
             {
                 "id": finalized.id,

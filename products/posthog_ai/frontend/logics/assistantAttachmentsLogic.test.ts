@@ -47,7 +47,7 @@ describe('assistantAttachmentsLogic', () => {
         Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() })
         const baseFetch = global.fetch.bind(global)
         global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
-            if (typeof input === 'string' && input.startsWith('https://upload.test')) {
+            if (input === 'https://upload.test') {
                 return Promise.resolve({ ok: true } as Response)
             }
             return baseFetch(input, init)

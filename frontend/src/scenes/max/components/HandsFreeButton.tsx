@@ -11,9 +11,10 @@ import { handsFreeLogic } from '../handsFreeLogic'
 
 interface HandsFreeButtonProps {
     panelId?: string
+    disabledReason?: string
 }
 
-export function HandsFreeButton({ panelId }: HandsFreeButtonProps): JSX.Element | null {
+export function HandsFreeButton({ panelId, disabledReason }: HandsFreeButtonProps): JSX.Element | null {
     const flagEnabled = useFeatureFlag('MAX_HANDS_FREE')
     const { status, canUseHandsFree } = useValues(handsFreeLogic({ panelId }))
     const { toggleHandsFree } = useActions(handsFreeLogic({ panelId }))
@@ -30,8 +31,9 @@ export function HandsFreeButton({ panelId }: HandsFreeButtonProps): JSX.Element 
                 type="tertiary"
                 icon={<IconMicrophone />}
                 onClick={toggleHandsFree}
-                tooltip="Enter hands-free"
+                tooltip={disabledReason || 'Enter hands-free'}
                 aria-label="Enter hands-free"
+                disabledReason={disabledReason}
             />
         </Shortcut>
     )

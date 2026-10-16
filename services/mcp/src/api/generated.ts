@@ -10202,6 +10202,18 @@ export namespace Schemas {
       Role: 'role',
     } as const;
 
+    /**
+     * * `image/png` - image/png
+     * * `image/jpeg` - image/jpeg
+     */
+    export type AssistantAttachmentContentTypeEnum = typeof AssistantAttachmentContentTypeEnum[keyof typeof AssistantAttachmentContentTypeEnum];
+
+
+    export const AssistantAttachmentContentTypeEnum = {
+      ImagePng: 'image/png',
+      ImageJpeg: 'image/jpeg',
+    } as const;
+
     export interface AsyncDeletionStatus {
       /** The UUID of the person whose events are queued for deletion. */
       person_uuid: string;
@@ -10214,6 +10226,96 @@ export namespace Schemas {
          * @nullable
          */
       delete_verified_at: string | null;
+    }
+
+    export interface AttachmentDeleteRequest {
+      /** Conversation UUID the image attachment belongs to. */
+      conversation_id: string;
+      /** Single attachment ID to delete from staging. */
+      attachment_id: string;
+    }
+
+    export interface AttachmentFinalizeRequest {
+      /** Conversation UUID the uploaded image attachment belongs to. */
+      conversation_id: string;
+      /** Prepared attachment ID to validate and finalize for sandbox use. */
+      attachment_id: string;
+    }
+
+    export interface AttachmentFinalizeResponse {
+      /** Opaque attachment ID for sandbox message sends. */
+      id: string;
+      /** Sanitized file name recorded for the image attachment. */
+      file_name: string;
+      /** Validated MIME type for the normalized image.
+       *
+       * * `image/png` - image/png
+       * * `image/jpeg` - image/jpeg */
+      content_type: AssistantAttachmentContentTypeEnum;
+      /** Normalized image size in bytes. */
+      size: number;
+      /** Normalized image width in pixels. */
+      width: number;
+      /** Normalized image height in pixels. */
+      height: number;
+    }
+
+    export interface AttachmentPrepareItem {
+      /**
+         * File name to associate with the uploaded image.
+         * @maxLength 255
+         */
+      file_name: string;
+      /**
+         * Expected upload size in bytes. Each image must be 4194304 bytes or smaller.
+         * @minimum 1
+         * @maximum 4194304
+         */
+      size: number;
+      /** Exact MIME type for the direct upload. Only PNG and JPEG are supported.
+       *
+       * * `image/png` - image/png
+       * * `image/jpeg` - image/jpeg */
+      content_type: AssistantAttachmentContentTypeEnum;
+    }
+
+    export interface AttachmentPrepareRequest {
+      /** Conversation UUID the staged image attachments belong to. */
+      conversation_id: string;
+      /**
+         * Images to stage for the next sandbox message.
+         * @minItems 1
+         * @maxItems 4
+         */
+      attachments: AttachmentPrepareItem[];
+    }
+
+    /**
+     * Signed S3-compatible form fields to include with the upload request.
+     */
+    export type AttachmentPrepareResponseItemUploadFields = {[key: string]: string};
+
+    export interface AttachmentPrepareResponseItem {
+      /** Opaque attachment ID for finalize, delete, and sandbox message sends. */
+      id: string;
+      /** Sanitized file name recorded for the image attachment. */
+      file_name: string;
+      /** Signed MIME type for the upload.
+       *
+       * * `image/png` - image/png
+       * * `image/jpeg` - image/jpeg */
+      content_type: AssistantAttachmentContentTypeEnum;
+      /** Expected upload size in bytes. */
+      size: number;
+      /** Signed direct-upload URL for the image attachment. */
+      upload_url: string;
+      /** Signed S3-compatible form fields to include with the upload request. */
+      upload_fields: AttachmentPrepareResponseItemUploadFields;
+    }
+
+    export interface AttachmentPrepareResponse {
+      /** Prepared image uploads. */
+      attachments: AttachmentPrepareResponseItem[];
     }
 
     export interface AttributeBreakdownRow {
@@ -52597,7 +52699,7 @@ export namespace Schemas {
       Ultracode: 'ultracode',
     } as const;
 
-    export interface TaskRunArtifactMetadata {
+    export interface TaskRunSkillBundleMetadata {
       /**
          * Name of the local skill included in a skill_bundle artifact.
          * @maxLength 255
@@ -52625,6 +52727,23 @@ export namespace Schemas {
          */
       schema_version: number;
     }
+
+    export interface TaskRunImageAttachmentMetadata {
+      /** PostHog AI conversation that supplied a user attachment. */
+      conversation_id: string;
+      /**
+         * Normalized image width in pixels for a user attachment.
+         * @minimum 1
+         */
+      width: number;
+      /**
+         * Normalized image height in pixels for a user attachment.
+         * @minimum 1
+         */
+      height: number;
+    }
+
+    export type TaskRunArtifactMetadata = TaskRunSkillBundleMetadata | TaskRunImageAttachmentMetadata;
 
     /**
      * * `agent` - agent
@@ -69509,18 +69628,24 @@ export namespace Schemas {
     }
 
     /**
-     * Request body for `POST /conversations/{id}/open/`. A string `content` processes a turn; a
-     * null/absent `content` warms a sandbox that idles awaiting the first message.
+     * Request body for `POST /conversations/{id}/open/`. Nonblank `content` processes a turn and may include
+     * `attachment_ids`; null or absent `content` with no attachments warms a sandbox awaiting its first message.
      */
     export interface SandboxOpen {
       /**
-         * The user's message text. Omit or null to warm a sandbox (boot + idle) ahead of the first message.
+         * The user's message text. Omit or null to warm a sandbox ahead of the first message, unless attachment_ids are provided.
          * @maxLength 40000
          * @nullable
          */
       content?: string | null;
       /** Client-generated trace id correlated with the resulting Run's SSE stream. */
       trace_id?: string;
+      /**
+         * Finalized sandbox image attachment IDs to send with this message.
+         * @minItems 1
+         * @maxItems 4
+         */
+      attachment_ids?: string[];
       /** Typed PostHog entities (and free text) attached to this message. */
       attached_context?: SandboxAttachedContextItem[];
       /** Initial permission mode for the sandbox agent session. Defaults to `auto`, which allows safe tool use while preserving explicit confirmations.

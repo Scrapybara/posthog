@@ -1418,7 +1418,7 @@ export const TaskRunReasoningEffortEnumApi = {
     Ultracode: 'ultracode',
 } as const
 
-export interface TaskRunArtifactMetadataApi {
+export interface TaskRunSkillBundleMetadataApi {
     /**
      * Name of the local skill included in a skill_bundle artifact.
      * @maxLength 255
@@ -1446,6 +1446,23 @@ export interface TaskRunArtifactMetadataApi {
      */
     schema_version: number
 }
+
+export interface TaskRunImageAttachmentMetadataApi {
+    /** PostHog AI conversation that supplied a user attachment. */
+    conversation_id: string
+    /**
+     * Normalized image width in pixels for a user attachment.
+     * @minimum 1
+     */
+    width: number
+    /**
+     * Normalized image height in pixels for a user attachment.
+     * @minimum 1
+     */
+    height: number
+}
+
+export type TaskRunArtifactMetadataApi = TaskRunSkillBundleMetadataApi | TaskRunImageAttachmentMetadataApi
 
 /**
  * * `agent` - agent

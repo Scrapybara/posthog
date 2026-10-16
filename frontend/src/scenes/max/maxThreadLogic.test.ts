@@ -12,6 +12,7 @@ import { lemonToast } from 'lib/lemon-ui/LemonToast'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { notebookLogic } from 'scenes/notebooks/Notebook/notebookLogic'
 import { NotebookTarget } from 'scenes/notebooks/types'
+import { projectLogic } from 'scenes/projectLogic'
 import { sceneLogic } from 'scenes/sceneLogic'
 import { Scene } from 'scenes/sceneTypes'
 import { urls } from 'scenes/urls'
@@ -30,7 +31,9 @@ import {
 import { initKeaTests } from '~/test/init'
 import { Conversation, ConversationDetail, ConversationStatus, ConversationType } from '~/types'
 
+import * as conversationsFrontendApi from 'products/conversations/frontend/generated/api'
 import { attachedContextLogic, runStreamLogic } from 'products/posthog_ai/frontend/api/logics'
+import { assistantAttachmentsLogic } from 'products/posthog_ai/frontend/logics/assistantAttachmentsLogic'
 import { RuntimeEnumApi } from 'products/tasks/frontend/generated/api.schemas'
 
 import { EnhancedToolCall, TOOL_DEFINITIONS } from './max-constants'
@@ -60,6 +63,7 @@ jest.mock(
 describe('maxThreadLogic', () => {
     let logic: ReturnType<typeof maxThreadLogic.build>
     let maxLogicInstance: ReturnType<typeof maxLogic.build>
+    let projectLogicInstance: ReturnType<typeof projectLogic.build>
 
     beforeEach(() => {
         useMocks({
@@ -87,6 +91,10 @@ describe('maxThreadLogic', () => {
         maxLogicInstance.mount()
         maxLogicInstance.actions.setConversationId(MOCK_CONVERSATION_ID)
 
+        projectLogicInstance = projectLogic()
+        projectLogicInstance.mount()
+        projectLogicInstance.actions.loadCurrentProjectSuccess({ id: 997, name: 'Test project' } as any)
+
         logic = maxThreadLogic({ conversationId: MOCK_CONVERSATION_ID, panelId: 'test' })
         logic.mount()
     })
@@ -105,6 +113,7 @@ describe('maxThreadLogic', () => {
             maxLogicInstance.cache.eventSourceController?.abort()
             maxLogicInstance.unmount()
         }
+        projectLogicInstance?.unmount()
 
         // Clean up any remaining mocks
         jest.restoreAllMocks()
@@ -1816,12 +1825,12 @@ describe('maxThreadLogic', () => {
             // Warm = open with content: null. Keep the POST in flight so the abandon races it.
             let resolvePrewarm: (handle: typeof warmHandle) => void = () => {}
             const openSpy = jest
-                .spyOn(api.conversations, 'open')
+                .spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
                 .mockReturnValue(new Promise<typeof warmHandle>((resolve) => (resolvePrewarm = resolve)) as any)
 
             logic.actions.prewarmSandbox()
             await flush()
-            expect(openSpy).toHaveBeenCalledWith(MOCK_CONVERSATION_ID, {
+            expect(openSpy).toHaveBeenCalledWith('997', MOCK_CONVERSATION_ID, {
                 content: null,
                 initial_permission_mode: 'auto',
             })
@@ -1843,7 +1852,7 @@ describe('maxThreadLogic', () => {
         it('does not release a warm that resolved with no pending abandon', async () => {
             await mountIdleSandbox()
 
-            jest.spyOn(api.conversations, 'open').mockResolvedValue(warmHandle)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockResolvedValue(warmHandle)
 
             await expectLogic(logic, () => {
                 logic.actions.prewarmSandbox()
@@ -3574,7 +3583,7 @@ describe('maxThreadLogic', () => {
             const taskSpy = jest
                 .spyOn(api.tasks, 'get')
                 .mockResolvedValue({ id: 'pi-task', runtime: RuntimeEnumApi.Pi } as any)
-            const openSpy = jest.spyOn(api.conversations, 'open')
+            const openSpy = jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
 
             logic.actions.askMax('hello')
             await Promise.resolve()
@@ -3591,7 +3600,7 @@ describe('maxThreadLogic', () => {
             const taskSpy = jest
                 .spyOn(api.tasks, 'get')
                 .mockResolvedValue({ id: 'acp-task', runtime: RuntimeEnumApi.Acp } as any)
-            jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockResolvedValue(sandboxRunResponse)
 
             await expectLogic(logic, () => {
                 logic.actions.askMax('hello')
@@ -3602,7 +3611,9 @@ describe('maxThreadLogic', () => {
         })
 
         it('holds the streaming lock until the sandbox turn completes and releases exactly once', async () => {
-            const openSpy = jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            const openSpy = jest
+                .spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+                .mockResolvedValue(sandboxRunResponse)
 
             await expectLogic(logic, () => {
                 logic.actions.streamConversation(
@@ -3612,12 +3623,14 @@ describe('maxThreadLogic', () => {
             }).toDispatchActions(['openSandboxSse'])
 
             expect(openSpy).toHaveBeenCalledWith(
+                '997',
                 MOCK_CONVERSATION_ID,
                 expect.objectContaining({
                     content: 'hello',
                     initial_permission_mode: 'auto',
                 })
             )
+            expect(openSpy.mock.calls[0]?.[2]).not.toHaveProperty('attachment_ids')
 
             // The POST finished, but the turn is still streaming — the lock must still be held
             expect(maxLogicInstance.values.activeStreamingThreads).toEqual(1)
@@ -3637,7 +3650,7 @@ describe('maxThreadLogic', () => {
         })
 
         it('does not release the lock on a non-terminal task_run_state frame', async () => {
-            jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockResolvedValue(sandboxRunResponse)
 
             await expectLogic(logic, () => {
                 logic.actions.streamConversation(
@@ -3660,7 +3673,7 @@ describe('maxThreadLogic', () => {
         })
 
         it('lights the optimistic boot indicator before the open POST and clears it once the SSE opens', async () => {
-            jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockResolvedValue(sandboxRunResponse)
 
             await expectLogic(logic, () => {
                 logic.actions.streamConversation(
@@ -3674,7 +3687,7 @@ describe('maxThreadLogic', () => {
         })
 
         it('releases the lock immediately and surfaces an error when the send POST fails', async () => {
-            jest.spyOn(api.conversations, 'open').mockRejectedValue(new Error('boom'))
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockRejectedValue(new Error('boom'))
 
             await expectLogic(logic, () => {
                 logic.actions.streamConversation(
@@ -3694,8 +3707,28 @@ describe('maxThreadLogic', () => {
             ).toEqual(true)
         })
 
+        it('fails a sandbox send if the current project has not loaded yet', async () => {
+            projectLogicInstance.actions.loadCurrentProjectSuccess(null as any)
+            const openSpy = jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+
+            await expectLogic(logic, () => {
+                logic.actions.streamConversation(
+                    { agent_mode: null, is_sandbox: true, content: 'hello', conversation: MOCK_CONVERSATION_ID },
+                    0
+                )
+            }).toDispatchActions(['pushSandboxError', 'decrActiveStreamingThreads'])
+
+            expect(openSpy).not.toHaveBeenCalled()
+            expect(maxLogicInstance.values.activeStreamingThreads).toEqual(0)
+            expect(
+                runStreamLogic({ streamKey: MOCK_CONVERSATION_ID }).values.threadItems.some(
+                    (item) => item.type === 'human_message' && item.text === 'hello'
+                )
+            ).toEqual(false)
+        })
+
         it('releases the lock immediately when no run was started', async () => {
-            const openSpy = jest.spyOn(api.conversations, 'open')
+            const openSpy = jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
 
             await expectLogic(logic, () => {
                 logic.actions.streamConversation(
@@ -3708,8 +3741,144 @@ describe('maxThreadLogic', () => {
             expect(maxLogicInstance.values.activeStreamingThreads).toEqual(0)
         })
 
+        it('sends ready attachment ids only on sandbox turns', async () => {
+            const attachmentLogicInstance = assistantAttachmentsLogic({ conversationId: MOCK_CONVERSATION_ID })
+            attachmentLogicInstance.mount()
+            attachmentLogicInstance.actions.addAttachment({
+                localId: 'local-1',
+                file: new File(['a'], 'a.png', { type: 'image/png', lastModified: 1 }),
+                fileKey: 'a.png:1:1:image/png',
+                previewUrl: 'blob:a.png',
+                status: 'ready',
+            })
+            attachmentLogicInstance.actions.setAttachmentReady('local-1', 'attachment-1')
+            logic.actions.setIsSandboxMode(true)
+
+            const openSpy = jest
+                .spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+                .mockResolvedValue(sandboxRunResponse)
+
+            await expectLogic(logic, () => {
+                logic.actions.askMax('hello')
+            }).toDispatchActions(['openSandboxSse'])
+
+            expect(openSpy).toHaveBeenCalledWith(
+                '997',
+                MOCK_CONVERSATION_ID,
+                expect.objectContaining({
+                    content: 'hello',
+                    attachment_ids: ['attachment-1'],
+                })
+            )
+
+            attachmentLogicInstance.unmount()
+        })
+
+        it('keeps the submitted attachment snapshot stable while routing the sandbox turn', async () => {
+            const attachmentLogicInstance = assistantAttachmentsLogic({ conversationId: MOCK_CONVERSATION_ID })
+            attachmentLogicInstance.mount()
+            attachmentLogicInstance.actions.addAttachment({
+                localId: 'local-first',
+                file: new File(['a'], 'first.png', { type: 'image/png', lastModified: 1 }),
+                fileKey: 'first.png:1:1:image/png',
+                previewUrl: 'blob:first.png',
+                status: 'ready',
+            })
+            attachmentLogicInstance.actions.setAttachmentReady('local-first', 'attachment-first')
+            logic.actions.setIsSandboxMode(true)
+            maxLogicInstance.actions.setPendingBindTaskId('acp-task')
+
+            let resolveTask!: (task: { id: string; runtime: RuntimeEnumApi }) => void
+            jest.spyOn(api.tasks, 'get').mockImplementation(
+                () => new Promise((resolve) => (resolveTask = resolve as typeof resolveTask))
+            )
+            const openSpy = jest
+                .spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+                .mockResolvedValue(sandboxRunResponse)
+
+            logic.actions.askMax('first message')
+            expect(attachmentLogicInstance.values.attachmentsAreSending).toBe(true)
+
+            attachmentLogicInstance.actions.addAttachment({
+                localId: 'local-second',
+                file: new File(['b'], 'second.png', { type: 'image/png', lastModified: 2 }),
+                fileKey: 'second.png:1:2:image/png',
+                previewUrl: 'blob:second.png',
+                status: 'ready',
+            })
+            attachmentLogicInstance.actions.setAttachmentReady('local-second', 'attachment-second')
+            logic.actions.askMax('duplicate message')
+
+            await expectLogic(logic, () => {
+                resolveTask({ id: 'acp-task', runtime: RuntimeEnumApi.Acp })
+            }).toDispatchActions(['openSandboxSse'])
+
+            expect(openSpy).toHaveBeenCalledTimes(1)
+            expect(openSpy).toHaveBeenCalledWith(
+                '997',
+                MOCK_CONVERSATION_ID,
+                expect.objectContaining({
+                    content: 'first message',
+                    attachment_ids: ['attachment-first'],
+                })
+            )
+            expect(attachmentLogicInstance.values.readyAttachmentIds).toEqual(['attachment-second'])
+
+            attachmentLogicInstance.unmount()
+        })
+
+        it('keeps ready attachments after the sandbox open request fails', async () => {
+            const attachmentLogicInstance = assistantAttachmentsLogic({ conversationId: MOCK_CONVERSATION_ID })
+            attachmentLogicInstance.mount()
+            attachmentLogicInstance.actions.addAttachment({
+                localId: 'local-failed',
+                file: new File(['a'], 'a.png', { type: 'image/png', lastModified: 1 }),
+                fileKey: 'a.png:1:1:image/png',
+                previewUrl: 'blob:a.png',
+                status: 'ready',
+            })
+            attachmentLogicInstance.actions.setAttachmentReady('local-failed', 'attachment-failed')
+            logic.actions.setIsSandboxMode(true)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockRejectedValue(new Error('open failed'))
+
+            await expectLogic(logic, () => {
+                logic.actions.askMax('hello')
+            }).toDispatchActions(['markSandboxAttachmentsSendFailed'])
+
+            expect(attachmentLogicInstance.values.attachmentsAreSending).toBe(false)
+            expect(attachmentLogicInstance.values.readyAttachmentIds).toEqual(['attachment-failed'])
+
+            attachmentLogicInstance.unmount()
+        })
+
+        it('does not open an attachment-only sandbox turn', async () => {
+            const attachmentLogicInstance = assistantAttachmentsLogic({ conversationId: MOCK_CONVERSATION_ID })
+            attachmentLogicInstance.mount()
+            attachmentLogicInstance.actions.addAttachment({
+                localId: 'local-1',
+                file: new File(['a'], 'a.png', { type: 'image/png', lastModified: 1 }),
+                fileKey: 'a.png:1:1:image/png',
+                previewUrl: 'blob:a.png',
+                status: 'ready',
+            })
+            attachmentLogicInstance.actions.setAttachmentReady('local-1', 'attachment-1')
+            logic.actions.setIsSandboxMode(true)
+
+            const openSpy = jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+            logic.actions.askMax('   ')
+            await Promise.resolve()
+            await Promise.resolve()
+
+            expect(openSpy).not.toHaveBeenCalled()
+            expect(attachmentLogicInstance.values.attachments[0]?.status).toEqual('ready')
+
+            attachmentLogicInstance.unmount()
+        })
+
         it('degrades a keyed non-allowlisted context item to a text attachment instead of dropping it', async () => {
-            const openSpy = jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            const openSpy = jest
+                .spyOn(conversationsFrontendApi, 'conversationsOpenCreate')
+                .mockResolvedValue(sandboxRunResponse)
             // initKeaTests() in beforeEach resets the kea context, so no explicit unmount is needed
             attachedContextLogic.mount()
             attachedContextLogic.actions.registerContext('test-provider', [
@@ -3724,6 +3893,7 @@ describe('maxThreadLogic', () => {
             }).toDispatchActions(['openSandboxSse'])
 
             expect(openSpy).toHaveBeenCalledWith(
+                '997',
                 MOCK_CONVERSATION_ID,
                 expect.objectContaining({
                     attached_context: expect.arrayContaining([{ type: 'text', value: 'trace 0189-abc ("LLM trace")' }]),
@@ -3748,7 +3918,7 @@ describe('maxThreadLogic', () => {
                 addEventListener(): void {}
                 close(): void {}
             }
-            jest.spyOn(api.conversations, 'open').mockResolvedValue(sandboxRunResponse)
+            jest.spyOn(conversationsFrontendApi, 'conversationsOpenCreate').mockResolvedValue(sandboxRunResponse)
         })
 
         afterEach(() => {

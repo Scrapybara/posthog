@@ -33,7 +33,13 @@ import { resolveLlmGatewayUrl } from "../utils/gateway";
 import { Logger } from "../utils/logger";
 import { TaskRunEventStreamSender } from "./event-stream-sender";
 import { type JwtPayload, JwtValidationError, validateJwt } from "./jwt";
-import { jsonRpcRequestSchema } from "./schemas";
+import {
+  MAX_USER_ATTACHMENT_BYTES,
+  resolveLegacyArtifactsFromManifest,
+  resolveUserArtifactsById,
+  validateUserArtifactData,
+} from "./resolve-user-artifacts";
+import { jsonRpcRequestSchema, userAttachmentIdsSchema } from "./schemas";
 import type { AgentServerConfig } from "./types";
 
 interface SseController {
@@ -57,11 +63,15 @@ const userMessageCommandSchema = z
   .object({
     content: z.string().min(1).optional(),
     artifacts: z.array(z.record(z.string(), z.unknown())).optional(),
+    artifact_ids: userAttachmentIdsSchema.optional(),
     messageId: z.string().min(1).optional(),
     steer: z.boolean().optional(),
   })
   .refine(
-    (params) => params.content || (params.artifacts?.length ?? 0) > 0,
+    (params) =>
+      params.content ||
+      (params.artifacts?.length ?? 0) > 0 ||
+      (params.artifact_ids?.length ?? 0) > 0,
     "Either content or artifacts are required",
   );
 
@@ -705,12 +715,23 @@ export class PiAgentServer {
     runtime: PiRuntime,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const artifacts = Array.isArray(params.artifacts)
-      ? (params.artifacts as TaskRunArtifact[])
-      : [];
+    const legacyArtifacts = await resolveLegacyArtifactsFromManifest(
+      this.posthogAPI,
+      this.config.taskId,
+      this.config.runId,
+      Array.isArray(params.artifacts) ? params.artifacts : [],
+    );
+    const resolvedArtifacts = await resolveUserArtifactsById(
+      this.posthogAPI,
+      this.config.taskId,
+      this.config.runId,
+      Array.isArray(params.artifact_ids)
+        ? (params.artifact_ids as string[])
+        : [],
+    );
     const message = await this.prepareUserMessage(
       typeof params.content === "string" ? params.content : "",
-      artifacts,
+      [...legacyArtifacts, ...resolvedArtifacts],
     );
     const result = await this.dispatchUserMessage(
       runtime,
@@ -741,14 +762,23 @@ export class PiAgentServer {
       if (!artifact.storage_path) {
         continue;
       }
-      const data = await this.posthogAPI.downloadArtifact(
-        this.config.taskId,
-        this.config.runId,
-        artifact.storage_path,
-      );
+      const data =
+        artifact.source === "user_attachment"
+          ? await this.posthogAPI.downloadArtifact(
+              this.config.taskId,
+              this.config.runId,
+              artifact.storage_path,
+              MAX_USER_ATTACHMENT_BYTES,
+            )
+          : await this.posthogAPI.downloadArtifact(
+              this.config.taskId,
+              this.config.runId,
+              artifact.storage_path,
+            );
       if (!data) {
         throw new Error(`Failed to download attachment: ${artifact.name}`);
       }
+      validateUserArtifactData(artifact, data);
 
       const mimeType = artifact.content_type ?? "application/octet-stream";
       if (mimeType.startsWith("image/")) {
@@ -762,7 +792,11 @@ export class PiAgentServer {
       }
 
       await mkdir(attachmentDirectory, { recursive: true });
-      const fileName = `${artifact.id}-${basename(artifact.name)}`;
+      const safeArtifactId = basename(artifact.id ?? "attachment").replace(
+        /[^\w.-]/g,
+        "_",
+      );
+      const fileName = `${safeArtifactId}-${basename(artifact.name)}`;
       const filePath = join(attachmentDirectory, fileName);
       await writeFile(filePath, Buffer.from(data));
       filePaths.push(filePath);

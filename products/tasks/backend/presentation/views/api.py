@@ -1218,7 +1218,12 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
 
     def _get_run_or_404(self, pk) -> tasks_contracts.TaskRunDetailDTO:
         task_id = self._ensure_task_accessible()
-        run = tasks_facade.get_task_run_detail(pk, task_id, self.team_id)
+        run = tasks_facade.get_task_run_detail(
+            pk,
+            task_id,
+            self.team_id,
+            include_pending_artifacts=self._is_sandbox_agent_request(task_id),
+        )
         if run is None:
             raise NotFound()
         return run
@@ -1848,7 +1853,13 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     def artifacts_presign(self, request, pk=None, **kwargs):
         task_id = self._ensure_task_accessible()
         storage_path = request.validated_data["storage_path"]
-        url, error = tasks_facade.presign_task_run_artifact(pk, task_id, self.team_id, storage_path=storage_path)
+        url, error = tasks_facade.presign_task_run_artifact(
+            pk,
+            task_id,
+            self.team_id,
+            storage_path=storage_path,
+            include_pending_artifacts=self._is_sandbox_agent_request(task_id),
+        )
         if url is None and error is None:
             raise NotFound()
         if error == "not_found":
@@ -1930,7 +1941,11 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         # Walk the resume chain so cloud→cloud resume runs can fetch the git checkpoint
         # pack/index that lives on the prior run they were forked from.
         content, artifact, error = tasks_facade.read_task_run_artifact(
-            pk, task_id, self.team_id, storage_path=storage_path
+            pk,
+            task_id,
+            self.team_id,
+            storage_path=storage_path,
+            include_pending_artifacts=self._is_sandbox_agent_request(task_id),
         )
         if content is None and artifact is None and error is None:
             raise NotFound()
@@ -1992,7 +2007,13 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     )
     def artifacts_download_by_id(self, request, pk=None, artifact_id=None, **kwargs):
         task_id = self._ensure_task_accessible()
-        url, error = tasks_facade.presign_task_run_artifact_download(pk, task_id, self.team_id, artifact_id=artifact_id)
+        url, error = tasks_facade.presign_task_run_artifact_download(
+            pk,
+            task_id,
+            self.team_id,
+            artifact_id=artifact_id,
+            include_pending_artifacts=self._is_sandbox_agent_request(task_id),
+        )
         if error == "unavailable":
             return Response(
                 TaskRunErrorResponseSerializer({"error": "Unable to generate download URL"}).data,

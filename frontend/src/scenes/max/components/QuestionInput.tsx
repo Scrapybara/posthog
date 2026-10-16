@@ -18,6 +18,9 @@ import { userLogic } from 'scenes/userLogic'
 import { AgentMode } from '~/queries/schema/schema-assistant-messages'
 import { ConversationQueueMessage } from '~/types'
 
+import { assistantAttachmentsLogic } from 'products/posthog_ai/frontend/api/logics'
+import { ImageAttachmentButton, ImageAttachmentPreviewList } from 'products/posthog_ai/frontend/api/primitives'
+
 import { ContextDisplay } from '../Context'
 import { handsFreeLogic } from '../handsFreeLogic'
 import { maxGlobalLogic } from '../maxGlobalLogic'
@@ -166,6 +169,8 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
         queueingEnabled,
         queuedMessages,
         queueSubmitting,
+        conversationId,
+        isSandboxMode,
     } = useValues(maxThreadLogic)
     const {
         askMax,
@@ -175,6 +180,10 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
         updateQueuedMessage,
         releaseSandboxPrewarm,
     } = useActions(maxThreadLogic)
+    const attachmentLogic = assistantAttachmentsLogic({ conversationId })
+    const { attachments, attachmentsAreSending, selectionError, attachmentSubmissionDisabledReason, isDragActive } =
+        useValues(attachmentLogic)
+    const { addFiles, removeAttachment, retryAttachment, setDragActive } = useActions(attachmentLogic)
     const { isActive: handsFreeActive } = useValues(handsFreeLogic({ panelId: maxPanelId }))
     // Only the hands-free row needs bottom-aligned pills — it has the mic + submit pair
     // pinned to the bottom and pills sitting in normal flow look misaligned next to them.
@@ -228,7 +237,13 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
         }
     }
 
+    const hasQuestion = inputValue.trim().length > 0
+    const attachmentsEnabled = isSandboxMode && !isSharedThread && !handsFreeActive
+
     const submit = (prompt: string): void => {
+        if (attachmentsAreSending) {
+            return
+        }
         // askMax reads the prompt arg directly and clears `question` afterwards, so drop any
         // pending debounce to stop it from re-populating the just-sent text.
         debouncedSetQuestion.cancel()
@@ -238,19 +253,47 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
         askMax(prompt)
     }
 
-    const hasQuestion = inputValue.trim().length > 0
+    const handleSelectedFiles = (files: File[]): void => {
+        if (!attachmentsEnabled || attachmentsAreSending || files.length === 0) {
+            return
+        }
+        addFiles(files)
+    }
+
+    const handlePastedFiles = (event: React.ClipboardEvent<HTMLElement>): void => {
+        if (!attachmentsEnabled) {
+            return
+        }
+        const files = Array.from(event.clipboardData.items)
+            .filter((item) => item.kind === 'file')
+            .flatMap((item) => {
+                const file = item.getAsFile()
+                return file ? [file] : []
+            })
+        if (files.length === 0) {
+            return
+        }
+        event.preventDefault()
+        handleSelectedFiles(files)
+    }
+
+    const attachmentsBlockedByQueue = queueingEnabled && threadLoading && attachments.length > 0
     // A fill-in suggestion typed its prefix in and is waiting for the user to complete it.
     const showFillInHint = !!fillInHint
-    const isQueueingSubmission = queueingEnabled && threadLoading && hasQuestion
+    const isQueueingSubmission = queueingEnabled && threadLoading && hasQuestion && !attachmentsBlockedByQueue
     const showStopButton = threadLoading && !isQueueingSubmission && !cancelLoading
 
     // Mirrors maxThreadLogic's `submissionDisabledReason` selector, but using the local input
     // value so the submit guard stays correct while the debounced sync to kea is still pending.
     const submissionDisabledReason = contextDisabledReason
         ? contextDisabledReason
-        : !inputValue
+        : !hasQuestion
           ? 'I need some input first'
-          : queueDisabledReason
+          : attachmentSubmissionDisabledReason
+            ? attachmentSubmissionDisabledReason
+            : attachmentsBlockedByQueue
+              ? 'Wait for the current reply before sending images'
+              : queueDisabledReason
 
     // Update autocomplete visibility when the input changes
     useEffect(() => {
@@ -268,7 +311,9 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
     }, [inputValue, showAutocomplete, autocompleteDismissed])
 
     let disabledReason = submissionDisabledReason
-    if (threadLoading && !isQueueingSubmission) {
+    if (attachmentsAreSending) {
+        disabledReason = 'Sending images…'
+    } else if (threadLoading && !isQueueingSubmission) {
         disabledReason = undefined
     }
     if (cancelLoading) {
@@ -340,8 +385,37 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             'bg-[var(--color-bg-fill-input)]',
                             isThreadVisible ? 'border-primary m-0.5 rounded-[7px]' : 'rounded-lg',
                             '[--input-ring-size:2px]',
-                            !streamingActive && '[--input-ring-color:var(--color-ai)]'
+                            !streamingActive && '[--input-ring-color:var(--color-ai)]',
+                            isDragActive && 'bg-accent-highlight-secondary/20'
                         )}
+                        onDragEnter={(event) => {
+                            if (!attachmentsEnabled || !Array.from(event.dataTransfer?.types || []).includes('Files')) {
+                                return
+                            }
+                            event.preventDefault()
+                            setDragActive(true)
+                        }}
+                        onDragLeave={(event) => {
+                            if (!attachmentsEnabled) {
+                                return
+                            }
+                            event.preventDefault()
+                            setDragActive(false)
+                        }}
+                        onDragOver={(event) => {
+                            if (!attachmentsEnabled || !Array.from(event.dataTransfer?.types || []).includes('Files')) {
+                                return
+                            }
+                            event.preventDefault()
+                        }}
+                        onDrop={(event) => {
+                            if (!attachmentsEnabled) {
+                                return
+                            }
+                            event.preventDefault()
+                            setDragActive(false)
+                            handleSelectedFiles(Array.from(event.dataTransfer.files || []))
+                        }}
                     >
                         {handsFreeActive ? (
                             <HandsFreeSurface panelId={maxPanelId} />
@@ -353,7 +427,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                     setAutocompleteDismissed(true)
                                 }}
                             >
-                                <div className="relative w-full">
+                                <div className="relative w-full" onPasteCapture={handlePastedFiles}>
                                     {!inputValue && (
                                         <div
                                             id="textarea-hint"
@@ -458,12 +532,23 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             </SlashCommandAutocomplete>
                         )}
 
-                        {!isSharedThread &&
-                            !handsFreeActive && (
-                                // When the hands-free flag is on, reserve ~80px (pr-20) so the chip
-                                // row doesn't wrap under the absolutely-positioned mic + send pair.
-                                // Without the flag the row only has send and the legacy pr-12 is
-                                // enough — keep it so non-flagged users see the original layout.
+                        {!isSharedThread && !handsFreeActive && (
+                            <>
+                                <ImageAttachmentPreviewList
+                                    attachments={attachments}
+                                    disabled={attachmentsAreSending}
+                                    onRemove={removeAttachment}
+                                    onRetry={retryAttachment}
+                                />
+                                {selectionError && (
+                                    <div className="px-2 pb-1 text-xs text-danger" role="alert">
+                                        {selectionError}
+                                    </div>
+                                )}
+                                {/* When the hands-free flag is on, reserve ~80px (pr-20) so the chip
+                                row doesn't wrap under the absolutely-positioned mic + send pair.
+                                Without the flag the row only has send and the legacy pr-12 is
+                                enough — keep it so non-flagged users see the original layout. */}
                                 <div className={cn('pb-2', handsFreeFlagEnabled ? 'pr-20' : 'pr-12')}>
                                     {!isThreadVisible ? (
                                         <div
@@ -482,6 +567,14 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                                         : 'items-start gap-1 h-full mt-1'
                                                 )}
                                             >
+                                                {attachmentsEnabled && (
+                                                    <ImageAttachmentButton
+                                                        disabled={
+                                                            attachmentsAreSending || (threadLoading && !queueingEnabled)
+                                                        }
+                                                        onFilesSelected={handleSelectedFiles}
+                                                    />
+                                                )}
                                                 {topActions}
                                             </div>
                                         </div>
@@ -489,7 +582,8 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                         <ContextDisplay size={contextDisplaySize} />
                                     )}
                                 </div>
-                            )}
+                            </>
+                        )}
                     </label>
                     <div
                         className={cn(
@@ -499,7 +593,18 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                             isThreadVisible ? 'bottom-[9px] right-[9px]' : 'bottom-[7px] right-[7px]'
                         )}
                     >
-                        <HandsFreeButton panelId={maxPanelId} />
+                        {attachmentsEnabled && isThreadVisible && (
+                            <ImageAttachmentButton
+                                disabled={attachmentsAreSending || (threadLoading && !queueingEnabled)}
+                                onFilesSelected={handleSelectedFiles}
+                            />
+                        )}
+                        <HandsFreeButton
+                            panelId={maxPanelId}
+                            disabledReason={
+                                attachments.length > 0 ? 'Remove images before entering hands-free' : undefined
+                            }
+                        />
                         {!handsFreeActive && (
                             <AIConsentPopoverWrapper
                                 placement="bottom-end"
@@ -553,7 +658,7 @@ export const QuestionInput = React.forwardRef<HTMLDivElement, QuestionInputProps
                                             </>
                                         )
                                     }
-                                    loading={threadLoading && !dataProcessingAccepted}
+                                    loading={attachmentsAreSending || (threadLoading && !dataProcessingAccepted)}
                                     disabledReason={disabledReason}
                                     className={disabledReason ? 'opacity-[0.5]' : ''}
                                     size="small"

@@ -95,7 +95,7 @@ import type {
   TaskRun,
   TaskRunArtifact,
 } from "../types";
-import { resourceLink } from "../utils/acp-content";
+import { image, resourceLink } from "../utils/acp-content";
 import { AsyncMutex } from "../utils/async-mutex";
 import { withTimeout } from "../utils/common";
 import { resolveGatewayProduct, resolveGatewayTarget } from "../utils/gateway";
@@ -113,6 +113,12 @@ import {
   checkoutExistingPullRequest,
   type ExistingPrCheckoutResult,
 } from "./pr-checkout";
+import {
+  MAX_USER_ATTACHMENT_BYTES,
+  resolveLegacyArtifactsFromManifest,
+  resolveUserArtifactsById,
+  validateUserArtifactData,
+} from "./resolve-user-artifacts";
 import { resolveRtkSavings } from "./rtk-savings";
 import { RunUsageAccumulator } from "./run-usage";
 import {
@@ -1180,12 +1186,27 @@ export class AgentServer {
             artifactCount: Array.isArray(params.artifacts)
               ? params.artifacts.length
               : 0,
+            artifactIdCount: Array.isArray(params.artifact_ids)
+              ? params.artifact_ids.length
+              : 0,
           });
+          const legacyArtifacts = await resolveLegacyArtifactsFromManifest(
+            this.posthogAPI,
+            commandSession.payload.task_id,
+            commandSession.payload.run_id,
+            Array.isArray(params.artifacts) ? params.artifacts : [],
+          );
+          const resolvedArtifacts = await resolveUserArtifactsById(
+            this.posthogAPI,
+            commandSession.payload.task_id,
+            commandSession.payload.run_id,
+            Array.isArray(params.artifact_ids)
+              ? (params.artifact_ids as string[])
+              : [],
+          );
           const builtPrompt = await this.buildPromptFromContentAndArtifacts({
             content: params.content as string | ContentBlock[] | undefined,
-            artifacts: Array.isArray(params.artifacts)
-              ? (params.artifacts as TaskRunArtifact[])
-              : [],
+            artifacts: [...legacyArtifacts, ...resolvedArtifacts],
             taskId: commandSession.payload.task_id,
             runId: commandSession.payload.run_id,
           });
@@ -2977,7 +2998,9 @@ export class AgentServer {
       const hasMatchingArtifact = artifacts.some(
         (artifact) =>
           artifact.type === "skill_bundle" &&
-          artifact.metadata?.skill_name === invocation.skillName,
+          artifact.metadata &&
+          "skill_name" in artifact.metadata &&
+          artifact.metadata.skill_name === invocation.skillName,
       );
       const installedSkill = hasMatchingArtifact
         ? this.installedSkillBundleInfo.get(
@@ -3019,7 +3042,11 @@ export class AgentServer {
   ): LocalSkillPromptContext | null {
     const installed = artifacts
       .filter((artifact) => artifact.type === "skill_bundle")
-      .map((artifact) => artifact.metadata?.skill_name)
+      .map((artifact) =>
+        artifact.metadata && "skill_name" in artifact.metadata
+          ? artifact.metadata.skill_name
+          : undefined,
+      )
       .filter((name): name is string => typeof name === "string")
       .map((name) =>
         this.installedSkillBundleInfo.get(
@@ -3140,8 +3167,12 @@ export class AgentServer {
     artifact: TaskRunArtifact,
   ): Promise<void> {
     const metadata = artifact.metadata;
-    const skillName = metadata?.skill_name;
-    const expectedSha256 = metadata?.content_sha256;
+    const skillName =
+      metadata && "skill_name" in metadata ? metadata.skill_name : undefined;
+    const expectedSha256 =
+      metadata && "content_sha256" in metadata
+        ? metadata.content_sha256
+        : undefined;
 
     if (!artifact.storage_path || !skillName || !expectedSha256) {
       throw new Error(
@@ -3322,13 +3353,27 @@ export class AgentServer {
       return null;
     }
 
-    const data = await this.posthogAPI.downloadArtifact(
-      taskId,
-      runId,
-      artifact.storage_path,
-    );
+    const data =
+      artifact.source === "user_attachment"
+        ? await this.posthogAPI.downloadArtifact(
+            taskId,
+            runId,
+            artifact.storage_path,
+            MAX_USER_ATTACHMENT_BYTES,
+          )
+        : await this.posthogAPI.downloadArtifact(
+            taskId,
+            runId,
+            artifact.storage_path,
+          );
     if (!data) {
       throw new Error(`Failed to download artifact ${artifact.name}`);
+    }
+    validateUserArtifactData(artifact, data);
+
+    const mimeType = artifact.content_type?.toLowerCase();
+    if (mimeType === "image/png" || mimeType === "image/jpeg") {
+      return image(Buffer.from(data).toString("base64"), mimeType);
     }
 
     const safeName = this.getSafeArtifactName(artifact.name);
@@ -3337,7 +3382,7 @@ export class AgentServer {
       ".posthog",
       "attachments",
       runId,
-      artifact.id ?? safeName,
+      this.getSafeArtifactName(artifact.id ?? safeName),
     );
     await mkdir(artifactDir, { recursive: true });
 

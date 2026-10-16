@@ -6331,6 +6331,31 @@ class TestTaskRunAPI(BaseTaskAPITest):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("metadata", json.dumps(response.json()))
 
+    def test_upload_artifacts_rejects_partial_skill_bundle_metadata(self):
+        task = self.create_task()
+        run = TaskRun.objects.create(task=task, team=self.team, status=TaskRun.Status.IN_PROGRESS)
+
+        response = self.client.post(
+            f"/api/projects/@current/tasks/{task.id}/runs/{run.id}/artifacts/",
+            {
+                "artifacts": [
+                    {
+                        "name": "local-skill.zip",
+                        "type": "skill_bundle",
+                        "source": "posthog_code_skill",
+                        "content": "c2tpbGw=",
+                        "content_encoding": "base64",
+                        "content_type": "application/zip",
+                        "metadata": {"skill_name": "partial-skill"},
+                    }
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("skill_source", json.dumps(response.json()))
+
     def test_upload_artifacts_rejects_invalid_base64_content(self):
         task = self.create_task()
         run = TaskRun.objects.create(task=task, team=self.team, status=TaskRun.Status.IN_PROGRESS)

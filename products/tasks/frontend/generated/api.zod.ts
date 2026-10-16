@@ -2050,9 +2050,9 @@ export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemStoragePat
 
 export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemContentTypeMax = 255
 
-export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneSkillNameMax = 255
+export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax = 255
 
-export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp = new RegExp(
+export const tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp = new RegExp(
     '^[a-f0-9]{64}$'
 )
 
@@ -2097,34 +2097,51 @@ export const TasksStagedArtifactsFinalizeUploadCreateBody = /* @__PURE__ */ zod.
                     .optional()
                     .describe('Optional MIME type recorded for the artifact'),
                 metadata: zod
-                    .object({
-                        skill_name: zod
-                            .string()
-                            .max(tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneSkillNameMax)
-                            .describe('Name of the local skill included in a skill_bundle artifact.'),
-                        skill_source: zod
-                            .enum(['user', 'repo', 'marketplace', 'codex'])
-                            .describe(
-                                '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            )
-                            .describe(
-                                'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            ),
-                        content_sha256: zod
-                            .string()
-                            .regex(
-                                tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp
-                            )
-                            .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
-                        bundle_format: zod
-                            .enum(['zip'])
-                            .describe('\* `zip` - zip')
-                            .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
-                        schema_version: zod
-                            .number()
-                            .min(1)
-                            .describe('Version of the local skill bundle metadata schema.'),
-                    })
+                    .union([
+                        zod.object({
+                            skill_name: zod
+                                .string()
+                                .max(
+                                    tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax
+                                )
+                                .describe('Name of the local skill included in a skill_bundle artifact.'),
+                            skill_source: zod
+                                .enum(['user', 'repo', 'marketplace', 'codex'])
+                                .describe(
+                                    '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                )
+                                .describe(
+                                    'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                ),
+                            content_sha256: zod
+                                .string()
+                                .regex(
+                                    tasksStagedArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp
+                                )
+                                .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
+                            bundle_format: zod
+                                .enum(['zip'])
+                                .describe('\* `zip` - zip')
+                                .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
+                            schema_version: zod
+                                .number()
+                                .min(1)
+                                .describe('Version of the local skill bundle metadata schema.'),
+                        }),
+                        zod.object({
+                            conversation_id: zod
+                                .uuid()
+                                .describe('PostHog AI conversation that supplied a user attachment.'),
+                            width: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image width in pixels for a user attachment.'),
+                            height: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image height in pixels for a user attachment.'),
+                        }),
+                    ])
                     .optional()
                     .describe('Optional structured metadata for special artifact types, such as skill bundles.'),
             })
@@ -2145,9 +2162,9 @@ export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemSizeMax = 3
 
 export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemContentTypeMax = 255
 
-export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneSkillNameMax = 255
+export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax = 255
 
-export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp = new RegExp(
+export const tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp = new RegExp(
     '^[a-f0-9]{64}$'
 )
 
@@ -2192,34 +2209,49 @@ export const TasksStagedArtifactsPrepareUploadCreateBody = /* @__PURE__ */ zod.o
                     .optional()
                     .describe('Optional MIME type for the artifact upload'),
                 metadata: zod
-                    .object({
-                        skill_name: zod
-                            .string()
-                            .max(tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneSkillNameMax)
-                            .describe('Name of the local skill included in a skill_bundle artifact.'),
-                        skill_source: zod
-                            .enum(['user', 'repo', 'marketplace', 'codex'])
-                            .describe(
-                                '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            )
-                            .describe(
-                                'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            ),
-                        content_sha256: zod
-                            .string()
-                            .regex(
-                                tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp
-                            )
-                            .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
-                        bundle_format: zod
-                            .enum(['zip'])
-                            .describe('\* `zip` - zip')
-                            .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
-                        schema_version: zod
-                            .number()
-                            .min(1)
-                            .describe('Version of the local skill bundle metadata schema.'),
-                    })
+                    .union([
+                        zod.object({
+                            skill_name: zod
+                                .string()
+                                .max(tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax)
+                                .describe('Name of the local skill included in a skill_bundle artifact.'),
+                            skill_source: zod
+                                .enum(['user', 'repo', 'marketplace', 'codex'])
+                                .describe(
+                                    '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                )
+                                .describe(
+                                    'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                ),
+                            content_sha256: zod
+                                .string()
+                                .regex(
+                                    tasksStagedArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp
+                                )
+                                .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
+                            bundle_format: zod
+                                .enum(['zip'])
+                                .describe('\* `zip` - zip')
+                                .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
+                            schema_version: zod
+                                .number()
+                                .min(1)
+                                .describe('Version of the local skill bundle metadata schema.'),
+                        }),
+                        zod.object({
+                            conversation_id: zod
+                                .uuid()
+                                .describe('PostHog AI conversation that supplied a user attachment.'),
+                            width: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image width in pixels for a user attachment.'),
+                            height: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image height in pixels for a user attachment.'),
+                        }),
+                    ])
                     .optional()
                     .describe('Optional structured metadata for special artifact types, such as skill bundles.'),
             })
@@ -2433,9 +2465,9 @@ export const tasksRunsArtifactsCreateBodyArtifactsItemSourceMax = 64
 export const tasksRunsArtifactsCreateBodyArtifactsItemContentEncodingDefault = `utf-8`
 export const tasksRunsArtifactsCreateBodyArtifactsItemContentTypeMax = 255
 
-export const tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneSkillNameMax = 255
+export const tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneOneSkillNameMax = 255
 
-export const tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneContentSha256RegExp = new RegExp('^[a-f0-9]{64}$')
+export const tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp = new RegExp('^[a-f0-9]{64}$')
 
 export const TasksRunsArtifactsCreateBody = /* @__PURE__ */ zod.object({
     artifacts: zod
@@ -2481,32 +2513,47 @@ export const TasksRunsArtifactsCreateBody = /* @__PURE__ */ zod.object({
                     .optional()
                     .describe('Optional MIME type for the artifact'),
                 metadata: zod
-                    .object({
-                        skill_name: zod
-                            .string()
-                            .max(tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneSkillNameMax)
-                            .describe('Name of the local skill included in a skill_bundle artifact.'),
-                        skill_source: zod
-                            .enum(['user', 'repo', 'marketplace', 'codex'])
-                            .describe(
-                                '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            )
-                            .describe(
-                                'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            ),
-                        content_sha256: zod
-                            .string()
-                            .regex(tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneContentSha256RegExp)
-                            .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
-                        bundle_format: zod
-                            .enum(['zip'])
-                            .describe('\* `zip` - zip')
-                            .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
-                        schema_version: zod
-                            .number()
-                            .min(1)
-                            .describe('Version of the local skill bundle metadata schema.'),
-                    })
+                    .union([
+                        zod.object({
+                            skill_name: zod
+                                .string()
+                                .max(tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneOneSkillNameMax)
+                                .describe('Name of the local skill included in a skill_bundle artifact.'),
+                            skill_source: zod
+                                .enum(['user', 'repo', 'marketplace', 'codex'])
+                                .describe(
+                                    '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                )
+                                .describe(
+                                    'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                ),
+                            content_sha256: zod
+                                .string()
+                                .regex(tasksRunsArtifactsCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp)
+                                .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
+                            bundle_format: zod
+                                .enum(['zip'])
+                                .describe('\* `zip` - zip')
+                                .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
+                            schema_version: zod
+                                .number()
+                                .min(1)
+                                .describe('Version of the local skill bundle metadata schema.'),
+                        }),
+                        zod.object({
+                            conversation_id: zod
+                                .uuid()
+                                .describe('PostHog AI conversation that supplied a user attachment.'),
+                            width: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image width in pixels for a user attachment.'),
+                            height: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image height in pixels for a user attachment.'),
+                        }),
+                    ])
                     .optional()
                     .describe('Optional structured metadata for special artifact types, such as skill bundles.'),
             })
@@ -2563,9 +2610,9 @@ export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemStoragePathM
 
 export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemContentTypeMax = 255
 
-export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneSkillNameMax = 255
+export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax = 255
 
-export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp = new RegExp(
+export const tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp = new RegExp(
     '^[a-f0-9]{64}$'
 )
 
@@ -2610,34 +2657,49 @@ export const TasksRunsArtifactsFinalizeUploadCreateBody = /* @__PURE__ */ zod.ob
                     .optional()
                     .describe('Optional MIME type recorded for the artifact'),
                 metadata: zod
-                    .object({
-                        skill_name: zod
-                            .string()
-                            .max(tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneSkillNameMax)
-                            .describe('Name of the local skill included in a skill_bundle artifact.'),
-                        skill_source: zod
-                            .enum(['user', 'repo', 'marketplace', 'codex'])
-                            .describe(
-                                '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            )
-                            .describe(
-                                'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            ),
-                        content_sha256: zod
-                            .string()
-                            .regex(
-                                tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp
-                            )
-                            .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
-                        bundle_format: zod
-                            .enum(['zip'])
-                            .describe('\* `zip` - zip')
-                            .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
-                        schema_version: zod
-                            .number()
-                            .min(1)
-                            .describe('Version of the local skill bundle metadata schema.'),
-                    })
+                    .union([
+                        zod.object({
+                            skill_name: zod
+                                .string()
+                                .max(tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax)
+                                .describe('Name of the local skill included in a skill_bundle artifact.'),
+                            skill_source: zod
+                                .enum(['user', 'repo', 'marketplace', 'codex'])
+                                .describe(
+                                    '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                )
+                                .describe(
+                                    'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                ),
+                            content_sha256: zod
+                                .string()
+                                .regex(
+                                    tasksRunsArtifactsFinalizeUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp
+                                )
+                                .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
+                            bundle_format: zod
+                                .enum(['zip'])
+                                .describe('\* `zip` - zip')
+                                .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
+                            schema_version: zod
+                                .number()
+                                .min(1)
+                                .describe('Version of the local skill bundle metadata schema.'),
+                        }),
+                        zod.object({
+                            conversation_id: zod
+                                .uuid()
+                                .describe('PostHog AI conversation that supplied a user attachment.'),
+                            width: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image width in pixels for a user attachment.'),
+                            height: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image height in pixels for a user attachment.'),
+                        }),
+                    ])
                     .optional()
                     .describe('Optional structured metadata for special artifact types, such as skill bundles.'),
             })
@@ -2658,9 +2720,9 @@ export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemSizeMax = 314
 
 export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemContentTypeMax = 255
 
-export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneSkillNameMax = 255
+export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax = 255
 
-export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp = new RegExp(
+export const tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp = new RegExp(
     '^[a-f0-9]{64}$'
 )
 
@@ -2705,32 +2767,49 @@ export const TasksRunsArtifactsPrepareUploadCreateBody = /* @__PURE__ */ zod.obj
                     .optional()
                     .describe('Optional MIME type for the artifact upload'),
                 metadata: zod
-                    .object({
-                        skill_name: zod
-                            .string()
-                            .max(tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneSkillNameMax)
-                            .describe('Name of the local skill included in a skill_bundle artifact.'),
-                        skill_source: zod
-                            .enum(['user', 'repo', 'marketplace', 'codex'])
-                            .describe(
-                                '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            )
-                            .describe(
-                                'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
-                            ),
-                        content_sha256: zod
-                            .string()
-                            .regex(tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneContentSha256RegExp)
-                            .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
-                        bundle_format: zod
-                            .enum(['zip'])
-                            .describe('\* `zip` - zip')
-                            .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
-                        schema_version: zod
-                            .number()
-                            .min(1)
-                            .describe('Version of the local skill bundle metadata schema.'),
-                    })
+                    .union([
+                        zod.object({
+                            skill_name: zod
+                                .string()
+                                .max(tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneSkillNameMax)
+                                .describe('Name of the local skill included in a skill_bundle artifact.'),
+                            skill_source: zod
+                                .enum(['user', 'repo', 'marketplace', 'codex'])
+                                .describe(
+                                    '\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                )
+                                .describe(
+                                    'Local source for the uploaded skill bundle, such as user or repo.\n\n\* `user` - user\n\* `repo` - repo\n\* `marketplace` - marketplace\n\* `codex` - codex'
+                                ),
+                            content_sha256: zod
+                                .string()
+                                .regex(
+                                    tasksRunsArtifactsPrepareUploadCreateBodyArtifactsItemMetadataOneOneContentSha256RegExp
+                                )
+                                .describe('SHA-256 hex digest of the uploaded skill bundle bytes.'),
+                            bundle_format: zod
+                                .enum(['zip'])
+                                .describe('\* `zip` - zip')
+                                .describe('Archive format used for the local skill bundle.\n\n\* `zip` - zip'),
+                            schema_version: zod
+                                .number()
+                                .min(1)
+                                .describe('Version of the local skill bundle metadata schema.'),
+                        }),
+                        zod.object({
+                            conversation_id: zod
+                                .uuid()
+                                .describe('PostHog AI conversation that supplied a user attachment.'),
+                            width: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image width in pixels for a user attachment.'),
+                            height: zod
+                                .number()
+                                .min(1)
+                                .describe('Normalized image height in pixels for a user attachment.'),
+                        }),
+                    ])
                     .optional()
                     .describe('Optional structured metadata for special artifact types, such as skill bundles.'),
             })

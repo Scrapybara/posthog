@@ -436,6 +436,14 @@ class StagedArtifactFinalizeResult:
 
 
 @dataclass(frozen=True)
+class PostHogAIAttachmentPromotionResult:
+    """Outcome of promoting sandbox image attachments into a task run's artifact manifest."""
+
+    attached_ids: list[str]
+    newly_attached_ids: list[str]
+
+
+@dataclass(frozen=True)
 class SlackThreadContextRepoResearchDTO:
     """The internal sandbox run the discovery agent used to pick a run's repo."""
 

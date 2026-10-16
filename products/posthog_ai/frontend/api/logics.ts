@@ -75,3 +75,13 @@ export type { RunnerPanelLogicProps, ActiveCreation } from '../logics/runnerPane
 // auto-submitting it); the paired `taskTrackerSceneLogic` consumes it on mount or when it arrives.
 export { composerSeedLogic } from '../logics/composerSeedLogic'
 export type { ComposerSeed, ComposerSeedLogicProps } from '../logics/composerSeedLogic'
+
+// --- Assistant image attachments ---
+export {
+    ASSISTANT_ATTACHMENT_ACCEPT,
+    MAX_ASSISTANT_ATTACHMENTS,
+    MAX_ASSISTANT_ATTACHMENT_BYTES,
+    MAX_ASSISTANT_ATTACHMENTS_TOTAL_BYTES,
+    assistantAttachmentsLogic,
+} from '../logics/assistantAttachmentsLogic'
+export type { AssistantAttachment, AssistantAttachmentsLogicProps } from '../logics/assistantAttachmentsLogic'

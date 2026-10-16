@@ -55,6 +55,11 @@ export const jsonRpcRequestSchema = z.object({
 
 export type JsonRpcRequest = z.infer<typeof jsonRpcRequestSchema>;
 
+export const userAttachmentIdsSchema = z
+  .array(z.uuid())
+  .max(4)
+  .refine((artifactIds) => new Set(artifactIds).size === artifactIds.length);
+
 export const userMessageParamsSchema = z
   .object({
     content: z
@@ -66,6 +71,7 @@ export const userMessageParamsSchema = z
       ])
       .optional(),
     artifacts: z.array(z.record(z.string(), z.unknown())).optional(),
+    artifact_ids: userAttachmentIdsSchema.optional(),
     messageId: z.string().min(1).optional(),
     steer: z.boolean().optional(),
   })
@@ -77,8 +83,10 @@ export const userMessageParamsSchema = z
           : Array.isArray(params.content) && params.content.length > 0;
       const hasArtifacts =
         Array.isArray(params.artifacts) && params.artifacts.length > 0;
+      const hasArtifactIds =
+        Array.isArray(params.artifact_ids) && params.artifact_ids.length > 0;
 
-      return hasContent || hasArtifacts;
+      return hasContent || hasArtifacts || hasArtifactIds;
     },
     { error: "Either content or artifacts are required" },
   );

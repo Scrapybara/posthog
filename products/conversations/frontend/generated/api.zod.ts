@@ -76,6 +76,8 @@ export const ConversationsCancelPartialUpdateBody = /* @__PURE__ */ zod.looseObj
  */
 export const conversationsOpenCreateBodyContentMax = 40000
 
+export const conversationsOpenCreateBodyAttachmentIdsMax = 4
+
 export const ConversationsOpenCreateBody = /* @__PURE__ */ zod
     .object({
         content: zod
@@ -83,12 +85,18 @@ export const ConversationsOpenCreateBody = /* @__PURE__ */ zod
             .max(conversationsOpenCreateBodyContentMax)
             .nullish()
             .describe(
-                "The user's message text. Omit or null to warm a sandbox (boot + idle) ahead of the first message."
+                "The user's message text. Omit or null to warm a sandbox ahead of the first message, unless attachment_ids are provided."
             ),
         trace_id: zod
             .uuid()
             .optional()
             .describe("Client-generated trace id correlated with the resulting Run's SSE stream."),
+        attachment_ids: zod
+            .array(zod.uuid())
+            .min(1)
+            .max(conversationsOpenCreateBodyAttachmentIdsMax)
+            .optional()
+            .describe('Finalized sandbox image attachment IDs to send with this message.'),
         attached_context: zod
             .array(
                 zod
@@ -145,7 +153,7 @@ export const ConversationsOpenCreateBody = /* @__PURE__ */ zod
             ),
     })
     .describe(
-        'Request body for `POST \/conversations\/{id}\/open\/`. A string `content` processes a turn; a\nnull\/absent `content` warms a sandbox that idles awaiting the first message.'
+        'Request body for `POST \/conversations\/{id}\/open\/`. Nonblank `content` processes a turn and may include\n`attachment_ids`; null or absent `content` with no attachments warms a sandbox awaiting its first message.'
     )
 
 export const ConversationsQueueCreateBody = /* @__PURE__ */ zod.looseObject({})

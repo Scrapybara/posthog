@@ -154,6 +154,59 @@ describe("PostHogAPIClient", () => {
     );
   });
 
+  it("rejects an oversized artifact before reading its response body", async () => {
+    const client = new PostHogAPIClient({
+      apiUrl: "https://app.posthog.com",
+      getApiKey: vi.fn().mockResolvedValue("token"),
+      projectId: 7,
+    });
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ "content-length": "5" }),
+      arrayBuffer,
+    });
+
+    const artifact = await client.downloadArtifact(
+      "task-1",
+      "run-1",
+      "tasks/artifacts/image.png",
+      4,
+    );
+
+    expect(artifact).toBeNull();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("cancels a streamed artifact as soon as it exceeds the byte limit", async () => {
+    const client = new PostHogAPIClient({
+      apiUrl: "https://app.posthog.com",
+      getApiKey: vi.fn().mockResolvedValue("token"),
+      projectId: 7,
+    });
+    const cancel = vi.fn();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array([1, 2, 3]) })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array([4, 5, 6]) });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      body: { getReader: () => ({ read, cancel }) },
+    });
+
+    const artifact = await client.downloadArtifact(
+      "task-1",
+      "run-1",
+      "tasks/artifacts/image.png",
+      4,
+    );
+
+    expect(artifact).toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [
       "includes message_id and text_parts when provided",

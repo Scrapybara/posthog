@@ -30,6 +30,10 @@ export type { ComposerModelEffortPickersProps } from '../components/composer/Com
 // The composer's context affordance: @-picker (TaxonomicPopover) + removable chips over the
 // attached-context store. Drop into `Composer.Header`; headless half is in api/logics.
 export { AttachedContextBar } from '../components/composer/AttachedContextBar'
+export { ImageAttachmentButton } from '../components/composer/ImageAttachmentButton'
+export type { ImageAttachmentButtonProps } from '../components/composer/ImageAttachmentButton'
+export { ImageAttachmentPreviewList } from '../components/composer/ImageAttachmentPreviewList'
+export type { ImageAttachmentPreviewListProps } from '../components/composer/ImageAttachmentPreviewList'
 
 // Welcome header (logomark + headline + subheadline) and its overridable default headlines.
 export { Welcome } from '../components/welcome/Welcome'

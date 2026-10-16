@@ -540,6 +540,7 @@ export class PostHogAPIClient {
     taskId: string,
     runId: string,
     storagePath: string,
+    maxBytes?: number,
   ): Promise<ArrayBuffer | null> {
     const teamId = this.getTeamId();
 
@@ -554,7 +555,45 @@ export class PostHogAPIClient {
       if (!response.ok) {
         throw new Error(`Failed to download artifact: ${response.status}`);
       }
-      return response.arrayBuffer();
+      if (maxBytes === undefined) {
+        return response.arrayBuffer();
+      }
+
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+        throw new Error("Artifact exceeds the download size limit");
+      }
+      if (!response.body) {
+        const data = await response.arrayBuffer();
+        if (data.byteLength > maxBytes) {
+          throw new Error("Artifact exceeds the download size limit");
+        }
+        return data;
+      }
+
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error("Artifact exceeds the download size limit");
+        }
+        chunks.push(value);
+      }
+
+      const data = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        data.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return data.buffer;
     } catch {
       return null;
     }

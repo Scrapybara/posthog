@@ -236,6 +236,8 @@ __all__ = [
     "list_tasks",
     "pi_cloud_runtime_enabled",
     "prepare_task_run_artifact_uploads",
+    "promote_posthog_ai_attachments",
+    "rollback_posthog_ai_attachments",
     "prepare_task_staged_artifacts",
     "presign_task_run_artifact",
     "presign_task_run_artifact_download",
@@ -326,7 +328,7 @@ def _task_run_to_dto(run: TaskRun, *, task: Task | None = None) -> contracts.Tas
         error_message=run.error_message,
         output=run.output,
         state=run.state or {},
-        artifacts=run.artifacts or [],
+        artifacts=_task_run_artifacts(run, include_pending=False),
         created_at=run.created_at,
         updated_at=run.updated_at,
         completed_at=run.completed_at,
@@ -430,7 +432,18 @@ def _task_run_log_url(run: TaskRun) -> str | None:
     return presigned_url
 
 
-def _task_run_detail_to_dto(run: TaskRun) -> contracts.TaskRunDetailDTO:
+_POSTHOG_AI_PENDING_DELIVERY_KEY = "_posthog_ai_pending_delivery"
+
+
+def _task_run_artifacts(run: TaskRun, *, include_pending: bool) -> list[dict]:
+    return [
+        {key: value for key, value in entry.items() if key != _POSTHOG_AI_PENDING_DELIVERY_KEY}
+        for entry in (run.artifacts or [])
+        if include_pending or not entry.get(_POSTHOG_AI_PENDING_DELIVERY_KEY)
+    ]
+
+
+def _task_run_detail_to_dto(run: TaskRun, *, include_pending_artifacts: bool = False) -> contracts.TaskRunDetailDTO:
     """Map a ``TaskRun`` to its HTTP detail DTO.
 
     Reproduces the SMF-derived fields ``TaskRunDetailSerializer`` computed: ``log_url`` does
@@ -457,7 +470,7 @@ def _task_run_detail_to_dto(run: TaskRun) -> contracts.TaskRunDetailDTO:
         error_message=run.error_message,
         output=run.output,
         state=_public_task_run_state(run.state),
-        artifacts=run.artifacts or [],
+        artifacts=_task_run_artifacts(run, include_pending=include_pending_artifacts),
         created_at=run.created_at,
         updated_at=run.updated_at,
         completed_at=run.completed_at,
@@ -2290,10 +2303,18 @@ def list_task_runs(task_id: str | UUID, team_id: int) -> list[contracts.TaskRunD
     return [_task_run_detail_to_dto(run) for run in runs]
 
 
-def get_task_run_detail(run_id: str | UUID, task_id: str | UUID, team_id: int) -> contracts.TaskRunDetailDTO | None:
+def get_task_run_detail(
+    run_id: str | UUID,
+    task_id: str | UUID,
+    team_id: int,
+    *,
+    include_pending_artifacts: bool = False,
+) -> contracts.TaskRunDetailDTO | None:
     """A single run as a detail DTO, scoped to its task + team."""
     run = _get_visible_run(run_id, task_id, team_id)
-    return _task_run_detail_to_dto(run) if run is not None else None
+    return (
+        _task_run_detail_to_dto(run, include_pending_artifacts=include_pending_artifacts) if run is not None else None
+    )
 
 
 def get_task_run_stream_info(
@@ -3082,7 +3103,7 @@ def upload_task_run_artifacts(
         {**entry, "url": absolute_uri(_build_artifact_download_path(run, entry["id"]))}
         if entry.get("id")
         else dict(entry)
-        for entry in manifest
+        for entry in _task_run_artifacts(run, include_pending=uploaded_by == "agent")
     ]
 
     return uploaded, response_manifest
@@ -3185,6 +3206,8 @@ def finalize_task_run_artifact_uploads(
 
         existing_entry = _find_artifact_manifest_entry(manifest, artifact_id, storage_path)
         if existing_entry is not None:
+            if existing_entry.get(_POSTHOG_AI_PENDING_DELIVERY_KEY) and uploaded_by != "agent":
+                return None, "Artifact upload not found in object storage"
             finalized_entries.append(existing_entry)
             continue
 
@@ -3253,6 +3276,196 @@ def finalize_task_run_artifact_uploads(
         )
 
     return response_entries, None
+
+
+def _validate_posthog_ai_attachment(
+    attachment: dict[str, Any], *, team_id: int, user_id: int, conversation_id: str
+) -> None:
+    attachment_id = str(attachment.get("id", ""))
+    try:
+        UUID(attachment_id)
+    except (TypeError, ValueError) as error:
+        raise ValueError("PostHog AI attachment IDs must be UUIDs.") from error
+
+    content_type = attachment.get("content_type")
+    extension = {"image/png": "png", "image/jpeg": "jpg"}.get(content_type) if isinstance(content_type, str) else None
+    if extension is None:
+        raise ValueError("PostHog AI attachments must be PNG or JPEG images.")
+    if (
+        attachment.get("team_id") != team_id
+        or attachment.get("user_id") != user_id
+        or attachment.get("conversation_id") != conversation_id
+        or attachment.get("status") not in {"finalized", "promoted"}
+    ):
+        raise ValueError("PostHog AI attachment scope does not match the sandbox run.")
+
+    normalized_size = attachment.get("normalized_size")
+    width = attachment.get("width")
+    height = attachment.get("height")
+    if (
+        isinstance(normalized_size, bool)
+        or not isinstance(normalized_size, int)
+        or not 0 < normalized_size <= 4 * 1024 * 1024
+        or isinstance(width, bool)
+        or not isinstance(width, int)
+        or width <= 0
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or height <= 0
+        or width * height >= 20_000_000
+    ):
+        raise ValueError("PostHog AI attachment dimensions or size are invalid.")
+
+    expected_storage_path = (
+        f"posthog_ai/assistant_attachments/team_{team_id}/user_{user_id}/"
+        f"conversation_{conversation_id}/normalized/{attachment_id}.{extension}"
+    )
+    if attachment.get("normalized_storage_path") != expected_storage_path:
+        raise ValueError("PostHog AI attachment storage path is invalid.")
+
+
+def promote_posthog_ai_attachments(
+    *,
+    task_id: str | UUID,
+    run_id: str | UUID,
+    team_id: int,
+    user_id: int | None,
+    conversation_id: str,
+    attachments: list[dict[str, Any]],
+) -> contracts.PostHogAIAttachmentPromotionResult | None:
+    from posthog.storage import object_storage  # noqa: PLC0415 — keeps storage deps off facade import path
+
+    run = _get_visible_run(run_id, task_id, team_id)
+    if run is None or user_id is None or user_id <= 0:
+        return None
+    if not 0 < len(attachments) <= 4 or len({str(attachment.get("id")) for attachment in attachments}) != len(
+        attachments
+    ):
+        raise ValueError("Provide between 1 and 4 unique PostHog AI attachments.")
+    for attachment in attachments:
+        _validate_posthog_ai_attachment(
+            attachment,
+            team_id=team_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+    if sum(int(attachment["normalized_size"]) for attachment in attachments) > 10 * 1024 * 1024:
+        raise ValueError("PostHog AI attachments exceed the per-message size limit.")
+
+    prepared_entries: list[dict[str, Any]] = []
+    copied_targets_by_id: dict[str, str] = {}
+    existing_ids = {str(entry.get("id")) for entry in (run.artifacts or []) if entry.get("id")}
+    for attachment in attachments:
+        artifact_id = str(attachment["id"])
+        if artifact_id in existing_ids:
+            continue
+        source_storage_path = str(attachment["normalized_storage_path"])
+        safe_name, target_storage_path = _build_artifact_storage_path(run, artifact_id, str(attachment["file_name"]))
+        try:
+            object_storage.copy(source_storage_path, target_storage_path)
+            copied_targets_by_id[artifact_id] = target_storage_path
+            object_storage.tag(target_storage_path, {"ttl_days": "30", "team_id": str(run.team_id)})
+        except Exception as error:
+            for copied_target in copied_targets_by_id.values():
+                try:
+                    object_storage.delete(copied_target)
+                except Exception:
+                    pass
+            raise RuntimeError("Could not copy the image attachment into the sandbox run.") from error
+        entry = _build_artifact_manifest_entry(
+            artifact_id=artifact_id,
+            name=safe_name,
+            artifact_type="context",
+            source="user_attachment",
+            size=int(attachment["normalized_size"]),
+            content_type=str(attachment["content_type"]),
+            storage_path=target_storage_path,
+            uploaded_at=django_timezone.now().isoformat(),
+            metadata={
+                "conversation_id": conversation_id,
+                "width": int(attachment["width"]),
+                "height": int(attachment["height"]),
+            },
+        )
+        entry[_POSTHOG_AI_PENDING_DELIVERY_KEY] = True
+        entry["uploaded_by"] = "user"
+        if user_id is not None:
+            entry["uploaded_by_user_id"] = user_id
+        prepared_entries.append(entry)
+
+    newly_attached_ids: list[str] = []
+    try:
+        if prepared_entries:
+            with transaction.atomic():
+                locked_run = TaskRun.objects.select_for_update().get(pk=run.pk)
+                existing_ids = {str(entry.get("id")) for entry in (locked_run.artifacts or []) if entry.get("id")}
+                entries_to_append = [entry for entry in prepared_entries if str(entry["id"]) not in existing_ids]
+                newly_attached_ids = [str(entry["id"]) for entry in entries_to_append]
+                if entries_to_append:
+                    merged = list(locked_run.artifacts or [])
+                    merged.extend(entries_to_append)
+                    _save_artifact_manifest(locked_run, merged)
+    except Exception:
+        for copied_target in copied_targets_by_id.values():
+            try:
+                object_storage.delete(copied_target)
+            except Exception:
+                pass
+        raise
+
+    return contracts.PostHogAIAttachmentPromotionResult(
+        attached_ids=[str(attachment["id"]) for attachment in attachments],
+        newly_attached_ids=newly_attached_ids,
+    )
+
+
+def rollback_posthog_ai_attachments(
+    *, task_id: str | UUID, run_id: str | UUID, team_id: int, attachment_ids: list[str]
+) -> None:
+    from posthog.storage import object_storage  # noqa: PLC0415 — keeps storage deps off facade import path
+
+    run = _get_visible_run(run_id, task_id, team_id)
+    if run is None or not attachment_ids:
+        return
+    attachment_id_set = set(attachment_ids)
+    with transaction.atomic():
+        locked_run = TaskRun.objects.select_for_update().get(pk=run.pk)
+        manifest = list(locked_run.artifacts or [])
+        removed = [
+            entry
+            for entry in manifest
+            if entry.get("id") in attachment_id_set and entry.get(_POSTHOG_AI_PENDING_DELIVERY_KEY)
+        ]
+        kept = [entry for entry in manifest if entry not in removed]
+        _save_artifact_manifest(locked_run, kept)
+    for entry in removed:
+        storage_path = entry.get("storage_path")
+        if not storage_path:
+            continue
+        try:
+            object_storage.delete(str(storage_path))
+        except Exception:
+            pass
+
+
+def commit_posthog_ai_attachments(
+    *, task_id: str | UUID, run_id: str | UUID, team_id: int, attachment_ids: list[str]
+) -> None:
+    run = _get_visible_run(run_id, task_id, team_id)
+    if run is None or not attachment_ids:
+        return
+    attachment_id_set = set(attachment_ids)
+    with transaction.atomic():
+        locked_run = TaskRun.objects.select_for_update().get(pk=run.pk)
+        manifest = [
+            (
+                {key: value for key, value in entry.items() if key != _POSTHOG_AI_PENDING_DELIVERY_KEY}
+                if entry.get("id") in attachment_id_set
+                else entry
+            )
+            for entry in (locked_run.artifacts or [])
+        ]
+        _save_artifact_manifest(locked_run, manifest)
 
 
 def list_task_run_living_artifacts(run_id: str | UUID, task_id: str | UUID, team_id: int) -> list[dict] | None:
@@ -3363,7 +3576,12 @@ def edit_task_run_living_artifact(
 
 
 def presign_task_run_artifact(
-    run_id: str | UUID, task_id: str | UUID, team_id: int, *, storage_path: str
+    run_id: str | UUID,
+    task_id: str | UUID,
+    team_id: int,
+    *,
+    storage_path: str,
+    include_pending_artifacts: bool = False,
 ) -> tuple[str | None, str | None]:
     """Presign a download URL for an artifact on the run.
 
@@ -3376,7 +3594,7 @@ def presign_task_run_artifact(
     if run is None:
         return None, None
 
-    artifacts = run.artifacts or []
+    artifacts = _task_run_artifacts(run, include_pending=include_pending_artifacts)
     if not any(artifact.get("storage_path") == storage_path for artifact in artifacts):
         return None, "not_found"
 
@@ -3409,7 +3627,8 @@ def set_task_run_artifacts_dismissed(
         locked_run = TaskRun.objects.select_for_update().get(pk=run.pk)
         manifest = list(locked_run.artifacts or [])
         requested = set(artifact_ids)
-        if not requested.issubset({entry.get("id") for entry in manifest}):
+        visible_ids = {entry.get("id") for entry in manifest if not entry.get(_POSTHOG_AI_PENDING_DELIVERY_KEY)}
+        if not requested.issubset(visible_ids):
             return None, "not_found"
 
         # Restoring drops the key rather than nulling it, so a manifest entry only ever carries
@@ -3425,11 +3644,16 @@ def set_task_run_artifacts_dismissed(
         ]
         _save_artifact_manifest(locked_run, manifest)
 
-    return manifest, None
+    return _task_run_artifacts(locked_run, include_pending=False), None
 
 
 def presign_task_run_artifact_download(
-    run_id: str | UUID, task_id: str | UUID, team_id: int, *, artifact_id: str
+    run_id: str | UUID,
+    task_id: str | UUID,
+    team_id: int,
+    *,
+    artifact_id: str,
+    include_pending_artifacts: bool = False,
 ) -> tuple[str | None, str | None]:
     """Presign a download URL for an artifact addressed by its manifest id.
 
@@ -3442,7 +3666,14 @@ def presign_task_run_artifact_download(
     if run is None:
         return None, None
 
-    entry = next((a for a in run.artifacts or [] if a.get("id") == artifact_id), None)
+    entry = next(
+        (
+            artifact
+            for artifact in _task_run_artifacts(run, include_pending=include_pending_artifacts)
+            if artifact.get("id") == artifact_id
+        ),
+        None,
+    )
     if entry is None:
         return None, "not_found"
 
@@ -3458,7 +3689,12 @@ def presign_task_run_artifact_download(
 
 
 def read_task_run_artifact(
-    run_id: str | UUID, task_id: str | UUID, team_id: int, *, storage_path: str
+    run_id: str | UUID,
+    task_id: str | UUID,
+    team_id: int,
+    *,
+    storage_path: str,
+    include_pending_artifacts: bool = False,
 ) -> tuple[bytes | None, dict | None, str | None]:
     """Read artifact bytes for download, walking the resume chain.
 
@@ -3473,8 +3709,9 @@ def read_task_run_artifact(
         return None, None, None
 
     artifact = run.find_artifact_in_resume_chain(storage_path)
-    if artifact is None:
+    if artifact is None or (artifact.get(_POSTHOG_AI_PENDING_DELIVERY_KEY) and not include_pending_artifacts):
         return None, None, "not_found"
+    artifact = {key: value for key, value in artifact.items() if key != _POSTHOG_AI_PENDING_DELIVERY_KEY}
 
     try:
         content = object_storage.read_bytes(storage_path, missing_ok=True)

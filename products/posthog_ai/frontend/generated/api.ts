@@ -8,7 +8,79 @@ import { apiMutator } from '../../../../frontend/src/lib/api-orval-mutator'
  * PostHog API - generated
  * OpenAPI spec version: 1.0.0
  */
-import type { DocsSearchRequestApi, DocsSearchResponseApi, McpToolsCreate200 } from './api.schemas'
+import type {
+    AttachmentDeleteRequestApi,
+    AttachmentFinalizeRequestApi,
+    AttachmentFinalizeResponseApi,
+    AttachmentPrepareRequestApi,
+    AttachmentPrepareResponseApi,
+    DocsSearchRequestApi,
+    DocsSearchResponseApi,
+    McpToolsCreate200,
+} from './api.schemas'
+
+export const getAssistantAttachmentsDeleteCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/assistant_attachments/delete/`
+}
+
+/**
+ * Idempotently delete a single staged or finalized sandbox image attachment for one conversation.
+ * @summary Delete one sandbox image attachment
+ */
+export const assistantAttachmentsDeleteCreate = async (
+    projectId: string,
+    attachmentDeleteRequestApi: AttachmentDeleteRequestApi,
+    options?: RequestInit
+): Promise<void> => {
+    return apiMutator<void>(getAssistantAttachmentsDeleteCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(attachmentDeleteRequestApi),
+    })
+}
+
+export const getAssistantAttachmentsFinalizeCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/assistant_attachments/finalize/`
+}
+
+/**
+ * Validate, normalize, and finalize one staged image upload for sandbox messages.
+ * @summary Finalize sandbox image uploads
+ */
+export const assistantAttachmentsFinalizeCreate = async (
+    projectId: string,
+    attachmentFinalizeRequestApi: AttachmentFinalizeRequestApi,
+    options?: RequestInit
+): Promise<AttachmentFinalizeResponseApi> => {
+    return apiMutator<AttachmentFinalizeResponseApi>(getAssistantAttachmentsFinalizeCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(attachmentFinalizeRequestApi),
+    })
+}
+
+export const getAssistantAttachmentsPrepareCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/assistant_attachments/prepare/`
+}
+
+/**
+ * Reserve direct-upload image attachment slots for a sandbox conversation and return signed POST fields.
+ * @summary Prepare sandbox image uploads
+ */
+export const assistantAttachmentsPrepareCreate = async (
+    projectId: string,
+    attachmentPrepareRequestApi: AttachmentPrepareRequestApi,
+    options?: RequestInit
+): Promise<AttachmentPrepareResponseApi> => {
+    return apiMutator<AttachmentPrepareResponseApi>(getAssistantAttachmentsPrepareCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(attachmentPrepareRequestApi),
+    })
+}
 
 export const getMcpToolsCreateUrl = (projectId: string, toolName: string) => {
     return `/api/projects/${projectId}/mcp_tools/${toolName}/`

@@ -275,13 +275,16 @@ describe("PiAgentServer", () => {
     const sendCommand = vi.fn(
       async (_command: Record<string, unknown>) => ({}),
     );
+    const getTaskRun = vi.fn();
     const server = new PiAgentServer(config()) as unknown as {
+      posthogAPI: { getTaskRun: typeof getTaskRun };
       session: unknown;
       executeCommand(
         method: string,
         params: Record<string, unknown>,
       ): Promise<unknown>;
     };
+    server.posthogAPI.getTaskRun = getTaskRun;
     server.session = {
       runtime: {
         client: {
@@ -302,6 +305,7 @@ describe("PiAgentServer", () => {
       message: "hello",
       images: [],
     });
+    expect(getTaskRun).not.toHaveBeenCalled();
   });
 
   it("preserves the native Pi user prompt when auto-publish is enabled", async () => {
@@ -338,8 +342,28 @@ describe("PiAgentServer", () => {
       .fn()
       .mockResolvedValueOnce(Buffer.from("notes"))
       .mockResolvedValueOnce(Buffer.from("image"));
+    const artifacts = [
+      {
+        id: "file-1",
+        name: "notes.txt",
+        type: "user_attachment",
+        content_type: "text/plain",
+        storage_path: "artifacts/notes.txt",
+      },
+      {
+        id: "image-1",
+        name: "image.png",
+        type: "user_attachment",
+        content_type: "image/png",
+        storage_path: "artifacts/image.png",
+      },
+    ];
+    const getTaskRun = vi.fn(async () => ({ artifacts }));
     const server = new PiAgentServer(config({ repositoryPath })) as unknown as {
-      posthogAPI: { downloadArtifact: typeof downloadArtifact };
+      posthogAPI: {
+        downloadArtifact: typeof downloadArtifact;
+        getTaskRun: typeof getTaskRun;
+      };
       session: unknown;
       executeCommand(
         method: string,
@@ -347,6 +371,7 @@ describe("PiAgentServer", () => {
       ): Promise<unknown>;
     };
     server.posthogAPI.downloadArtifact = downloadArtifact;
+    server.posthogAPI.getTaskRun = getTaskRun;
     server.session = {
       runtime: {
         client: {
@@ -358,22 +383,7 @@ describe("PiAgentServer", () => {
 
     await server.executeCommand("user_message", {
       content: "Read these",
-      artifacts: [
-        {
-          id: "file-1",
-          name: "notes.txt",
-          type: "user_attachment",
-          content_type: "text/plain",
-          storage_path: "artifacts/notes.txt",
-        },
-        {
-          id: "image-1",
-          name: "image.png",
-          type: "user_attachment",
-          content_type: "image/png",
-          storage_path: "artifacts/image.png",
-        },
-      ],
+      artifacts,
     });
 
     const command = sendCommand.mock.calls[0][0];
@@ -395,6 +405,126 @@ describe("PiAgentServer", () => {
     ]);
 
     await rm(repositoryPath, { recursive: true });
+  });
+
+  it("resolves screenshot IDs into native Pi image inputs", async () => {
+    const pngAttachmentId = "11111111-1111-4111-8111-111111111111";
+    const jpegAttachmentId = "22222222-2222-4222-8222-222222222222";
+    const sendCommand = vi.fn(
+      async (_command: Record<string, unknown>) => ({}),
+    );
+    const getTaskRun = vi.fn(async () => ({
+      artifacts: [
+        {
+          id: pngAttachmentId,
+          name: "screen.png",
+          type: "context",
+          source: "user_attachment",
+          size: 3,
+          content_type: "image/png",
+          storage_path: "artifacts/screen.png",
+          uploaded_by: "user",
+          uploaded_by_user_id: 1,
+        },
+        {
+          id: jpegAttachmentId,
+          name: "photo.jpg",
+          type: "context",
+          source: "user_attachment",
+          size: 4,
+          content_type: "image/jpeg",
+          storage_path: "artifacts/photo.jpg",
+          uploaded_by: "user",
+          uploaded_by_user_id: 1,
+        },
+      ],
+    }));
+    const downloadArtifact = vi.fn(
+      async (_taskId: string, _runId: string, storagePath: string) =>
+        Buffer.from(storagePath.endsWith("screen.png") ? "png" : "jpeg"),
+    );
+    const server = new PiAgentServer(config()) as unknown as {
+      posthogAPI: {
+        getTaskRun: typeof getTaskRun;
+        downloadArtifact: typeof downloadArtifact;
+      };
+      session: unknown;
+      executeCommand(
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<unknown>;
+    };
+    server.posthogAPI.getTaskRun = getTaskRun;
+    server.posthogAPI.downloadArtifact = downloadArtifact;
+    server.session = {
+      runtime: {
+        client: { getState: vi.fn(async () => ({ isStreaming: false })) },
+        sendCommand,
+      },
+    };
+
+    await server.executeCommand("user_message", {
+      content: "Compare these screenshots",
+      artifact_ids: [pngAttachmentId, jpegAttachmentId],
+    });
+
+    expect(getTaskRun).toHaveBeenCalledWith("task-1", "run-1");
+    expect(sendCommand).toHaveBeenCalledWith({
+      id: expect.any(String),
+      type: "prompt",
+      message: "Compare these screenshots",
+      images: [
+        {
+          type: "image",
+          data: Buffer.from("png").toString("base64"),
+          mimeType: "image/png",
+          fileName: "screen.png",
+        },
+        {
+          type: "image",
+          data: Buffer.from("jpeg").toString("base64"),
+          mimeType: "image/jpeg",
+          fileName: "photo.jpg",
+        },
+      ],
+    });
+  });
+
+  it("rejects screenshot IDs missing from the current Pi run manifest", async () => {
+    const missingAttachmentId = "11111111-1111-4111-8111-111111111111";
+    const getTaskRun = vi.fn(async () => ({ artifacts: [] }));
+    const downloadArtifact = vi.fn();
+    const sendCommand = vi.fn();
+    const server = new PiAgentServer(config()) as unknown as {
+      posthogAPI: {
+        getTaskRun: typeof getTaskRun;
+        downloadArtifact: typeof downloadArtifact;
+      };
+      session: unknown;
+      executeCommand(
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<unknown>;
+    };
+    server.posthogAPI.getTaskRun = getTaskRun;
+    server.posthogAPI.downloadArtifact = downloadArtifact;
+    server.session = {
+      runtime: {
+        client: { getState: vi.fn(async () => ({ isStreaming: false })) },
+        sendCommand,
+      },
+    };
+
+    await expect(
+      server.executeCommand("user_message", {
+        content: "Inspect this",
+        artifact_ids: [missingAttachmentId],
+      }),
+    ).rejects.toThrow(
+      "Screenshot attachments are unavailable for this task run",
+    );
+    expect(downloadArtifact).not.toHaveBeenCalled();
+    expect(sendCommand).not.toHaveBeenCalled();
   });
 
   it("aborts the streaming run and re-prompts when a steer arrives", async () => {

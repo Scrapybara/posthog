@@ -146,11 +146,16 @@ describe("validateCommandParams", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts artifact-only user_message payloads", () => {
-    const result = validateCommandParams("user_message", {
+  it.each([
+    {
       artifacts: [
         { id: "artifact-1", storage_path: "tasks/artifacts/file.pdf" },
       ],
+    },
+    { artifact_ids: ["11111111-1111-4111-8111-111111111111"] },
+  ])("accepts artifact-only user_message payloads", (attachments) => {
+    const result = validateCommandParams("user_message", {
+      ...attachments,
     });
 
     expect(result.success).toBe(true);
@@ -159,6 +164,31 @@ describe("validateCommandParams", () => {
   it("rejects empty content array", () => {
     const result = validateCommandParams("user_message", {
       content: [],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    { artifactIds: ["not-a-uuid"] },
+    {
+      artifactIds: [
+        "11111111-1111-4111-8111-111111111111",
+        "11111111-1111-4111-8111-111111111111",
+      ],
+    },
+    {
+      artifactIds: [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+        "55555555-5555-4555-8555-555555555555",
+      ],
+    },
+  ])("rejects invalid screenshot attachment IDs", ({ artifactIds }) => {
+    const result = validateCommandParams("user_message", {
+      artifact_ids: artifactIds,
     });
 
     expect(result.success).toBe(false);
